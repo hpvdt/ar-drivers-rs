@@ -10,7 +10,7 @@
 
 use std::collections::VecDeque;
 
-use byteorder::{LittleEndian, ReadBytesExt};
+use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
 use hidapi::{HidApi, HidDevice};
 use nalgebra::{Isometry3, Matrix3, Quaternion, Translation3, UnitQuaternion, Vector3};
 use tinyjson::JsonValue;
@@ -308,8 +308,11 @@ struct ImuDevice {
     model: AirModel,
     config_json: JsonValue,
     displays: Option<(DisplayMatrices, DisplayMatrices)>,
+    pending_events: Vec<GlassesEvent>,
     gyro_bias: Vector3<f32>,
     accelerometer_bias: Vector3<f32>,
+    mag_bias: Vector3<f32>,
+    gyro_q_mag: UnitQuaternion<f32>,
 }
 
 impl ImuDevice {
@@ -328,8 +331,11 @@ impl ImuDevice {
             model,
             config_json: JsonValue::Null,
             displays: None,
+            pending_events: Default::default(),
             gyro_bias: Default::default(),
             accelerometer_bias: Default::default(),
+            mag_bias: Default::default(),
+            gyro_q_mag: Default::default(),
         };
         // Turn off IMU stream while reading config
         result.command(0x19, &[0x0])?;
@@ -362,7 +368,11 @@ impl ImuDevice {
         self.displays = Self::parse_display_descriptors(&self.config_json["display"]);
         let cfg = &self.config_json["IMU"]["device_1"];
         self.accelerometer_bias = Self::parse_vector(&cfg["accel_bias"]).map(|c| c as f32);
-        self.gyro_bias = Self::parse_vector(&cfg["gyro_bias"]).map(|c| c as f32);
+        self.gyro_bias = nalgebra::convert(Self::parse_vector(&cfg["gyro_bias"]));
+        self.mag_bias = nalgebra::convert(Self::parse_vector(&cfg["mag_bias"]));
+        self.gyro_q_mag = nalgebra::convert(UnitQuaternion::from_quaternion(
+            Self::parse_quaternion(&cfg["gyro_q_mag"]),
+        ));
         Ok(())
     }
 
@@ -453,6 +463,9 @@ impl ImuDevice {
 
     pub fn read_packet(&mut self) -> Result<GlassesEvent> {
         loop {
+            if self.pending_events.len() > 0 {
+                return Ok(self.pending_events.remove(0));
+            }
             let mut packet_data = [0u8; 0x80];
             let data_size = self.device.read_timeout(&mut packet_data, IMU_TIMEOUT)?;
             if data_size == 0 {
@@ -460,13 +473,14 @@ impl ImuDevice {
             }
 
             if packet_data[0] == 1 && packet_data[1] == 2 {
-                return self.parse_report(&packet_data);
+                self.pending_events = self.parse_report(&packet_data)?;
             };
             // Else try again
         }
     }
 
-    fn parse_report(&mut self, packet_data: &[u8]) -> Result<GlassesEvent> {
+    fn parse_report(&mut self, packet_data: &[u8]) -> Result<Vec<GlassesEvent>> {
+        let mut ret = Vec::with_capacity(2);
         // TODO: This skips over a 2 byte temperature field that may be useful.
         let mut reader = std::io::Cursor::new(&packet_data[4..]);
 
@@ -496,14 +510,42 @@ impl ImuDevice {
             (acc_z * acc_mul / acc_div) * 9.81 + self.accelerometer_bias.y,
             (acc_y * acc_mul / acc_div) * 9.81 + self.accelerometer_bias.z,
         );
-        // TODO: magnetometer. It's in the same format, but it's non-trivially
-        //       rotated.
+
+        // Magnetometer is different. The scaling factors are encoded big-endian for some
+        // reason, and the values are unsigned but centered at 32768 (0x8000).
+        let mag_mul = reader.read_u16::<BigEndian>()? as f32;
+        let mag_div = reader.read_u32::<BigEndian>()? as f32;
+        let mag_x = reader.read_u16::<LittleEndian>()?;
+        let mag_y = reader.read_u16::<LittleEndian>()?;
+        let mag_z = reader.read_u16::<LittleEndian>()?;
+
+        // Magnetometer comes online separately from the IMU, check for useful data
+        // before sending the events.
+        if mag_x != 0 || mag_y != 0 || mag_z != 0 {
+            let magnetometer = self.gyro_q_mag
+                * Vector3::new(
+                    mag_x.wrapping_sub(32768) as i16 as f32 * mag_mul / mag_div,
+                    mag_y.wrapping_sub(32768) as i16 as f32 * mag_mul / mag_div,
+                    mag_z.wrapping_sub(32768) as i16 as f32 * mag_mul / mag_div,
+                );
+
+            // Send magnetometer event first so that clients can match the most
+            // recent magnetometer event to the most recent accgyro event and not get
+            // out of sync. This is necessary because the magnetometer event is
+            // optional.
+            ret.push(GlassesEvent::Magnetometer {
+                magnetometer,
+                timestamp,
+            });
+        }
+
         // TODO: Check checksum
-        Ok(GlassesEvent::AccGyro {
+        ret.push(GlassesEvent::AccGyro {
             accelerometer,
             gyroscope,
             timestamp,
-        })
+        });
+        Ok(ret)
     }
 }
 
