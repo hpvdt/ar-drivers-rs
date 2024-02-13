@@ -24,6 +24,8 @@
 //!
 //!most glasses have acc & grav/acc readings in 1 bundle, but I prefer not using this assumption and still update them independently
 //!
+//! # example:
+//!  TODO: fill
 
 use nalgebra::{UnitQuaternion, Vector3};
 
@@ -31,6 +33,15 @@ use crate::{ARGlasses, Error, Fusion, GlassesEvent};
 
 #[test]
 pub fn __get_correction() {
+    /*
+        compute:
+      ┌                                     ┐
+      │   3.0176868 -0.74084723     9.24847 │
+      └                                     ┘
+
+    , UnitQuaternion angle: 2.262818 − axis: (-0.0015257121, -0.92279005, -0.38530007) => UnitQuaternion angle: 0.87873745 − axis: (-0.67957145, -0.71493566, 0.16446783)
+         */
+
     let acc = Vector3::new(3.0176868, -0.74084723, 9.24847);
     let axis = Vector3::new(-0.0015257122, -0.9227901, -0.38530007);
     let angle = 2.262818;
@@ -111,6 +122,10 @@ impl NaiveCF {
     }
 
     const BASE_GRAV_RATIO: f32 = 0.005;
+    //const BASE_GRAV_RATIO: f32 = 0.0; //no grav
+    // const BASE_GRAV_RATIO: f32 = 1.0; //absolute correction, no gyro
+
+    //const BASE_MAG_RATIO: f32 = 0.5;
 
     const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; //microseconds
 
@@ -158,7 +173,7 @@ impl NaiveCF {
                 self.attitude = attitude * correction;
             }
             None => {
-                // opposite direction, no correction
+                //TODO: opposite direction, don't know how to correct
             }
         }
     }
@@ -172,6 +187,24 @@ impl NaiveCF {
 
         let scaled_opt =
             UnitQuaternion::scaled_rotation_between(&uncorrected, &acc.normalize(), scale);
+
+        // let rotation_opt = Self::get_rotation(acc, rotation);
+
+        // let scaled_opt = match rotation_opt {
+        //     Some(correction) => {
+        //         let scaled_axis = correction.scaled_axis();
+        //         let scaled = UnitQuaternion::from_scaled_axis(scaled_axis * scale);
+        //         Some(scaled)
+        //     }
+        //     None => None,
+        // };
+
+        // let scaled_opt = match rotation_opt {
+        //     Some(correction) => {
+        //         UnitQuaternion::try_slerp(&UnitQuaternion::identity(), &correction, scale, 0.0)
+        //     }
+        //     None => None,
+        // };
 
         scaled_opt
     }
@@ -190,6 +223,81 @@ impl NaiveCF {
         let uncorrected = rotation * Self::UP_FRD;
         let correction_opt = UnitQuaternion::scaled_rotation_between(&uncorrected, &acc, 1.0);
         correction_opt
+    }
+
+    fn get_rotation_verified(
+        acc: &Vector3<f32>,
+        rotation: &UnitQuaternion<f32>,
+    ) -> Option<UnitQuaternion<f32>> {
+        let raw = Self::get_rotation_raw(acc, rotation);
+        match raw {
+            Some(correction) => {
+                //round-trip verification
+
+                let corrected = correction * rotation;
+
+                let should_be_zero = Self::get_rotation_raw(acc, &corrected).unwrap().angle();
+
+                if should_be_zero > 0.001 {
+                    println!("residual={}", should_be_zero);
+                    println!(
+                        "compute: {}, {} => {}",
+                        acc.transpose(),
+                        rotation,
+                        correction
+                    );
+
+                    {
+                        let norm = rotation.norm();
+                        assert!(norm > 0.999 && norm < 1.001, "norm={}", norm);
+                    }
+
+                    {
+                        let reconstructed = UnitQuaternion::from_axis_angle(
+                            &rotation.axis().unwrap(),
+                            rotation.angle(),
+                        );
+
+                        assert!((rotation * reconstructed.inverse()).angle() < 0.001);
+
+                        assert!(
+                            (rotation * Self::UP_FRD.normalize()
+                                - reconstructed * Self::UP_FRD.normalize())
+                            .norm()
+                                < 0.01
+                        )
+                    }
+
+                    {
+                        let again = Self::get_rotation_raw(acc, rotation);
+                        assert!(raw == again)
+                    }
+
+                    {
+                        // verify rotation
+                        let inv = rotation.inverse();
+                        assert!((inv * rotation).angle() < 0.001);
+                        assert!((rotation * inv).angle() < 0.001);
+                    }
+
+                    {
+                        // verity acc
+                        let q = UnitQuaternion::scaled_rotation_between(&Self::UP_FRD, acc, 1.0)
+                            .unwrap();
+
+                        let round1 = (q * Self::UP_FRD.normalize() - acc.normalize()).norm();
+                        assert!(round1 < 0.001, "round1={}", round1);
+
+                        let round2 =
+                            (q.inverse() * acc.normalize() - Self::UP_FRD.normalize()).norm();
+                        assert!(round2 < 0.001, "round2={}", round2);
+                    }
+                }
+
+                raw
+            }
+            None => raw,
+        }
     }
 }
 
