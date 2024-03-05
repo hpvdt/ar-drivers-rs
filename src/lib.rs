@@ -34,7 +34,7 @@
 //! All of them are enabled by default, which may bring in some unwanted dependencies if you
 //! only want to support a specific type.
 
-use crate::fusion::{ComplementaryFilter, Fusion};
+use crate::fusion::ComplementaryFilter;
 use nalgebra::{Isometry3, Matrix3, SimdRealField, UnitQuaternion, Vector2, Vector3};
 use std::sync::Mutex;
 
@@ -80,11 +80,38 @@ pub enum Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
-pub const EXISTING: Mutex<Option<ComplementaryFilter>> = Mutex::new(None);
+pub const EXISTING: Mutex<Option<Box<dyn Fusion>>> = Mutex::new(None);
 
-pub fn any_fusion() -> Result<ComplementaryFilter> {
+/*
+high level interface of glasses & state estimation, with the following built-in fusion pipeline:
+
+(the first version should only use complementary filter for simplicity and sanity test)
+
+- roll/pitch <= acc + gyro (complementary filter)
+  - assuming that acc vector always pointed up, spacecraft moving in that direction can create 1G artificial gravity
+    - TODO: this obviously assumes no negative/high G manoeuvre, at which point up d_acc has to be used to get the right up direction
+  - TODO: use ESKF (error-state/multiplicatory KF, https://arxiv.org/abs/1711.02508)
+- gyro-yaw <= gyro (integrate over time)
+- mag-yaw <= mag + roll/pitch (arctan)
+  - TODO: mag calibration?
+     (continuous ellipsoid fitting, assuming homogeneous E-M environment & hardpoint-mounted E-M interference)
+- yaw <= mag-yaw + gyro-gyro (complementary filter)
+  - TODO: use EKF
+*/
+pub trait Fusion {
+    fn glasses(&mut self) -> &mut Box<dyn ARGlasses>;
+    // TODO: only declared mutable as many API of ARGlasses are also mutable
+
+    fn attitude_quaternion(&self) -> UnitQuaternion<f32>;
+
+    fn attitude_euler(&self) -> Vector3<f32>;
+
+    fn update(&mut self) -> ();
+}
+
+pub fn any_fusion() -> Result<Box<dyn Fusion>> {
     let glasses = any_glasses()?;
-    ComplementaryFilter::new(glasses)
+    Ok(Box::new(ComplementaryFilter::new(glasses)?))
 }
 
 fn start() -> Result<()> {

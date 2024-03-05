@@ -2,15 +2,14 @@
 // This file is part of ar-drivers-rs
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
-use std::time::{Duration, Instant};
-
-use ar_drivers::{any_fusion, any_glasses, GlassesEvent};
-use nalgebra::Vector3;
+use ar_drivers::any_fusion;
+use ar_drivers::Fusion;
 
 fn main() {
-    let mut conn = any_fusion().unwrap();
+    let mut conn = any_fusion().unwrap(); // Declare conn as mutable
 
-    println!("Got glasses, serial={}", conn.glasses.serial().unwrap());
+    let serial = conn.glasses().serial().unwrap();
+    println!("Got glasses, serial={}", serial);
 
     loop {
         let quaternion = conn.attitude_quaternion();
