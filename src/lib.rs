@@ -34,11 +34,11 @@
 //! All of them are enabled by default, which may bring in some unwanted dependencies if you
 //! only want to support a specific type.
 
-use crate::connection::Connection;
+use crate::fusion::{ComplementaryFilter, Fusion};
 use nalgebra::{Isometry3, Matrix3, SimdRealField, UnitQuaternion, Vector2, Vector3};
 use std::sync::Mutex;
 
-mod connection;
+mod fusion;
 #[cfg(feature = "grawoow")]
 pub mod grawoow;
 #[cfg(feature = "mad_gaze")]
@@ -80,62 +80,59 @@ pub enum Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
-#[no_mangle]
-pub extern "C" fn Sanity() -> i32 {
-    0
+pub const EXISTING: Mutex<Option<ComplementaryFilter>> = Mutex::new(None);
+
+pub fn any_fusion() -> Result<ComplementaryFilter> {
+    let glasses = any_glasses()?;
+    ComplementaryFilter::new(glasses)
 }
 
-const EXISTING: Mutex<Option<Connection>> = Mutex::new(None);
+fn start() -> Result<()> {
+    let fusion = any_fusion()?;
+    let existing = EXISTING;
+
+    let mut guard = existing.lock().unwrap();
+    *guard = Some(fusion);
+
+    return Ok(());
+}
+
+fn stop() -> Result<()> {
+    let existing = EXISTING;
+
+    let mut guard = existing.lock().unwrap();
+    *guard = None;
+    Ok(())
+}
 
 #[no_mangle]
 pub extern "C" fn StartConnection() -> i32 {
-    let glasses = any_glasses().unwrap();
-
-    let result = connection::default();
-
-    match result {
-        Ok(v) => {
-            let existing = EXISTING;
-            let mut guard = existing.lock().unwrap();
-            *guard = Some(v);
-
-            return 1;
-        }
-        Err(_) => {
-            return 0;
-        }
-    }
+    start().map_or_else(|_| 1, |_| 0)
 }
 
 #[no_mangle]
 pub extern "C" fn StopConnection() -> i32 {
-    0 // TODO: need impl in ARGlasses
+    stop().map_or_else(|_| 1, |_| 0)
 }
-
-const ZERO3: Vector3<f32> = Vector3::new(0.0, 0.0, 0.0);
 
 #[no_mangle]
 pub extern "C" fn GetQuaternion() -> *const f32 {
     let existing = EXISTING;
-
     let mut guard = existing.lock().unwrap();
 
     let mut conn = guard.take().unwrap();
     conn.update();
-    return conn.attitude.coords.as_ptr();
+    return conn.attitude_quaternion().coords.as_ptr();
 }
 
 #[no_mangle]
 pub extern "C" fn GetEuler() -> *const f32 {
     let existing = EXISTING;
-
     let mut guard = existing.lock().unwrap();
 
     let mut conn = guard.take().unwrap();
     conn.update();
-    let (roll, pitch, yaw) = conn.attitude.euler_angles();
-    let euler_array: [f32; 3] = [roll, pitch, yaw];
-    return euler_array.as_ptr();
+    return conn.attitude_euler().as_ptr();
 }
 
 impl std::error::Error for Error {
@@ -247,17 +244,6 @@ pub trait ARGlasses: Send {
     fn serial(&mut self) -> Result<String>;
     /// Get a single sensor event. Blocks.
     fn read_event(&mut self) -> Result<GlassesEvent>;
-    /// read until next valid event. Blocks.
-    fn next_event(&mut self) -> GlassesEvent {
-        loop {
-            match self.read_event() {
-                Ok(event) => return event,
-                Err(e) => {
-                    println!("Error reading event: {}", e);
-                }
-            }
-        }
-    }
     /// Get the display mode of the glasses. See [`DisplayMode`]
     fn get_display_mode(&mut self) -> Result<DisplayMode>;
     /// Set the display mode of the glasses. See [`DisplayMode`]

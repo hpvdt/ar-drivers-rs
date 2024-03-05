@@ -1,6 +1,5 @@
 use crate::{any_glasses, ARGlasses, Error, GlassesEvent};
 use nalgebra::{UnitQuaternion, Vector3};
-use std::ops::Deref;
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -11,7 +10,7 @@ mod c_f {
     (
         assuming:
         (S, S-) = current & previous estimated state,
-        d~S1 = rate sensor reading (e.g. gyro), high frequency, high drift, dead reckoning,
+        d~S1 = rate sensor reading (e.g. gyro), high frequency, high drift, dead reckoning
         ~S2 = state sensor reading (e.g. grav/acc, mag), low frequency, high noise, low drift
         d_t1 = time elapse since last rate sensor sampling
     )
@@ -50,47 +49,70 @@ high level interface of glasses & state estimation, with the following built-in 
 - yaw <= mag-yaw + gyro-gyro (complementary filter)
   - TODO: use EKF
 */
-pub struct Connection {
+pub trait Fusion {
+    fn glasses(&self) -> &dyn ARGlasses;
+
+    fn attitude_quaternion(&self) -> UnitQuaternion<f32>;
+
+    fn attitude_euler(&self) -> Vector3<f32>;
+
+    fn update(&mut self) -> ();
+}
+
+pub struct ComplementaryFilter {
     pub glasses: Box<dyn ARGlasses>,
     // estimation
     pub attitude: UnitQuaternion<f32>,
     // just old readings
     // prevAcc: (Vector3<f32>, u64),
-    prev_gyro: (Vector3<f32>, u64),
+    pub prev_gyro: (Vector3<f32>, u64),
     // prevMag: (Vector3<f32>, u64),
 }
 
-pub fn default() -> Result<Connection> {
-    let mut glasses = any_glasses()?;
-    loop {
-        // wait for the first non-zero gyro reading
-        let next_event = glasses.next_event();
-        match next_event {
-            GlassesEvent::AccGyro {
-                accelerometer: _,
-                gyroscope,
-                timestamp,
-            } => {
-                if gyroscope != Vector3::zeros() {
-                    let conn = Connection {
-                        glasses,
-                        attitude: UnitQuaternion::identity(),
-                        prev_gyro: (gyroscope, timestamp),
-                    };
-                    return Ok(conn);
-                }
-            }
-            _ => {}
-        }
-    }
-}
+impl ComplementaryFilter {
+    const BASE_GRAV_RATIO: f32 = 0.6;
+    const BASE_MAG_RATIO: f32 = 0.5;
 
-impl Connection {
     const UP: Vector3<f32> = Vector3::new(0.0, 1.0, 0.0);
     const NORTH: Vector3<f32> = Vector3::new(1.0, 0.0, 0.0);
 
-    fn disconnect(self) -> () {
-        self.glasses.deref();
+    pub fn new(glasses: Box<dyn ARGlasses>) -> Result<Self> {
+        let attitude = UnitQuaternion::identity();
+        let prev_gyro = (Vector3::zeros(), 0);
+        let mut fusion = ComplementaryFilter {
+            glasses,
+            attitude,
+            prev_gyro,
+        };
+
+        loop {
+            // wait for the first non-zero gyro reading
+            let next_event = fusion.next_event();
+            match next_event {
+                GlassesEvent::AccGyro {
+                    accelerometer: _,
+                    gyroscope,
+                    timestamp,
+                } => {
+                    if gyroscope != Vector3::zeros() {
+                        fusion.prev_gyro = (gyroscope, timestamp);
+                        return Ok(fusion);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    /// read until next valid event. Blocks.
+    fn next_event(&mut self) -> GlassesEvent {
+        loop {
+            match self.glasses.read_event() {
+                Ok(event) => return event,
+                Err(e) => {
+                    println!("Error reading event: {}", e);
+                }
+            }
+        }
     }
 
     fn update_gyro(&mut self, gyro: Vector3<f32>, t: u64) -> () {
@@ -105,7 +127,7 @@ impl Connection {
     }
 
     fn update_acc(&mut self, acc: Vector3<f32>, _t: u64) -> () {
-        let uncorrected = self.attitude * Connection::UP;
+        let uncorrected = self.attitude * ComplementaryFilter::UP;
 
         let delta = UnitQuaternion::rotation_between(&uncorrected, &acc);
 
@@ -123,9 +145,24 @@ impl Connection {
             Option::None => {} // no update
         }
     }
+}
 
-    pub fn update(&mut self) -> () {
-        let event = self.glasses.next_event();
+impl Fusion for ComplementaryFilter {
+    fn glasses(&self) -> &dyn ARGlasses {
+        self.glasses.as_ref()
+    }
+
+    fn attitude_quaternion(&self) -> UnitQuaternion<f32> {
+        self.attitude
+    }
+
+    fn attitude_euler(&self) -> Vector3<f32> {
+        let (roll, pitch, yaw) = self.attitude.euler_angles();
+        Vector3::new(roll, pitch, yaw)
+    }
+
+    fn update(&mut self) -> () {
+        let event = self.next_event();
         match event {
             GlassesEvent::AccGyro {
                 accelerometer,
@@ -141,3 +178,9 @@ impl Connection {
         }
     }
 }
+
+// impl Drop for Fusion {
+//     fn drop(&mut self) {
+//         self.disconnect();
+//     }
+// }
