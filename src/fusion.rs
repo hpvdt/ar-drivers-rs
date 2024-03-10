@@ -111,7 +111,9 @@ impl ComplementaryFilter {
 
                 self.attitude = corrected;
             }
-            Option::None => {} // no update
+            Option::None => {
+                // no update
+            }
         }
     }
 }

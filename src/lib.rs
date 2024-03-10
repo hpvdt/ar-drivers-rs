@@ -89,7 +89,7 @@ high level interface of glasses & state estimation, with the following built-in 
 
 - roll/pitch <= acc + gyro (complementary filter)
   - assuming that acc vector always pointed up, spacecraft moving in that direction can create 1G artificial gravity
-    - TODO: this obviously assumes no negative/high G manoeuvre, at which point up d_acc has to be used to get the right up direction
+    - TODO: this obviously assumes no steadily accelerating frame, at which point up d_acc has to be used for correction
   - TODO: use ESKF (error-state/multiplicatory KF, https://arxiv.org/abs/1711.02508)
 - gyro-yaw <= gyro (integrate over time)
 - mag-yaw <= mag + roll/pitch (arctan)

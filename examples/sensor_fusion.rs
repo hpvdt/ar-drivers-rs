@@ -12,6 +12,7 @@ fn main() {
     println!("Got glasses, serial={}", serial);
 
     loop {
+        conn.update();
         let quaternion = conn.attitude_quaternion();
         let euler = conn.attitude_euler();
 
