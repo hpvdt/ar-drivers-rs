@@ -6,15 +6,15 @@ use ar_drivers::any_fusion;
 use ar_drivers::Fusion;
 
 fn main() {
-    let mut conn = any_fusion().unwrap(); // Declare conn as mutable
+    let mut fusion = any_fusion().unwrap(); // Declare conn as mutable
 
-    let serial = conn.glasses().serial().unwrap();
+    let serial = fusion.glasses().serial().unwrap();
     println!("Got glasses, serial={}", serial);
 
     loop {
-        conn.update();
-        let quaternion = conn.attitude_quaternion();
-        let euler = conn.attitude_euler();
+        fusion.update();
+        let quaternion = fusion.attitude_quaternion();
+        let euler = fusion.attitude_euler();
 
         println!("attitude:\n{}\neuler:\n{}", quaternion, euler);
     }

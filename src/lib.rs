@@ -34,9 +34,13 @@
 //! All of them are enabled by default, which may bring in some unwanted dependencies if you
 //! only want to support a specific type.
 
-use crate::fusion::ComplementaryFilter;
+use std::any::Any;
+use std::str::FromStr;
+use std::sync::{Mutex, OnceLock};
+
 use nalgebra::{Isometry3, Matrix3, SimdRealField, UnitQuaternion, Vector2, Vector3};
-use std::sync::Mutex;
+
+use crate::fusion::ComplementaryFilter;
 
 mod fusion;
 #[cfg(feature = "grawoow")]
@@ -80,8 +84,6 @@ pub enum Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
-pub const EXISTING: Mutex<Option<Box<dyn Fusion>>> = Mutex::new(None);
-
 /*
 high level interface of glasses & state estimation, with the following built-in fusion pipeline:
 
@@ -98,7 +100,7 @@ high level interface of glasses & state estimation, with the following built-in 
 - yaw <= mag-yaw + gyro-gyro (complementary filter)
   - TODO: use EKF
 */
-pub trait Fusion {
+pub trait Fusion: Send {
     fn glasses(&mut self) -> &mut Box<dyn ARGlasses>;
     // TODO: only declared mutable as many API of ARGlasses are also mutable
 
@@ -114,38 +116,64 @@ pub fn any_fusion() -> Result<Box<dyn Fusion>> {
     Ok(Box::new(ComplementaryFilter::new(glasses)?))
 }
 
-fn start() -> Result<()> {
-    let fusion = any_fusion()?;
-    let existing = EXISTING;
+trait T1 {}
 
-    let mut guard = existing.lock().unwrap();
-    *guard = Some(fusion);
+// static i1: OnceLock<Box<u64>> = OnceLock::new();
+// static i2: OnceLock<Box<dyn T1>> = OnceLock::new();
 
-    return Ok(());
+pub struct Connection {
+    pub fusion: Mutex<Option<Box<dyn Fusion>>>,
 }
 
-fn stop() -> Result<()> {
-    let existing = EXISTING;
+impl Connection {
+    fn new() -> Self {
+        Connection {
+            fusion: Mutex::new(None),
+        }
+    }
 
-    let mut guard = existing.lock().unwrap();
-    *guard = None;
-    Ok(())
+    pub fn instance() -> &'static Connection {
+        static INSTANCE: OnceLock<Connection> = (OnceLock::new());
+        INSTANCE.get_or_init(|| Connection::new())
+    }
+
+    pub fn start() -> Result<()> {
+        let fusion = any_fusion()?;
+        let existing = Self::instance();
+
+        let mut guard = existing.fusion.lock().unwrap();
+        *guard = Some(fusion);
+
+        return Ok(());
+    }
+
+    pub fn stop() -> Result<()> {
+        let existing = Self::instance();
+
+        let mut guard = existing.fusion.lock().unwrap();
+        *guard = None;
+        Ok(())
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn StartConnection() -> i32 {
-    start().map_or_else(|_| 1, |_| 0)
+    Connection::start().unwrap();
+    1
+    // .map_or_else(|_| 1, |_| 0)
 }
 
 #[no_mangle]
 pub extern "C" fn StopConnection() -> i32 {
-    stop().map_or_else(|_| 1, |_| 0)
+    Connection::stop().unwrap();
+    1
+    // .map_or_else(|_| 1, |_| 0)
 }
 
 #[no_mangle]
 pub extern "C" fn GetQuaternion() -> *const f32 {
-    let existing = EXISTING;
-    let mut guard = existing.lock().unwrap();
+    let existing = Connection::instance();
+    let mut guard = existing.fusion.lock().unwrap();
 
     let mut conn = guard.take().unwrap();
     conn.update();
@@ -154,8 +182,8 @@ pub extern "C" fn GetQuaternion() -> *const f32 {
 
 #[no_mangle]
 pub extern "C" fn GetEuler() -> *const f32 {
-    let existing = EXISTING;
-    let mut guard = existing.lock().unwrap();
+    let existing = Connection::instance();
+    let mut guard = existing.fusion.lock().unwrap();
 
     let mut conn = guard.take().unwrap();
     conn.update();

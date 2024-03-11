@@ -120,7 +120,7 @@ impl ComplementaryFilter {
 
 impl Fusion for ComplementaryFilter {
     fn glasses(&mut self) -> &mut Box<dyn ARGlasses> {
-        (&mut self.glasses)
+        &mut self.glasses
     }
 
     fn attitude_quaternion(&self) -> UnitQuaternion<f32> {
