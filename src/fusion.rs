@@ -63,10 +63,10 @@ impl ComplementaryFilter {
                     gyroscope,
                     timestamp,
                 } => {
-                    if gyroscope != Vector3::zeros() {
-                        fusion.prev_gyro = (gyroscope, timestamp);
-                        return Ok(fusion);
-                    }
+                    // if gyroscope != Vector3::zeros() {
+                    fusion.prev_gyro = (gyroscope, timestamp);
+                    return Ok(fusion);
+                    // }
                 }
                 _ => {}
             }
@@ -86,10 +86,10 @@ impl ComplementaryFilter {
 
     fn update_gyro(&mut self, gyro: Vector3<f32>, t: u64) -> () {
         let d_t1 = ((t - self.prev_gyro.1) as f32) / 1000.0;
-        let d_S1_t1 = gyro * d_t1;
+        let d_s1_t1 = gyro * d_t1;
 
         let integrated =
-            self.attitude * UnitQuaternion::from_euler_angles(d_S1_t1.y, d_S1_t1.x, d_S1_t1.z);
+            self.attitude * UnitQuaternion::from_euler_angles(d_s1_t1.y, d_s1_t1.x, d_s1_t1.z);
 
         self.attitude = integrated;
         self.prev_gyro = (gyro, t);

@@ -16,6 +16,6 @@ fn main() {
         let quaternion = fusion.attitude_quaternion();
         let euler = fusion.attitude_euler();
 
-        println!("attitude:\n{}\neuler:\n{}", quaternion, euler);
+        println!("quaternion:\t{}\teuler:\t{}", quaternion, euler);
     }
 }

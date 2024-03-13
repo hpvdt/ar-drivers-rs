@@ -36,12 +36,13 @@
 
 use std::any::Any;
 use std::str::FromStr;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use nalgebra::{Isometry3, Matrix3, SimdRealField, UnitQuaternion, Vector2, Vector3};
 
 use crate::fusion::ComplementaryFilter;
 
+mod dummy;
 mod fusion;
 #[cfg(feature = "grawoow")]
 pub mod grawoow;
@@ -80,6 +81,8 @@ pub enum Error {
     /// Other fatal error, usually a problem with the library itself, or
     /// a device support issue. File a bug if you encounter this.
     Other(&'static str),
+    /// Cannot get mutex lock
+    ConcurrencyError,
 }
 
 type Result<T> = std::result::Result<T, Error>;
@@ -112,14 +115,11 @@ pub trait Fusion: Send {
 }
 
 pub fn any_fusion() -> Result<Box<dyn Fusion>> {
-    let glasses = any_glasses()?;
+    let glasses = any_glasses_or_dummy()?;
     Ok(Box::new(ComplementaryFilter::new(glasses)?))
 }
 
 trait T1 {}
-
-// static i1: OnceLock<Box<u64>> = OnceLock::new();
-// static i2: OnceLock<Box<dyn T1>> = OnceLock::new();
 
 pub struct Connection {
     pub fusion: Mutex<Option<Box<dyn Fusion>>>,
@@ -141,7 +141,7 @@ impl Connection {
         let fusion = any_fusion()?;
         let existing = Self::instance();
 
-        let mut guard = existing.fusion.lock().unwrap();
+        let mut guard = existing.fusion.lock()?;
         *guard = Some(fusion);
 
         return Ok(());
@@ -150,8 +150,12 @@ impl Connection {
     pub fn stop() -> Result<()> {
         let existing = Self::instance();
 
-        let mut guard = existing.fusion.lock().unwrap();
-        *guard = None;
+        let mut guard = existing.fusion.lock()?;
+        let prev = guard.as_mut().take();
+
+        if prev.is_none() {
+            return Err(Error::NotFound);
+        }
         Ok(())
     }
 }
@@ -159,6 +163,7 @@ impl Connection {
 #[no_mangle]
 pub extern "C" fn StartConnection() -> i32 {
     Connection::start().unwrap();
+    println!("connection started");
     1
     // .map_or_else(|_| 1, |_| 0)
 }
@@ -166,6 +171,7 @@ pub extern "C" fn StartConnection() -> i32 {
 #[no_mangle]
 pub extern "C" fn StopConnection() -> i32 {
     Connection::stop().unwrap();
+    println!("connection stopped");
     1
     // .map_or_else(|_| 1, |_| 0)
 }
@@ -175,7 +181,7 @@ pub extern "C" fn GetQuaternion() -> *const f32 {
     let existing = Connection::instance();
     let mut guard = existing.fusion.lock().unwrap();
 
-    let mut conn = guard.take().unwrap();
+    let mut conn = guard.as_mut().unwrap();
     conn.update();
     return conn.attitude_quaternion().coords.as_ptr();
 }
@@ -185,7 +191,7 @@ pub extern "C" fn GetEuler() -> *const f32 {
     let existing = Connection::instance();
     let mut guard = existing.fusion.lock().unwrap();
 
-    let mut conn = guard.take().unwrap();
+    let mut conn = guard.as_mut().unwrap();
     conn.update();
     return conn.attitude_euler().as_ptr();
 }
@@ -215,6 +221,7 @@ impl std::fmt::Display for Error {
             Error::HidError(_) => "Hidapi error",
             #[cfg(feature = "serialport")]
             Error::SerialPortError(_) => "Serial error",
+            Error::ConcurrencyError => "concurrency error",
             Error::NotFound => "Glasses not found",
             Error::NotImplemented => "Not implemented for these glasses",
             Error::PacketTimeout => "Packet timeout",
@@ -356,6 +363,10 @@ pub struct DisplayMatrices {
     pub isometry: Isometry3<f64>,
 }
 
+pub fn any_glasses_or_dummy() -> Result<Box<dyn ARGlasses>> {
+    any_glasses().or(Ok(Box::new(dummy::Dummy {})))
+}
+
 /// Convenience function to detect and connect to any of the supported glasses
 #[cfg(not(target_os = "android"))]
 pub fn any_glasses() -> Result<Box<dyn ARGlasses>> {
@@ -406,6 +417,12 @@ impl From<hidapi::HidError> for Error {
 impl From<serialport::Error> for Error {
     fn from(e: serialport::Error) -> Self {
         Error::SerialPortError(e)
+    }
+}
+
+impl<T> From<PoisonError<T>> for Error {
+    fn from(e: PoisonError<T>) -> Self {
+        Error::ConcurrencyError
     }
 }
 
