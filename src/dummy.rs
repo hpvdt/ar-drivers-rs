@@ -1,6 +1,8 @@
-use crate::{ARGlasses, DisplayMode, Error, GlassesEvent, Side};
-use nalgebra::Isometry3;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use nalgebra::{Isometry3, Vector3};
+
+use crate::{ARGlasses, DisplayMode, Error, GlassesEvent, Side};
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -15,8 +17,8 @@ impl ARGlasses for Dummy {
 
     fn read_event(&mut self) -> crate::Result<GlassesEvent> {
         let result = GlassesEvent::AccGyro {
-            accelerometer: Default::default(),
-            gyroscope: Default::default(),
+            accelerometer: Vector3::new(0f32, 9.81f32, 0f32),
+            gyroscope: Vector3::default(),
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
