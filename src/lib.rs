@@ -122,40 +122,61 @@ pub fn any_fusion() -> Result<Box<dyn Fusion>> {
 trait T1 {}
 
 pub struct Connection {
-    pub fusion: Mutex<Option<Box<dyn Fusion>>>,
+    pub fusion: Option<Box<dyn Fusion>>,
 }
 
 impl Connection {
     fn new() -> Self {
         Connection {
-            fusion: Mutex::new(None),
+            fusion: None,
+            // quaternion: Vector4::zeros(),
+            // euler: Vector3::zeros(),
         }
     }
 
-    pub fn instance() -> &'static Connection {
-        static INSTANCE: OnceLock<Connection> = (OnceLock::new());
-        INSTANCE.get_or_init(|| Connection::new())
+    pub fn mutex() -> &'static Mutex<Connection> {
+        static INSTANCE: OnceLock<Mutex<Connection>> = OnceLock::new();
+        INSTANCE.get_or_init(|| Mutex::new(Connection::new()))
+    }
+
+    pub fn with_lock<T>(f: &dyn Fn(&mut Connection) -> T) -> T {
+        let mut guard = Connection::mutex().lock().unwrap();
+        // println!("lock acquired");
+        let re = f(&mut *guard);
+        // println!("unlocked");
+        re
     }
 
     pub fn start() -> Result<()> {
-        let fusion = any_fusion()?;
-        let existing = Self::instance();
-
-        let mut guard = existing.fusion.lock()?;
-        *guard = Some(fusion);
-
-        return Ok(());
+        Self::with_lock(&|c| {
+            let fusion = any_fusion()?;
+            c.fusion = Some(fusion);
+            Ok(())
+        })
     }
 
     pub fn stop() -> Result<()> {
-        let existing = Self::instance();
+        Self::with_lock(&|c| {
+            if c.fusion.is_none() {
+                return Err(Error::NotFound);
+            }
 
-        let mut guard = existing.fusion.lock()?;
-        let prev = guard.as_mut().take();
+            c.fusion = None;
 
-        if prev.is_none() {
-            return Err(Error::NotFound);
-        }
+            Ok(())
+        })
+    }
+
+    // pub fn copy_quaternion() -> Result<&'static Vector4<f32>> {}
+
+    pub fn write_euler(target: &mut Vector3<f32>) -> Result<()> {
+        let euler = Self::with_lock(&|c| {
+            let ff = c.fusion.as_mut().unwrap();
+
+            ff.update();
+            ff.attitude_euler()
+        });
+        *target = euler.clone();
         Ok(())
     }
 }
@@ -176,29 +197,25 @@ pub extern "C" fn StopConnection() -> i32 {
     // .map_or_else(|_| 1, |_| 0)
 }
 
-#[no_mangle]
-pub extern "C" fn Dummy() -> *const f32 {
-    dummy::GRAVITY_UP.as_ptr()
-}
-
-#[no_mangle]
-pub extern "C" fn GetQuaternion() -> *const f32 {
-    let existing = Connection::instance();
-    let mut guard = existing.fusion.lock().unwrap();
-
-    let mut conn = guard.as_mut().unwrap();
-    conn.update();
-    conn.attitude_quaternion().coords.as_ptr()
-}
+static mut EULER: Vector3<f32> = Vector3::new(0.0, 0.0, 0.0);
 
 #[no_mangle]
 pub extern "C" fn GetEuler() -> *const f32 {
-    let existing = Connection::instance();
-    let mut guard = existing.fusion.lock().unwrap();
+    unsafe {
+        Connection::write_euler(&mut EULER).unwrap();
 
-    let mut conn = guard.as_mut().unwrap();
-    conn.update();
-    conn.attitude_euler().as_ptr()
+        EULER.as_ptr()
+    }
+}
+
+// #[no_mangle]
+// pub extern "C" fn GetQuaternion() -> *const f32 {
+//     let result = Connection::with_instance(&|c| c.copy_quaternion());
+//     result.as_ptr()
+// }
+#[no_mangle]
+pub extern "C" fn Dummy() -> *const f32 {
+    dummy::GRAVITY_UP.as_ptr()
 }
 
 impl std::error::Error for Error {

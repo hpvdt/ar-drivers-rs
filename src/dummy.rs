@@ -7,8 +7,8 @@ use crate::{ARGlasses, DisplayMode, Error, GlassesEvent, Side};
 type Result<T> = std::result::Result<T, Error>;
 
 
-pub static GRAVITY_UP: Vector3<f32> = Vector3::new(0f32, 9.81f32, 0f32);
-pub static ZERO: Vector3<f32> = Vector3::new(0f32, 0f32, 0f32);
+pub static GRAVITY_UP: Vector3<f32> = Vector3::new(0.0, 9.81, 0.0);
+pub static ZERO: Vector3<f32> = Vector3::new(0.0, 0.0, 0.0);
 
 pub struct Dummy {}
 
