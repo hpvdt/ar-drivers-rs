@@ -177,13 +177,18 @@ pub extern "C" fn StopConnection() -> i32 {
 }
 
 #[no_mangle]
+pub extern "C" fn Dummy() -> *const f32 {
+    dummy::GRAVITY_UP.as_ptr()
+}
+
+#[no_mangle]
 pub extern "C" fn GetQuaternion() -> *const f32 {
     let existing = Connection::instance();
     let mut guard = existing.fusion.lock().unwrap();
 
     let mut conn = guard.as_mut().unwrap();
     conn.update();
-    return conn.attitude_quaternion().coords.as_ptr();
+    conn.attitude_quaternion().coords.as_ptr()
 }
 
 #[no_mangle]
@@ -193,7 +198,7 @@ pub extern "C" fn GetEuler() -> *const f32 {
 
     let mut conn = guard.as_mut().unwrap();
     conn.update();
-    return conn.attitude_euler().as_ptr();
+    conn.attitude_euler().as_ptr()
 }
 
 impl std::error::Error for Error {
