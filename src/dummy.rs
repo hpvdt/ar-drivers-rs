@@ -6,7 +6,6 @@ use crate::{ARGlasses, DisplayMode, Error, GlassesEvent, Side};
 
 type Result<T> = std::result::Result<T, Error>;
 
-
 pub static GRAVITY_UP: Vector3<f32> = Vector3::new(0.0, 9.81, 0.0);
 pub static ZERO: Vector3<f32> = Vector3::new(0.0, 0.0, 0.0);
 
@@ -20,7 +19,6 @@ impl ARGlasses for Dummy {
     }
 
     fn read_event(&mut self) -> crate::Result<GlassesEvent> {
-
         let result = GlassesEvent::AccGyro {
             accelerometer: GRAVITY_UP,
             gyroscope: ZERO,

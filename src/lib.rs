@@ -169,15 +169,14 @@ impl Connection {
 
     // pub fn copy_quaternion() -> Result<&'static Vector4<f32>> {}
 
-    pub fn write_euler(target: &mut Vector3<f32>) -> Result<()> {
+    pub fn euler() -> Result<Vector3<f32>> {
         let euler = Self::with_lock(&|c| {
             let ff = c.fusion.as_mut().unwrap();
 
             ff.update();
             ff.attitude_euler()
         });
-        *target = euler.clone();
-        Ok(())
+        Ok(euler)
     }
 }
 
@@ -202,8 +201,9 @@ static mut EULER: Vector3<f32> = Vector3::new(0.0, 0.0, 0.0);
 #[no_mangle]
 pub extern "C" fn GetEuler() -> *const f32 {
     unsafe {
-        Connection::write_euler(&mut EULER).unwrap();
+        let euler = Connection::euler().unwrap();
 
+        EULER = euler.clone();
         EULER.as_ptr()
     }
 }
