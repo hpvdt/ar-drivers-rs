@@ -28,7 +28,7 @@ e.g. 3D angular interpolation is multiplicative
 most glasses have acc & grav/acc readings in 1 bundle, but I prefer not using this assumption and still update them independently
 
  */
-pub struct ComplementaryFilter {
+pub struct NaiveCF {
     pub glasses: Box<dyn ARGlasses>,
     // estimation
     pub attitude: UnitQuaternion<f32>,
@@ -38,17 +38,17 @@ pub struct ComplementaryFilter {
     // prevMag: (Vector3<f32>, u64),
 }
 
-impl ComplementaryFilter {
+impl NaiveCF {
     const BASE_GRAV_RATIO: f32 = 0.6;
     const BASE_MAG_RATIO: f32 = 0.5;
 
-    const UP: Vector3<f32> = Vector3::new(0.0, 1.0, 0.0);
+    const UP: Vector3<f32> = Vector3::new(0.0, 9.81, 0.0);
     const NORTH: Vector3<f32> = Vector3::new(1.0, 0.0, 0.0);
 
     pub fn new(glasses: Box<dyn ARGlasses>) -> Result<Self> {
         let attitude = UnitQuaternion::identity();
         let prev_gyro = (Vector3::zeros(), 0);
-        let mut fusion = ComplementaryFilter {
+        let mut fusion = NaiveCF {
             glasses,
             attitude,
             prev_gyro,
@@ -96,7 +96,7 @@ impl ComplementaryFilter {
     }
 
     fn update_acc(&mut self, acc: Vector3<f32>, _t: u64) -> () {
-        let uncorrected = self.attitude * ComplementaryFilter::UP;
+        let uncorrected = self.attitude * NaiveCF::UP;
 
         let delta = UnitQuaternion::rotation_between(&uncorrected, &acc);
 
@@ -106,7 +106,7 @@ impl ComplementaryFilter {
                     * UnitQuaternion::nlerp(
                         &UnitQuaternion::identity(),
                         &d,
-                        1.0 - ComplementaryFilter::BASE_GRAV_RATIO,
+                        1.0 - NaiveCF::BASE_GRAV_RATIO,
                     );
 
                 self.attitude = corrected;
@@ -118,7 +118,7 @@ impl ComplementaryFilter {
     }
 }
 
-impl Fusion for ComplementaryFilter {
+impl Fusion for NaiveCF {
     fn glasses(&mut self) -> &mut Box<dyn ARGlasses> {
         &mut self.glasses
     }

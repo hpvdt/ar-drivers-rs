@@ -40,14 +40,14 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 
 use nalgebra::{Isometry3, Matrix3, SimdRealField, UnitQuaternion, Vector2, Vector3};
 
-use crate::fusion::ComplementaryFilter;
+use crate::naive_cf::NaiveCF;
 
 mod dummy;
-mod fusion;
 #[cfg(feature = "grawoow")]
 pub mod grawoow;
 #[cfg(feature = "mad_gaze")]
 pub mod mad_gaze;
+mod naive_cf;
 #[cfg(feature = "nreal")]
 pub mod nreal_air;
 #[cfg(feature = "nreal")]
@@ -116,7 +116,7 @@ pub trait Fusion: Send {
 
 pub fn any_fusion() -> Result<Box<dyn Fusion>> {
     let glasses = any_glasses_or_dummy()?;
-    Ok(Box::new(ComplementaryFilter::new(glasses)?))
+    Ok(Box::new(NaiveCF::new(glasses)?))
 }
 
 trait T1 {}
