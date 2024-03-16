@@ -183,7 +183,7 @@ impl Connection {
 #[no_mangle]
 pub extern "C" fn StartConnection() -> i32 {
     Connection::start().unwrap();
-    println!("connection started");
+    // println!("connection started");
     1
     // .map_or_else(|_| 1, |_| 0)
 }
@@ -386,33 +386,49 @@ pub struct DisplayMatrices {
 }
 
 pub fn any_glasses_or_dummy() -> Result<Box<dyn ARGlasses>> {
-    any_glasses().or(Ok(Box::new(dummy::Dummy {})))
+    any_glasses().or({
+        println!("fall back to dummy glasses");
+        Ok(Box::new(dummy::Dummy {}))
+    })
+}
+
+fn upcast<G: ARGlasses + 'static>(result: Result<G>) -> Result<Box<dyn ARGlasses>> {
+    result.map(|glasses| Box::new(glasses) as Box<dyn ARGlasses>)
 }
 
 /// Convenience function to detect and connect to any of the supported glasses
 #[cfg(not(target_os = "android"))]
 pub fn any_glasses() -> Result<Box<dyn ARGlasses>> {
-    #[cfg(feature = "rokid")]
-    if let Ok(glasses) = rokid::RokidAir::new() {
-        return Ok(Box::new(glasses));
-    };
-    #[cfg(feature = "nreal")]
-    if let Ok(glasses) = nreal_air::NrealAir::new() {
-        return Ok(Box::new(glasses));
-    };
-    #[cfg(feature = "nreal")]
-    if let Ok(glasses) = nreal_light::NrealLight::new() {
-        return Ok(Box::new(glasses));
-    };
-    #[cfg(feature = "grawoow")]
-    if let Ok(glasses) = grawoow::GrawoowG530::new() {
-        return Ok(Box::new(glasses));
-    };
-    #[cfg(feature = "mad_gaze")]
-    if let Ok(glasses) = mad_gaze::MadGazeGlow::new() {
-        return Ok(Box::new(glasses));
-    };
-    Err(Error::NotFound) // TODO: this may hide some errors in reporting, need to aggregate them as cause
+    let glasses_factories: Vec<(&str, fn() -> Result<Box<dyn ARGlasses>>)> = vec![
+        #[cfg(feature = "rokid")]
+        ("RokidAir", || upcast(rokid::RokidAir::new())),
+        #[cfg(feature = "nreal")]
+        ("NrealAir", || upcast(nreal_air::NrealAir::new())),
+        #[cfg(feature = "nreal")]
+        ("NrealLight", || upcast(nreal_light::NrealLight::new())),
+        #[cfg(feature = "grawoow")]
+        ("GrawoowG530", || upcast(grawoow::GrawoowG530::new())),
+        #[cfg(feature = "mad_gaze")]
+        ("MadGazeGlow", || upcast(mad_gaze::MadGazeGlow::new())),
+    ];
+
+    glasses_factories
+        .into_iter()
+        .find_map(|(glasses_type, factory)| {
+            let factory: fn() -> Result<Box<dyn ARGlasses>> = factory;
+
+            factory()
+                .map_err(|_| {
+                    //
+                    println!("can't find {}", glasses_type)
+                })
+                .ok()
+                .map(|v| {
+                    println!("found {}", glasses_type);
+                    v
+                })
+        })
+        .ok_or(Error::NotFound)
 }
 
 impl From<std::io::Error> for Error {
