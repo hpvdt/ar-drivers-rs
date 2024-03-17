@@ -11,11 +11,12 @@ fn main() {
     let serial = fusion.glasses().serial().unwrap();
     println!("Got glasses, serial={}", serial);
 
+    println!("");
     loop {
         fusion.update();
         let quaternion = fusion.attitude_quaternion();
         let euler = fusion.attitude_euler_deg();
 
-        println!("quaternion:\t{}\teuler:\t{}", quaternion, euler);
+        print!("\rquaternion:\t{:?}\teuler:\t{:?}", quaternion, euler);
     }
 }

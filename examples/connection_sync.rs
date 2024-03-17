@@ -17,6 +17,7 @@ fn main() {
         });
     }
 
+    println!("");
     for _i in 0..50000 {
         // let quaternion = {
         //     let ptr = GetQuaternion();
@@ -27,10 +28,11 @@ fn main() {
             let ptr = GetEuler();
             unsafe { slice::from_raw_parts(ptr, 3) }
         };
-        println!("euler:\t{:?}", euler);
+        print!("\reuler:\t{:?}", euler);
         // println!("quaternion:\t{:?}\teuler:\t{:?}", quaternion, euler);
     }
 
     let code = StopConnection();
-    println!("stopping, code {}", code);
+
+    println!("\nstopping, code {}", code);
 }

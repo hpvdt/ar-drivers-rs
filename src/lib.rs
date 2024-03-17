@@ -205,7 +205,7 @@ pub extern "C" fn StartConnection() -> i32 {
 #[no_mangle]
 pub extern "C" fn StopConnection() -> i32 {
     Connection::stop().unwrap();
-    println!("connection stopped");
+    // println!("connection stopped");
     1
     // .map_or_else(|_| 1, |_| 0)
 }
