@@ -14,7 +14,7 @@ fn main() {
     loop {
         fusion.update();
         let quaternion = fusion.attitude_quaternion();
-        let euler = fusion.attitude_euler();
+        let euler = fusion.attitude_euler_deg();
 
         println!("quaternion:\t{}\teuler:\t{}", quaternion, euler);
     }

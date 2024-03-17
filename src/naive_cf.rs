@@ -42,6 +42,8 @@ impl NaiveCF {
     const BASE_GRAV_RATIO: f32 = 1.0;
     // const BASE_MAG_RATIO: f32 = 0.5;
 
+    const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; // microseconds
+
     const UP: Vector3<f32> = Vector3::new(0.0, 9.81, 0.0);
     const NORTH: Vector3<f32> = Vector3::new(1.0, 0.0, 0.0);
 
@@ -85,8 +87,9 @@ impl NaiveCF {
     }
 
     fn update_gyro(&mut self, gyro: Vector3<f32>, t: u64) -> () {
-        let d_t1 = ((t - self.prev_gyro.1) as f32) / 1000.0;
-        let d_s1_t1 = gyro * d_t1;
+        let d_t1 = t - self.prev_gyro.1;
+        let d_t1_f = d_t1 as f32 / Self::GYRO_SPEED_IN_TIMESTAMP_FACTOR;
+        let d_s1_t1 = gyro * d_t1_f;
 
         let integrated =
             self.attitude * UnitQuaternion::from_euler_angles(d_s1_t1.y, d_s1_t1.x, d_s1_t1.z);
@@ -96,22 +99,22 @@ impl NaiveCF {
     }
 
     fn update_acc(&mut self, acc: Vector3<f32>, _t: u64) -> () {
-        let uncorrected = self.attitude * NaiveCF::UP;
+        let uncorrected = self.attitude * Self::UP;
 
         let delta = UnitQuaternion::rotation_between(&uncorrected, &acc);
 
         match delta {
-            Option::Some(d) => {
+            Some(d) => {
                 let corrected = self.attitude
                     * UnitQuaternion::nlerp(
                         &UnitQuaternion::identity(),
                         &d,
-                        1.0 - NaiveCF::BASE_GRAV_RATIO,
+                        1.0 - Self::BASE_GRAV_RATIO,
                     );
 
                 self.attitude = corrected;
             }
-            Option::None => {
+            None => {
                 // no update
             }
         }
@@ -127,7 +130,7 @@ impl Fusion for NaiveCF {
         self.attitude
     }
 
-    fn attitude_euler(&self) -> Vector3<f32> {
+    fn attitude_euler_rad(&self) -> Vector3<f32> {
         let (roll, pitch, yaw) = self.attitude.euler_angles();
         Vector3::new(roll, pitch, yaw)
     }

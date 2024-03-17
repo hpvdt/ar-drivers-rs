@@ -109,9 +109,15 @@ pub trait Fusion: Send {
 
     fn attitude_quaternion(&self) -> UnitQuaternion<f32>;
 
-    fn attitude_euler(&self) -> Vector3<f32>;
+    fn attitude_euler_rad(&self) -> Vector3<f32>;
 
     fn update(&mut self) -> ();
+}
+
+impl dyn Fusion {
+    pub fn attitude_euler_deg(&self) -> Vector3<f32> {
+        self.attitude_euler_rad().map(|x| x.to_degrees())
+    }
 }
 
 pub fn any_fusion() -> Result<Box<dyn Fusion>> {
@@ -169,13 +175,21 @@ impl Connection {
 
     // pub fn copy_quaternion() -> Result<&'static Vector4<f32>> {}
 
-    pub fn euler() -> Result<Vector3<f32>> {
-        let euler = Self::with_lock(&|c| {
-            let ff = c.fusion.as_mut().unwrap();
+    pub fn with_fusion<T>(f: &dyn Fn(&mut Box<dyn Fusion>) -> T) -> T {
+        Self::with_lock(&|c| {
+            let fusion = c.fusion.as_mut().unwrap();
+            fusion.update();
+            f(fusion)
+        })
+    }
 
-            ff.update();
-            ff.attitude_euler()
-        });
+    pub fn euler_rad() -> Result<Vector3<f32>> {
+        let euler = Self::with_fusion(&|ff| ff.attitude_euler_rad());
+        Ok(euler)
+    }
+
+    pub fn euler_deg() -> Result<Vector3<f32>> {
+        let euler = Self::with_fusion(&|ff| ff.attitude_euler_deg());
         Ok(euler)
     }
 }
@@ -201,7 +215,7 @@ static mut EULER: Vector3<f32> = Vector3::new(0.0, 0.0, 0.0);
 #[no_mangle]
 pub extern "C" fn GetEuler() -> *const f32 {
     unsafe {
-        let euler = Connection::euler().unwrap();
+        let euler = Connection::euler_deg().unwrap();
 
         EULER = euler.clone();
         EULER.as_ptr()
