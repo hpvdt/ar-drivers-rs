@@ -39,8 +39,8 @@ pub struct NaiveCF {
 }
 
 impl NaiveCF {
-    const BASE_GRAV_RATIO: f32 = 0.6;
-    const BASE_MAG_RATIO: f32 = 0.5;
+    const BASE_GRAV_RATIO: f32 = 1.0;
+    // const BASE_MAG_RATIO: f32 = 0.5;
 
     const UP: Vector3<f32> = Vector3::new(0.0, 9.81, 0.0);
     const NORTH: Vector3<f32> = Vector3::new(1.0, 0.0, 0.0);
@@ -141,7 +141,7 @@ impl Fusion for NaiveCF {
                 timestamp,
             } => {
                 self.update_gyro(gyroscope, timestamp);
-                self.update_acc(accelerometer, timestamp);
+                // self.update_acc(accelerometer, timestamp);
             }
             _ => {
                 // TODO: add magnetometer event etc
