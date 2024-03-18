@@ -3,6 +3,7 @@
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
 use ar_drivers::{Connection, GetEuler, StartConnection, StopConnection};
+use nalgebra::Vector3;
 use std::slice;
 
 fn main() {
@@ -24,11 +25,14 @@ fn main() {
         //     // Array::from_raw_parts(ptr, 4);
         //     unsafe { slice::from_raw_parts(ptr, 4) }
         // };
-        let euler = {
+        let frd = {
             let ptr = GetEuler();
-            unsafe { slice::from_raw_parts(ptr, 3) }
+            unsafe {
+                let slice = slice::from_raw_parts(ptr, 3);
+                Vector3::new(slice[0], slice[1], slice[2])
+            }
         };
-        print!("\reuler:\t{:?}", euler);
+        print!("euler:\t{:10.7}", frd.transpose());
         // println!("quaternion:\t{:?}\teuler:\t{:?}", quaternion, euler);
     }
 

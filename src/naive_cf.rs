@@ -34,26 +34,30 @@ pub struct NaiveCF {
     pub attitude: UnitQuaternion<f32>,
     // just old readings
     // prevAcc: (Vector3<f32>, u64),
-    pub prev_gyro: (Vector3<f32>, u64),
+    pub prev_gyro: (Vector3<f32>, u64), // roll, pitch, yaw
     // prevMag: (Vector3<f32>, u64),
+    pub inconsistency: Vector3<f32>, // roll, pitch. yaw
 }
 
 impl NaiveCF {
-    const BASE_GRAV_RATIO: f32 = 1.0;
+    const BASE_GRAV_RATIO: f32 = 0.6;
     // const BASE_MAG_RATIO: f32 = 0.5;
 
     const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; // microseconds
 
-    const UP: Vector3<f32> = Vector3::new(0.0, 9.81, 0.0);
-    const NORTH: Vector3<f32> = Vector3::new(1.0, 0.0, 0.0);
+    const INCONSISTENCY_DECAY: f32 = 0.99;
+
+    const UP_RUB: Vector3<f32> = Vector3::new(0.0, 9.81, 0.0);
+    const NORTH_RUB: Vector3<f32> = Vector3::new(1.0, 0.0, 0.0);
 
     pub fn new(glasses: Box<dyn ARGlasses>) -> Result<Self> {
-        let attitude = UnitQuaternion::identity();
-        let prev_gyro = (Vector3::zeros(), 0);
+        // let attitude = ;
+        // let prev_gyro = ;
         let mut fusion = NaiveCF {
             glasses,
-            attitude,
-            prev_gyro,
+            attitude: UnitQuaternion::identity(),
+            prev_gyro: (Vector3::zeros(), 0),
+            inconsistency: Vector3::zeros(),
         };
 
         loop {
@@ -86,36 +90,42 @@ impl NaiveCF {
         }
     }
 
-    fn update_gyro(&mut self, gyro: Vector3<f32>, t: u64) -> () {
+    fn update_gyro_rub(&mut self, gyro: Vector3<f32>, t: u64) -> () {
         let d_t1 = t - self.prev_gyro.1;
         let d_t1_f = d_t1 as f32 / Self::GYRO_SPEED_IN_TIMESTAMP_FACTOR;
         let d_s1_t1 = gyro * d_t1_f;
 
-        let integrated =
-            self.attitude * UnitQuaternion::from_euler_angles(d_s1_t1.y, d_s1_t1.x, d_s1_t1.z);
+        let d_s1_t1_frd = Vector3::new(-d_s1_t1.z, d_s1_t1.x, -d_s1_t1.y);
+
+        let integrated = self.attitude
+            * UnitQuaternion::from_euler_angles(d_s1_t1_frd.x, d_s1_t1_frd.y, d_s1_t1_frd.z);
 
         self.attitude = integrated;
         self.prev_gyro = (gyro, t);
     }
 
     fn update_acc(&mut self, acc: Vector3<f32>, _t: u64) -> () {
-        let uncorrected = self.attitude * Self::UP;
+        let uncorrected = self.attitude.conjugate() * Self::UP_RUB;
 
-        let delta = UnitQuaternion::rotation_between(&uncorrected, &acc);
+        let delta_opt = UnitQuaternion::rotation_between(&uncorrected, &acc);
 
-        match delta {
-            Some(d) => {
+        match delta_opt {
+            Some(delta) => {
+                let (roll, pitch, yaw) = delta.euler_angles();
+                self.inconsistency = self.inconsistency * Self::INCONSISTENCY_DECAY
+                    + Vector3::new(roll, pitch, yaw) * (1.0 - Self::INCONSISTENCY_DECAY);
+
                 let corrected = self.attitude
                     * UnitQuaternion::nlerp(
                         &UnitQuaternion::identity(),
-                        &d,
+                        &delta,
                         1.0 - Self::BASE_GRAV_RATIO,
                     );
 
                 self.attitude = corrected;
             }
             None => {
-                // no update
+                // no error no update
             }
         }
     }
@@ -130,9 +140,8 @@ impl Fusion for NaiveCF {
         self.attitude
     }
 
-    fn attitude_euler_rad(&self) -> Vector3<f32> {
-        let (roll, pitch, yaw) = self.attitude.euler_angles();
-        Vector3::new(roll, pitch, yaw)
+    fn inconsistency_frd(&self) -> Vector3<f32> {
+        self.inconsistency
     }
 
     fn update(&mut self) -> () {
@@ -143,7 +152,7 @@ impl Fusion for NaiveCF {
                 gyroscope,
                 timestamp,
             } => {
-                self.update_gyro(gyroscope, timestamp);
+                self.update_gyro_rub(gyroscope, timestamp);
                 // self.update_acc(accelerometer, timestamp);
             }
             _ => {

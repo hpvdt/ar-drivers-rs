@@ -15,8 +15,11 @@ fn main() {
     loop {
         fusion.update();
         let quaternion = fusion.attitude_quaternion();
-        let euler = fusion.attitude_euler_deg();
+        let frd = fusion.attitude_frd_deg();
+        let inconsistency = fusion.inconsistency_frd();
 
-        print!("\rquaternion:\t{:?}\teuler:\t{:?}", quaternion, euler);
+        print!("euler:\t{:10.7}", frd.transpose());
+
+        print!("inconsistency:\t{:10.7}", inconsistency.transpose());
     }
 }

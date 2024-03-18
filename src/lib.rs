@@ -102,21 +102,34 @@ high level interface of glasses & state estimation, with the following built-in 
      (continuous ellipsoid fitting, assuming homogeneous E-M environment & hardpoint-mounted E-M interference)
 - yaw <= mag-yaw + gyro-gyro (complementary filter)
   - TODO: use EKF
+
+CAUTION: unlike [[GlassesEvent]], all states & outputs should use FRD reference frame
+ (forward, right, down, corresponding to roll, pitch, yaw in Euler angles-represented rotation)
+
+FRD is the standard frame for aerospace, and is also the default frame for NALgebra
 */
 pub trait Fusion: Send {
     fn glasses(&mut self) -> &mut Box<dyn ARGlasses>;
     // TODO: only declared mutable as many API of ARGlasses are also mutable
 
+    /// primary estimation output
+    /// can be used to convert to Euler angles of different conventions
     fn attitude_quaternion(&self) -> UnitQuaternion<f32>;
 
-    fn attitude_euler_rad(&self) -> Vector3<f32>;
+    /// use FRD frame as error in Quaternion is multiplicative & is over-defined
+    fn inconsistency_frd(&self) -> Vector3<f32>;
 
     fn update(&mut self) -> ();
 }
 
 impl dyn Fusion {
-    pub fn attitude_euler_deg(&self) -> Vector3<f32> {
-        self.attitude_euler_rad().map(|x| x.to_degrees())
+    pub fn attitude_frd_rad(&self) -> Vector3<f32> {
+        let (roll, pitch, yaw) = self.attitude_quaternion().euler_angles();
+        Vector3::new(roll, pitch, yaw)
+    }
+
+    pub fn attitude_frd_deg(&self) -> Vector3<f32> {
+        self.attitude_frd_rad().map(|x| x.to_degrees())
     }
 }
 
@@ -125,7 +138,14 @@ pub fn any_fusion() -> Result<Box<dyn Fusion>> {
     Ok(Box::new(NaiveCF::new(glasses)?))
 }
 
-trait T1 {}
+// fn fmt_vector<T: std::fmt::Debug>(vec: &[T]) -> String {
+//     let formatted = vec
+//         .iter()
+//         .map(|x| format!("{:10.4?}", x))
+//         .collect::<Vec<_>>()
+//         .join(" ");
+//     formatted
+// }
 
 pub struct Connection {
     pub fusion: Option<Box<dyn Fusion>>,
@@ -184,12 +204,12 @@ impl Connection {
     }
 
     pub fn euler_rad() -> Result<Vector3<f32>> {
-        let euler = Self::with_fusion(&|ff| ff.attitude_euler_rad());
+        let euler = Self::with_fusion(&|ff| ff.attitude_frd_rad());
         Ok(euler)
     }
 
     pub fn euler_deg() -> Result<Vector3<f32>> {
-        let euler = Self::with_fusion(&|ff| ff.attitude_euler_deg());
+        let euler = Self::with_fusion(&|ff| ff.attitude_frd_deg());
         Ok(euler)
     }
 }
@@ -282,6 +302,9 @@ pub enum GlassesEvent {
         accelerometer: Vector3<f32>,
         /// Gyroscope data. Right handed rotation in rad/sec,
         /// e.g. turning left is positive y axis.
+        /// from left to right:
+        /// pitch, yaw, roll
+        /// Right, Up, Back (RUB)
         gyroscope: Vector3<f32>,
         /// Timestamp, in device time, in microseconds
         timestamp: u64,
