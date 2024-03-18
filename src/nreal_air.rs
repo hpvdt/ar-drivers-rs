@@ -24,6 +24,7 @@ pub struct NrealAir {
     model: AirModel,
     device: HidDevice,
     pending_packets: VecDeque<McuPacket>,
+    pending_events: VecDeque<GlassesEvent>,
     imu_device: ImuDevice,
 }
 
@@ -71,8 +72,12 @@ impl ARGlasses for NrealAir {
     fn read_event(&mut self) -> Result<GlassesEvent> {
         if let Some(event) = self.read_mcu_packet()? {
             Ok(event)
+        } else if let Some(event) = self.pending_events.pop_front() {
+            Ok(event)
         } else {
-            self.imu_device.read_packet()
+            let (e1, e2) = self.imu_device.read_packet()?;
+            self.pending_events.push_back(e2);
+            Ok(e1)
         }
     }
 
@@ -191,6 +196,7 @@ impl NrealAir {
             model,
             device,
             pending_packets: Default::default(),
+            pending_events: Default::default(),
             imu_device,
         };
         // Quick check
@@ -410,7 +416,7 @@ impl ImuDevice {
         Err(Error::Other("Couldn't get acknowledgement to command"))
     }
 
-    pub fn read_packet(&mut self) -> Result<GlassesEvent> {
+    pub fn read_packet(&mut self) -> Result<(GlassesEvent, GlassesEvent)> {
         loop {
             let mut packet_data = [0u8; 0x80];
             let data_size = self.device.read_timeout(&mut packet_data, IMU_TIMEOUT)?;
@@ -425,7 +431,7 @@ impl ImuDevice {
         }
     }
 
-    fn parse_report(&mut self, packet_data: &[u8]) -> Result<GlassesEvent> {
+    fn parse_report(&mut self, packet_data: &[u8]) -> Result<(GlassesEvent, GlassesEvent)> {
         // TODO: This skips over a 2 byte temperature field that may be useful.
         let mut reader = std::io::Cursor::new(&packet_data[4..]);
 
@@ -455,14 +461,26 @@ impl ImuDevice {
             (acc_z * acc_mul / acc_div) * 9.81 + self.accelerometer_bias.y,
             (acc_y * acc_mul / acc_div) * 9.81 + self.accelerometer_bias.z,
         );
-        // TODO: magnetometer. It's in the same format, but it's non-trivially
+        //  magnetometer. It's in the same format, but it's non-trivially
         //       rotated.
+
+        let mag_offs = reader.read_u16::<LittleEndian>()? as f32;
+        let mag_div = reader.read_u32::<LittleEndian>()? as f32;
+        let mag_x = reader.read_i16::<LittleEndian>()? as f32;
+        let mag_y = reader.read_i16::<LittleEndian>()? as f32;
+        let mag_z = reader.read_i16::<LittleEndian>()? as f32;
         // TODO: Check checksum
-        Ok(GlassesEvent::AccGyro {
+        let first = GlassesEvent::AccGyro {
             accelerometer,
             gyroscope,
             timestamp,
-        })
+        };
+        let second = GlassesEvent::Magnetometer {
+            magnetometer: Vector3::new(mag_x, mag_y, mag_z),
+            timestamp,
+        };
+
+        Ok((first, second))
     }
 }
 
