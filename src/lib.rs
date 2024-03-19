@@ -134,7 +134,7 @@ impl dyn Fusion {
 }
 
 pub fn any_fusion() -> Result<Box<dyn Fusion>> {
-    let glasses = any_glasses_or_dummy()?;
+    let glasses = any_glasses()?;
     Ok(Box::new(NaiveCF::new(glasses)?))
 }
 
