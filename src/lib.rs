@@ -455,9 +455,9 @@ pub fn any_glasses() -> Result<Box<dyn ARGlasses>> {
             let factory: fn() -> Result<Box<dyn ARGlasses>> = factory;
 
             factory()
-                .map_err(|_| {
+                .map_err(|e| {
                     //
-                    println!("can't find {}", glasses_type)
+                    println!("can't find {}: {}", glasses_type, e)
                 })
                 .ok()
                 .map(|v| {
