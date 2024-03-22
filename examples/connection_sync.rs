@@ -11,9 +11,8 @@ fn main() {
     println!("starting, code {}", code);
 
     {
-        let _serial = Connection::with_lock(&mut |conn| {
-            let kk = conn.fusion.as_mut().unwrap();
-            let serial = kk.glasses().serial().unwrap();
+        let _serial = Connection::with_fusion(&mut |fusion| {
+            let serial = fusion.glasses().serial().unwrap();
             println!("Got glasses, serial={}", serial);
         });
     }

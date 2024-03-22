@@ -464,8 +464,8 @@ impl ImuDevice {
         //  magnetometer. It's in the same format, but it's non-trivially
         //       rotated.
 
-        let mag_offs = reader.read_u16::<LittleEndian>()? as f32;
-        let mag_div = reader.read_u32::<LittleEndian>()? as f32;
+        let _mag_offs = reader.read_u16::<LittleEndian>()? as f32;
+        let _mag_div = reader.read_u32::<LittleEndian>()? as f32;
         let mag_x = reader.read_i16::<LittleEndian>()? as f32;
         let mag_y = reader.read_i16::<LittleEndian>()? as f32;
         let mag_z = reader.read_i16::<LittleEndian>()? as f32;

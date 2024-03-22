@@ -34,11 +34,11 @@
 //! All of them are enabled by default, which may bring in some unwanted dependencies if you
 //! only want to support a specific type.
 
-use std::any::Any;
-use std::str::FromStr;
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::thread;
+use std::thread::JoinHandle;
 
-use nalgebra::{Isometry3, Matrix3, SimdRealField, UnitQuaternion, Vector2, Vector3};
+use nalgebra::{Isometry3, Matrix3, UnitQuaternion, Vector2, Vector3};
 
 use crate::naive_cf::NaiveCF;
 
@@ -134,27 +134,22 @@ impl dyn Fusion {
 }
 
 pub fn any_fusion() -> Result<Box<dyn Fusion>> {
-    let glasses = any_glasses()?;
+    let glasses = any_glasses_or_dummy()?;
     // let glasses = any_glasses_or_dummy()?;
     Ok(Box::new(NaiveCF::new(glasses)?))
 }
 
-// fn fmt_vector<T: std::fmt::Debug>(vec: &[T]) -> String {
-//     let formatted = vec
-//         .iter()
-//         .map(|x| format!("{:10.4?}", x))
-//         .collect::<Vec<_>>()
-//         .join(" ");
-//     formatted
-// }
-
 pub struct Connection {
-    pub fusion: Option<Box<dyn Fusion>>,
+    pub fusion: Option<Arc<Mutex<(Box<dyn Fusion>, bool)>>>,
+    pub thread: Option<JoinHandle<()>>,
 }
 
 impl Connection {
     fn new() -> Self {
-        Connection { fusion: None }
+        Connection {
+            fusion: None,
+            thread: None,
+        }
     }
 
     pub fn mutex() -> &'static Mutex<Connection> {
@@ -170,22 +165,45 @@ impl Connection {
         re
     }
 
+    pub fn _start(&mut self) -> Result<()> {
+        let ff = Arc::new(Mutex::new((any_fusion()?, false)));
+        let ff2 = ff.clone();
+
+        self.fusion = Some(ff);
+
+        let handle = thread::spawn(move || loop {
+            let mut ff = ff2.lock().unwrap();
+            if ff.1 {
+                break;
+            }
+            ff.0.update();
+            // println!("UPDATE!")
+        });
+
+        self.thread = Some(handle);
+
+        Ok(())
+    }
+
     pub fn start() -> Result<()> {
         Self::with_lock(&|c| {
-            let fusion = any_fusion()?;
+            c._start()?;
 
-            let future = c.fusion = Some(fusion);
             Ok(())
         })
     }
 
     pub fn stop() -> Result<()> {
         Self::with_lock(&|c| {
-            if c.fusion.is_none() {
-                return Err(Error::NotFound);
-            }
+            let maybe = c.fusion.take();
 
-            c.fusion = None;
+            match maybe {
+                Some(mx) => {
+                    let mut ff = mx.lock().unwrap();
+                    ff.1 = true;
+                }
+                None => return Err(Error::NotFound),
+            }
 
             Ok(())
         })
@@ -195,9 +213,11 @@ impl Connection {
 
     pub fn with_fusion<T>(f: &dyn Fn(&mut Box<dyn Fusion>) -> T) -> T {
         Self::with_lock(&|c| {
-            let fusion = c.fusion.as_mut().unwrap();
-            fusion.update();
-            f(fusion)
+            let fusion_m = c.fusion.as_mut().unwrap();
+            let mut fusion = fusion_m.lock().unwrap();
+
+            // fusion.update();
+            f(&mut fusion.0)
         })
     }
 
@@ -494,7 +514,7 @@ impl From<serialport::Error> for Error {
 }
 
 impl<T> From<PoisonError<T>> for Error {
-    fn from(e: PoisonError<T>) -> Self {
+    fn from(_e: PoisonError<T>) -> Self {
         Error::ConcurrencyError
     }
 }

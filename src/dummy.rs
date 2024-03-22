@@ -34,7 +34,7 @@ impl ARGlasses for Dummy {
         Ok(DisplayMode::SameOnBoth)
     }
 
-    fn set_display_mode(&mut self, display_mode: DisplayMode) -> crate::Result<()> {
+    fn set_display_mode(&mut self, _display_mode: DisplayMode) -> crate::Result<()> {
         Ok(())
     }
 
@@ -42,7 +42,7 @@ impl ARGlasses for Dummy {
         24.0f32.to_radians()
     }
 
-    fn imu_to_display_matrix(&self, side: Side, ipd: f32) -> Isometry3<f64> {
+    fn imu_to_display_matrix(&self, _side: Side, _ipd: f32) -> Isometry3<f64> {
         todo!()
     }
 
