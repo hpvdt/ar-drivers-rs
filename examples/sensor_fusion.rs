@@ -18,8 +18,8 @@ fn main() {
         let frd = fusion.attitude_frd_deg();
         let inconsistency = fusion.inconsistency_frd();
 
-        print!("euler:\t{:10.7}", frd.transpose());
+        println!("euler:\t{:10.7}", frd.transpose());
 
-        print!("inconsistency:\t{:10.7}", inconsistency.transpose());
+        println!("inconsistency:\t{:10.7}", inconsistency);
     }
 }

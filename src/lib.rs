@@ -117,7 +117,7 @@ pub trait Fusion: Send {
     fn attitude_quaternion(&self) -> UnitQuaternion<f32>;
 
     /// use FRD frame as error in Quaternion is multiplicative & is over-defined
-    fn inconsistency_frd(&self) -> Vector3<f32>;
+    fn inconsistency_frd(&self) -> f32;
 
     fn update(&mut self) -> ();
 }
@@ -135,6 +135,7 @@ impl dyn Fusion {
 
 pub fn any_fusion() -> Result<Box<dyn Fusion>> {
     let glasses = any_glasses()?;
+    // let glasses = any_glasses_or_dummy()?;
     Ok(Box::new(NaiveCF::new(glasses)?))
 }
 
@@ -153,11 +154,7 @@ pub struct Connection {
 
 impl Connection {
     fn new() -> Self {
-        Connection {
-            fusion: None,
-            // quaternion: Vector4::zeros(),
-            // euler: Vector3::zeros(),
-        }
+        Connection { fusion: None }
     }
 
     pub fn mutex() -> &'static Mutex<Connection> {
@@ -176,7 +173,8 @@ impl Connection {
     pub fn start() -> Result<()> {
         Self::with_lock(&|c| {
             let fusion = any_fusion()?;
-            c.fusion = Some(fusion);
+
+            let future = c.fusion = Some(fusion);
             Ok(())
         })
     }

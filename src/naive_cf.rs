@@ -34,21 +34,21 @@ pub struct NaiveCF {
     pub attitude: UnitQuaternion<f32>,
     // just old readings
     // prevAcc: (Vector3<f32>, u64),
-    pub prev_gyro: (Vector3<f32>, u64), // roll, pitch, yaw
+    pub prev_gyro: (Vector3<f32>, u64), // FRD
     // prevMag: (Vector3<f32>, u64),
-    pub inconsistency: Vector3<f32>, // roll, pitch. yaw
+    pub inconsistency: f32, // roll, pitch. yaw
 }
 
 impl NaiveCF {
-    const BASE_GRAV_RATIO: f32 = 0.6;
+    const BASE_GRAV_RATIO: f32 = 0.02;
     // const BASE_MAG_RATIO: f32 = 0.5;
 
     const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; // microseconds
 
-    const INCONSISTENCY_DECAY: f32 = 0.99;
+    const INCONSISTENCY_DECAY: f32 = 0.90;
 
-    const UP_RUB: Vector3<f32> = Vector3::new(0.0, 9.81, 0.0);
-    const NORTH_RUB: Vector3<f32> = Vector3::new(1.0, 0.0, 0.0);
+    const UP_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -9.81);
+    const NORTH_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -1.0);
 
     pub fn new(glasses: Box<dyn ARGlasses>) -> Result<Self> {
         // let attitude = ;
@@ -57,7 +57,7 @@ impl NaiveCF {
             glasses,
             attitude: UnitQuaternion::identity(),
             prev_gyro: (Vector3::zeros(), 0),
-            inconsistency: Vector3::zeros(),
+            inconsistency: 0.0,
         };
 
         loop {
@@ -90,36 +90,41 @@ impl NaiveCF {
         }
     }
 
-    fn update_gyro_rub(&mut self, gyro: Vector3<f32>, t: u64) -> () {
+    fn rub_to_frd(v: &Vector3<f32>) -> Vector3<f32> {
+        let result = Vector3::new(-v.z, v.x, -v.y);
+        result
+    }
+
+    fn update_gyro_rub(&mut self, gyro_rub: &Vector3<f32>, t: u64) -> () {
+        let gyro = Self::rub_to_frd(gyro_rub);
+
         let d_t1 = t - self.prev_gyro.1;
         let d_t1_f = d_t1 as f32 / Self::GYRO_SPEED_IN_TIMESTAMP_FACTOR;
-        let d_s1_t1 = gyro * d_t1_f;
+        let d_s1_t1 = d_t1_f * gyro;
 
-        let d_s1_t1_frd = Vector3::new(-d_s1_t1.z, d_s1_t1.x, -d_s1_t1.y);
-
-        let integrated = self.attitude
-            * UnitQuaternion::from_euler_angles(d_s1_t1_frd.x, d_s1_t1_frd.y, d_s1_t1_frd.z);
+        let integrated =
+            self.attitude * UnitQuaternion::from_euler_angles(d_s1_t1.x, d_s1_t1.y, d_s1_t1.z);
 
         self.attitude = integrated;
         self.prev_gyro = (gyro, t);
     }
 
-    fn update_acc(&mut self, acc: Vector3<f32>, _t: u64) -> () {
-        let uncorrected = self.attitude.conjugate() * Self::UP_RUB;
+    fn update_acc(&mut self, acc_rub: &Vector3<f32>, _t: u64) -> () {
+        let acc = Self::rub_to_frd(acc_rub);
+        let acc_flipped = Vector3::new(-acc.x, -acc.y, acc.z);
+        let uncorrected = self.attitude * Self::UP_FRD;
 
-        let delta_opt = UnitQuaternion::rotation_between(&uncorrected, &acc);
+        let delta_opt = UnitQuaternion::rotation_between(&uncorrected, &acc_flipped);
 
         match delta_opt {
             Some(delta) => {
-                let (roll, pitch, yaw) = delta.euler_angles();
-                self.inconsistency = self.inconsistency * Self::INCONSISTENCY_DECAY
-                    + Vector3::new(roll, pitch, yaw) * (1.0 - Self::INCONSISTENCY_DECAY);
+                self.inconsistency = self.inconsistency * Self::INCONSISTENCY_DECAY + delta.angle();
 
                 let corrected = self.attitude
-                    * UnitQuaternion::nlerp(
+                    * UnitQuaternion::slerp(
                         &UnitQuaternion::identity(),
                         &delta,
-                        1.0 - Self::BASE_GRAV_RATIO,
+                        Self::BASE_GRAV_RATIO,
                     );
 
                 self.attitude = corrected;
@@ -140,7 +145,7 @@ impl Fusion for NaiveCF {
         self.attitude
     }
 
-    fn inconsistency_frd(&self) -> Vector3<f32> {
+    fn inconsistency_frd(&self) -> f32 {
         self.inconsistency
     }
 
@@ -152,8 +157,8 @@ impl Fusion for NaiveCF {
                 gyroscope,
                 timestamp,
             } => {
-                self.update_gyro_rub(gyroscope, timestamp);
-                // self.update_acc(accelerometer, timestamp);
+                self.update_gyro_rub(&gyroscope, timestamp);
+                self.update_acc(&accelerometer, timestamp);
             }
             _ => {
                 // TODO: add magnetometer event etc
