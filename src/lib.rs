@@ -144,6 +144,8 @@ pub struct Connection {
     pub thread: Option<JoinHandle<()>>,
 }
 
+static CONNECTION: OnceLock<Connection> = OnceLock::new();
+
 impl Connection {
     fn new() -> Self {
         Connection {
@@ -152,18 +154,18 @@ impl Connection {
         }
     }
 
-    pub fn mutex() -> &'static Mutex<Connection> {
-        static INSTANCE: OnceLock<Mutex<Connection>> = OnceLock::new();
-        INSTANCE.get_or_init(|| Mutex::new(Connection::new()))
-    }
-
-    pub fn locked_connection<T>(f: &dyn Fn(&mut Connection) -> T) -> T {
-        let mut guard = Connection::mutex().lock().unwrap();
-        // println!("lock acquired");
-        let re = f(&mut *guard);
-        // println!("unlocked");
-        re
-    }
+    // pub fn mutex() -> &'static Mutex<Connection> {
+    //     static INSTANCE: OnceLock<Mutex<Connection>> = OnceLock::new();
+    //     INSTANCE.get_or_init(|| Mutex::new(Connection::new()))
+    // }
+    //
+    // pub fn locked_connection<T>(f: &dyn Fn(&mut Connection) -> T) -> T {
+    //     let mut guard = Connection::mutex().lock().unwrap();
+    //     // println!("lock acquired");
+    //     let re = f(&mut *guard);
+    //     // println!("unlocked");
+    //     re
+    // }
 
     pub fn _start(&mut self) -> Result<()> {
         let ff = Arc::new(Mutex::new((any_fusion()?, false)));
@@ -185,28 +187,39 @@ impl Connection {
         Ok(())
     }
 
-    pub fn start() -> Result<()> {
-        Self::locked_connection(&|c| {
-            c._start()?;
+    // pub fn existing() -> Option<&'static mut Connection> {
+    //     CONNECTION.get_mut()
+    // }
 
-            Ok(())
-        })
+    pub fn existing() -> Option<&'static Connection> {
+        CONNECTION.get()
+    }
+
+    pub fn start() -> Result<&'static Connection> {
+        let mut c: Connection;
+        Self::existing().map(|c| ()).unwrap_or({
+            c = Connection::new();
+            c._start();
+            CONNECTION.set(c);
+        });
+
+        Ok(Self::existing().unwrap())
     }
 
     pub fn stop() -> Result<()> {
-        Self::locked_connection(&|c| {
-            let maybe = c.fusion.take();
+        let c = Self::existing().unwrap();
 
-            match maybe {
-                Some(mx) => {
-                    let mut ff = mx.lock().unwrap();
-                    ff.1 = true;
-                }
-                None => return Err(Error::NotFound),
+        let maybe = &c.fusion;
+
+        match maybe {
+            Some(mx) => {
+                let mut ff = mx.lock().unwrap();
+                ff.1 = true;
             }
+            None => return Err(Error::NotFound),
+        }
 
-            Ok(())
-        })
+        Ok(())
     }
 
     // pub fn copy_quaternion() -> Result<&'static Vector4<f32>> {}
@@ -218,12 +231,11 @@ impl Connection {
         //     // c.fusion.as_mut().unwrap()
         // });
 
-        Self::locked_connection(&|c| {
-            let fusion_m = c.fusion.as_ref().unwrap();
-            let mut fusion = fusion_m.lock().unwrap();
+        let c = Self::existing().unwrap();
+        let fusion_m = c.fusion.as_ref().unwrap();
+        let mut fusion = fusion_m.lock().unwrap();
 
-            f(&mut fusion.0)
-        })
+        f(&mut fusion.0)
     }
 
     pub fn euler_rad() -> Result<Vector3<f32>> {

@@ -31,7 +31,7 @@ fn main() {
                 Vector3::new(slice[0], slice[1], slice[2])
             }
         };
-        print!("euler:\t{:10.7} - i={}", frd.transpose(), _i);
+        println!("euler:\t{:10.7}(i={})", frd.transpose(), _i);
         // println!("quaternion:\t{:?}\teuler:\t{:?}", quaternion, euler);
     }
 
