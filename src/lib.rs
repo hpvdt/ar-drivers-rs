@@ -157,7 +157,7 @@ impl Connection {
         INSTANCE.get_or_init(|| Mutex::new(Connection::new()))
     }
 
-    pub fn with_lock<T>(f: &dyn Fn(&mut Connection) -> T) -> T {
+    pub fn locked_connection<T>(f: &dyn Fn(&mut Connection) -> T) -> T {
         let mut guard = Connection::mutex().lock().unwrap();
         // println!("lock acquired");
         let re = f(&mut *guard);
@@ -186,7 +186,7 @@ impl Connection {
     }
 
     pub fn start() -> Result<()> {
-        Self::with_lock(&|c| {
+        Self::locked_connection(&|c| {
             c._start()?;
 
             Ok(())
@@ -194,7 +194,7 @@ impl Connection {
     }
 
     pub fn stop() -> Result<()> {
-        Self::with_lock(&|c| {
+        Self::locked_connection(&|c| {
             let maybe = c.fusion.take();
 
             match maybe {
@@ -211,23 +211,28 @@ impl Connection {
 
     // pub fn copy_quaternion() -> Result<&'static Vector4<f32>> {}
 
-    pub fn with_fusion<T>(f: &dyn Fn(&mut Box<dyn Fusion>) -> T) -> T {
-        Self::with_lock(&|c| {
-            let fusion_m = c.fusion.as_mut().unwrap();
+    pub fn locked_fusion<T>(f: &dyn Fn(&mut Box<dyn Fusion>) -> T) -> T {
+        // let fusion_m = Self::locked_connection(&|c| {
+        //     let fusion_m = c.fusion().unwrap();
+        //     fusion_m
+        //     // c.fusion.as_mut().unwrap()
+        // });
+
+        Self::locked_connection(&|c| {
+            let fusion_m = c.fusion.as_ref().unwrap();
             let mut fusion = fusion_m.lock().unwrap();
 
-            // fusion.update();
             f(&mut fusion.0)
         })
     }
 
     pub fn euler_rad() -> Result<Vector3<f32>> {
-        let euler = Self::with_fusion(&|ff| ff.attitude_frd_rad());
+        let euler = Self::locked_fusion(&|ff| ff.attitude_frd_rad());
         Ok(euler)
     }
 
     pub fn euler_deg() -> Result<Vector3<f32>> {
-        let euler = Self::with_fusion(&|ff| ff.attitude_frd_deg());
+        let euler = Self::locked_fusion(&|ff| ff.attitude_frd_deg());
         Ok(euler)
     }
 }
