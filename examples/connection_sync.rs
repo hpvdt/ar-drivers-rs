@@ -11,7 +11,7 @@ fn main() {
     println!("starting, code {}", code);
 
     {
-        let _serial = Connection::with_fusion(&mut |fusion| {
+        let _serial = Connection::locked_fusion(&mut |fusion| {
             let serial = fusion.glasses().serial().unwrap();
             println!("Got glasses, serial={}", serial);
         });
@@ -31,7 +31,7 @@ fn main() {
                 Vector3::new(slice[0], slice[1], slice[2])
             }
         };
-        print!("euler:\t{:10.7}", frd.transpose());
+        println!("euler:\t{:10.7}(i={})", frd.transpose(), _i);
         // println!("quaternion:\t{:?}\teuler:\t{:?}", quaternion, euler);
     }
 
