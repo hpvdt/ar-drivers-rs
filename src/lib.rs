@@ -139,8 +139,14 @@ pub fn any_fusion() -> Result<Box<dyn Fusion>> {
     Ok(Box::new(NaiveCF::new(glasses)?))
 }
 
+type Rw<T> = Arc<Mutex<T>>;
+
+fn rw_new<T>(v: T) -> Rw<T> {
+    Arc::new(Mutex::new(v))
+}
+
 pub struct Connection {
-    pub fusion: Option<Arc<Mutex<(Box<dyn Fusion>, bool)>>>,
+    pub fusion: Option<Rw<(Box<dyn Fusion>, bool)>>,
     pub thread: Option<JoinHandle<()>>,
 }
 
@@ -155,13 +161,14 @@ impl Connection {
     }
 
     pub fn _start(&mut self) -> Result<()> {
-        let ff = Arc::new(Mutex::new((any_fusion()?, false)));
+        let ff = rw_new((any_fusion()?, false));
         let ff2 = ff.clone();
 
         self.fusion = Some(ff);
 
         let handle = thread::spawn(move || loop {
             let mut ff = ff2.lock().unwrap();
+
             if ff.1 {
                 break;
             }
@@ -200,7 +207,8 @@ impl Connection {
 
         match maybe {
             Some(mx) => {
-                let mut ff = mx.lock().unwrap();
+                let mut ff = &mut *mx.lock().unwrap();
+                // explicit form to be replaced easily
                 ff.1 = true;
             }
             None => return Err(Error::NotFound),
@@ -209,15 +217,7 @@ impl Connection {
         Ok(())
     }
 
-    // pub fn copy_quaternion() -> Result<&'static Vector4<f32>> {}
-
     pub fn locked_fusion<T>(f: &dyn Fn(&mut Box<dyn Fusion>) -> T) -> T {
-        // let fusion_m = Self::locked_connection(&|c| {
-        //     let fusion_m = c.fusion().unwrap();
-        //     fusion_m
-        //     // c.fusion.as_mut().unwrap()
-        // });
-
         let c = Self::existing().unwrap();
         let fusion_m = c.fusion.as_ref().unwrap();
         let mut fusion = fusion_m.lock().unwrap();
