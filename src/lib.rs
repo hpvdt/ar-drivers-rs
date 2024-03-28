@@ -154,19 +154,6 @@ impl Connection {
         }
     }
 
-    // pub fn mutex() -> &'static Mutex<Connection> {
-    //     static INSTANCE: OnceLock<Mutex<Connection>> = OnceLock::new();
-    //     INSTANCE.get_or_init(|| Mutex::new(Connection::new()))
-    // }
-    //
-    // pub fn locked_connection<T>(f: &dyn Fn(&mut Connection) -> T) -> T {
-    //     let mut guard = Connection::mutex().lock().unwrap();
-    //     // println!("lock acquired");
-    //     let re = f(&mut *guard);
-    //     // println!("unlocked");
-    //     re
-    // }
-
     pub fn _start(&mut self) -> Result<()> {
         let ff = Arc::new(Mutex::new((any_fusion()?, false)));
         let ff2 = ff.clone();
