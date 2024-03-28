@@ -34,7 +34,7 @@
 //! All of them are enabled by default, which may bring in some unwanted dependencies if you
 //! only want to support a specific type.
 
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread;
 use std::thread::JoinHandle;
 
@@ -139,8 +139,14 @@ pub fn any_fusion() -> Result<Box<dyn Fusion>> {
     Ok(Box::new(NaiveCF::new(glasses)?))
 }
 
+type Rw<T> = Arc<Mutex<T>>;
+
+fn rw_new<T>(v: T) -> Rw<T> {
+    Arc::new(Mutex::new(v))
+}
+
 pub struct Connection {
-    pub fusion: Option<Arc<Mutex<(Box<dyn Fusion>, bool)>>>,
+    pub fusion: Option<Rw<(Box<dyn Fusion>, bool)>>,
     pub thread: Option<JoinHandle<()>>,
 }
 
@@ -155,13 +161,14 @@ impl Connection {
     }
 
     pub fn _start(&mut self) -> Result<()> {
-        let ff = Arc::new(Mutex::new((any_fusion()?, false)));
+        let ff = rw_new((any_fusion()?, false));
         let ff2 = ff.clone();
 
         self.fusion = Some(ff);
 
         let handle = thread::spawn(move || loop {
             let mut ff = ff2.lock().unwrap();
+
             if ff.1 {
                 break;
             }
@@ -200,7 +207,8 @@ impl Connection {
 
         match maybe {
             Some(mx) => {
-                let mut ff = mx.lock().unwrap();
+                let mut ff = &mut *mx.lock().unwrap();
+                // explicit form to be replaced easily
                 ff.1 = true;
             }
             None => return Err(Error::NotFound),
@@ -211,27 +219,48 @@ impl Connection {
 
     // pub fn copy_quaternion() -> Result<&'static Vector4<f32>> {}
 
-    pub fn locked_fusion<T>(f: &dyn Fn(&mut Box<dyn Fusion>) -> T) -> T {
-        // let fusion_m = Self::locked_connection(&|c| {
-        //     let fusion_m = c.fusion().unwrap();
-        //     fusion_m
-        //     // c.fusion.as_mut().unwrap()
-        // });
+    // pub fn locked_fusion<T>(f: &dyn Fn(&mut Box<dyn Fusion>) -> T) -> T {
+    //     let c = Self::existing().unwrap();
+    //     let mx = c.fusion.as_ref().unwrap();
+    //     let mut fusion = mx.lock().unwrap();
+    //
+    //     f(&mut fusion.0)
+    // }
 
+    pub fn locked_fusion_proto<'a>() -> Result<MutexGuard<'a, (Box<(dyn Fusion + 'static)>, bool)>>
+    {
         let c = Self::existing().unwrap();
-        let fusion_m = c.fusion.as_ref().unwrap();
-        let mut fusion = fusion_m.lock().unwrap();
+        let mx = c.fusion.as_ref().unwrap();
+        let lock = mx.lock()?;
+        Ok(lock)
+    }
 
-        f(&mut fusion.0)
+    pub fn locked_fusion_proto2<'a>() -> Result<&'a mut (Box<(dyn Fusion + 'static)>, bool)> {
+        let c = Self::existing().unwrap();
+        let mx = c.fusion.as_ref().unwrap();
+        let lock = mx.lock()?;
+        let mut lock_as_ref = &mut *mx.lock()?;
+        Ok(lock_as_ref)
+    }
+
+    pub fn locked_fusion<'a>() -> Result<&'a mut Box<dyn Fusion>> {
+        let c = Self::existing().unwrap();
+        let mx = c.fusion.as_ref().unwrap();
+        let lock = mx.lock()?;
+        // let mut fusion: &mut Box<dyn Fusion> = &mut *lock.0;
+        // let result: &'a mut Box<dyn Fusion> = fusion;
+        // Ok(fusion)
+        todo!()
     }
 
     pub fn euler_rad() -> Result<Vector3<f32>> {
-        let euler = Self::locked_fusion(&|ff| ff.attitude_frd_rad());
+        let fusion = Self::locked_fusion()?;
+        let euler = fusion.attitude_frd_rad();
         Ok(euler)
     }
 
     pub fn euler_deg() -> Result<Vector3<f32>> {
-        let euler = Self::locked_fusion(&|ff| ff.attitude_frd_deg());
+        let euler = Self::locked_fusion()?.attitude_frd_deg();
         Ok(euler)
     }
 }
