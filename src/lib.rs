@@ -145,6 +145,10 @@ fn rw_new<T>(v: T) -> Rw<T> {
     Arc::new(Mutex::new(v))
 }
 
+fn rw_acquire<T>(v: &Rw<T>) -> std::sync::MutexGuard<T> {
+    v.lock().unwrap()
+}
+
 pub struct Connection {
     pub fusion: Option<Rw<(Box<dyn Fusion>, bool)>>,
     pub thread: Option<JoinHandle<()>>,
@@ -167,7 +171,7 @@ impl Connection {
         self.fusion = Some(ff);
 
         let handle = thread::spawn(move || loop {
-            let mut ff = ff2.lock().unwrap();
+            let mut ff = rw_acquire(&ff2);
 
             if ff.1 {
                 break;
@@ -207,7 +211,7 @@ impl Connection {
 
         match maybe {
             Some(mx) => {
-                let mut ff = &mut *mx.lock().unwrap();
+                let mut ff = rw_acquire(&mx);
                 // explicit form to be replaced easily
                 ff.1 = true;
             }
@@ -217,21 +221,21 @@ impl Connection {
         Ok(())
     }
 
-    pub fn locked_fusion<T>(f: &dyn Fn(&mut Box<dyn Fusion>) -> T) -> T {
+    pub fn with_fusion<T>(f: &dyn Fn(&mut Box<dyn Fusion>) -> T) -> T {
         let c = Self::existing().unwrap();
-        let fusion_m = c.fusion.as_ref().unwrap();
-        let mut fusion = fusion_m.lock().unwrap();
+        let mx = c.fusion.as_ref().unwrap();
+        let mut fusion = rw_acquire(&mx);
 
         f(&mut fusion.0)
     }
 
     pub fn euler_rad() -> Result<Vector3<f32>> {
-        let euler = Self::locked_fusion(&|ff| ff.attitude_frd_rad());
+        let euler = Self::with_fusion(&|ff| ff.attitude_frd_rad());
         Ok(euler)
     }
 
     pub fn euler_deg() -> Result<Vector3<f32>> {
-        let euler = Self::locked_fusion(&|ff| ff.attitude_frd_deg());
+        let euler = Self::with_fusion(&|ff| ff.attitude_frd_deg());
         Ok(euler)
     }
 }
