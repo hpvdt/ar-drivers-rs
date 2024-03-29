@@ -2,9 +2,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use nalgebra::{Isometry3, Vector3};
 
-use crate::{ARGlasses, DisplayMode, Error, GlassesEvent, Side};
-
-type Result<T> = std::result::Result<T, Error>;
+use crate::{ARGlasses, DisplayMode, GlassesEvent, Side};
 
 pub static GRAVITY_UP: Vector3<f32> = Vector3::new(0.0, 9.81, 0.0);
 pub static ZERO: Vector3<f32> = Vector3::new(0.0, 0.0, 0.0);

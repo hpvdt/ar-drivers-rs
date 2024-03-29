@@ -2,7 +2,7 @@
 // This file is part of ar-drivers-rs
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
-#![warn(missing_docs)]
+// #![warn(missing_docs)]
 //! This crate contains a simplified driver for Rokid Air and Mad Gaze Glow AR glasses.
 //! It supports getting basic sensor data and setting up the display.
 //!
@@ -141,16 +141,18 @@ pub fn any_fusion() -> Result<Box<dyn Fusion>> {
 
 type Rw<T> = Arc<Mutex<T>>;
 
-fn rw_new<T>(v: T) -> Rw<T> {
+fn rw<T>(v: T) -> Rw<T> {
     Arc::new(Mutex::new(v))
 }
 
-fn rw_acquire<T>(v: &Rw<T>) -> std::sync::MutexGuard<T> {
+fn rw_write<T>(v: &Rw<T>) -> std::sync::MutexGuard<T> {
     v.lock().unwrap()
 }
 
 pub struct Connection {
-    pub fusion: Option<Rw<(Box<dyn Fusion>, bool)>>,
+    pub fusion: Option<Rw<Box<dyn Fusion>>>,
+    pub terminating: Rw<bool>,
+    pub interrupting: Rw<bool>,
     pub thread: Option<JoinHandle<()>>,
 }
 
@@ -160,23 +162,30 @@ impl Connection {
     fn new() -> Self {
         Connection {
             fusion: None,
+            terminating: rw(false),
+            interrupting: rw(false),
             thread: None,
         }
     }
 
     pub fn _start(&mut self) -> Result<()> {
-        let ff = rw_new((any_fusion()?, false));
-        let ff2 = ff.clone();
+        self.fusion = Some(rw(any_fusion()?));
 
-        self.fusion = Some(ff);
+        let _fusion = self.fusion.as_mut().unwrap().clone();
+        let _terminating = self.terminating.clone();
 
         let handle = thread::spawn(move || loop {
-            let mut ff = rw_acquire(&ff2);
-
-            if ff.1 {
+            if *(rw_write(&_terminating)) {
                 break;
             }
-            ff.0.update();
+
+            // while (!_interrupting) {}
+
+            {
+                let mut ff = rw_write(&_fusion);
+
+                ff.update();
+            }
             // println!("UPDATE!")
         });
 
@@ -195,9 +204,9 @@ impl Connection {
 
     pub fn start() -> Result<&'static Connection> {
         let mut c: Connection;
-        Self::existing().map(|c| ()).unwrap_or({
+        Self::existing().map(|_| ()).unwrap_or({
             c = Connection::new();
-            c._start();
+            c._start()?;
             CONNECTION.set(c);
         });
 
@@ -210,10 +219,11 @@ impl Connection {
         let maybe = &c.fusion;
 
         match maybe {
-            Some(mx) => {
-                let mut ff = rw_acquire(&mx);
+            Some(_) => {
+                // let ff = rw_write(&rw);
                 // explicit form to be replaced easily
-                ff.1 = true;
+                let _terminating = &c.terminating;
+                *(rw_write(_terminating)) = true;
             }
             None => return Err(Error::NotFound),
         }
@@ -223,10 +233,10 @@ impl Connection {
 
     pub fn with_fusion<T>(f: &dyn Fn(&mut Box<dyn Fusion>) -> T) -> T {
         let c = Self::existing().unwrap();
-        let mx = c.fusion.as_ref().unwrap();
-        let mut fusion = rw_acquire(&mx);
+        let rw = c.fusion.as_ref().unwrap();
+        let mut fusion = rw_write(&rw);
 
-        f(&mut fusion.0)
+        f(&mut fusion)
     }
 
     pub fn euler_rad() -> Result<Vector3<f32>> {
