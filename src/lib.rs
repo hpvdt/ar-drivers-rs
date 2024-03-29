@@ -34,6 +34,7 @@
 //! All of them are enabled by default, which may bring in some unwanted dependencies if you
 //! only want to support a specific type.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::thread;
 use std::thread::JoinHandle;
@@ -151,19 +152,21 @@ fn rw_write<T>(v: &Rw<T>) -> std::sync::MutexGuard<T> {
 
 pub struct Connection {
     pub fusion: Option<Rw<Box<dyn Fusion>>>,
-    pub terminating: Rw<bool>,
-    pub interrupting: Rw<bool>, // when interrupting, update is paused, opening the fusion mutex for reading
+    pub terminating: Arc<AtomicBool>,
+    pub interrupting: Arc<AtomicBool>, // when interrupting, update is paused, opening the fusion mutex for reading
     pub thread: Option<JoinHandle<()>>,
 }
 
 static CONNECTION: OnceLock<Connection> = OnceLock::new();
 
 impl Connection {
+    const ORDERING: Ordering = Ordering::SeqCst;
+
     fn new() -> Self {
         Connection {
             fusion: None,
-            terminating: rw(false),
-            interrupting: rw(false),
+            terminating: Arc::new(AtomicBool::new(false)),
+            interrupting: Arc::new(AtomicBool::new(false)),
             thread: None,
         }
     }
@@ -176,18 +179,18 @@ impl Connection {
         let _interrupting = self.interrupting.clone();
 
         let handle = thread::spawn(move || loop {
-            if *(rw_write(&_terminating)) {
+            if (_terminating.load(Self::ORDERING)) {
                 break;
             }
 
-            if *(rw_write(&_interrupting)) {
-                // do nothing, reader is busy
+            if (_interrupting.load(Self::ORDERING)) {
+                println!("busy, no update")
             } else {
                 let mut ff = rw_write(&_fusion);
 
                 ff.update();
+                // println!("UPDATE!")
             }
-            // println!("UPDATE!")
         });
 
         self.thread = Some(handle);
@@ -224,7 +227,7 @@ impl Connection {
                 // let ff = rw_write(&rw);
                 // explicit form to be replaced easily
                 let _terminating = &c.terminating;
-                *(rw_write(_terminating)) = true;
+                _terminating.store(true, Self::ORDERING);
             }
             None => return Err(Error::NotFound),
         }
@@ -234,14 +237,14 @@ impl Connection {
 
     pub fn read_fusion<T>(f: &dyn Fn(&mut Box<dyn Fusion>) -> T) -> T {
         let c = Self::existing().unwrap();
-        *rw_write(&c.interrupting) = true;
-
         let _fusion = c.fusion.as_ref().unwrap();
+
+        c.interrupting.store(true, Self::ORDERING);
         let mut fusion = rw_write(&_fusion);
 
         let result = f(&mut fusion);
 
-        *rw_write(&c.interrupting) = false;
+        c.interrupting.store(false, Self::ORDERING);
         result
     }
 
