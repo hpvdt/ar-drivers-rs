@@ -135,7 +135,7 @@ impl dyn Fusion {
 }
 
 pub fn any_fusion() -> Result<Box<dyn Fusion>> {
-    let glasses = any_glasses_or_dummy()?;
+    let glasses = any_glasses()?;
     // let glasses = any_glasses_or_dummy()?;
     Ok(Box::new(NaiveCF::new(glasses)?))
 }
@@ -179,11 +179,11 @@ impl Connection {
         let _interrupting = self.interrupting.clone();
 
         let handle = thread::spawn(move || loop {
-            if (_terminating.load(Self::ORDERING)) {
+            if _terminating.load(Self::ORDERING) {
                 break;
             }
 
-            if (_interrupting.load(Self::ORDERING)) {
+            if _interrupting.load(Self::ORDERING) {
                 println!("busy, no update")
             } else {
                 let mut ff = rw_write(&_fusion);
@@ -198,10 +198,6 @@ impl Connection {
         Ok(())
     }
 
-    // pub fn existing() -> Option<&'static mut Connection> {
-    //     CONNECTION.get_mut()
-    // }
-
     pub fn existing() -> Option<&'static Connection> {
         CONNECTION.get()
     }
@@ -211,7 +207,10 @@ impl Connection {
         Self::existing().map(|_| ()).unwrap_or({
             c = Connection::new();
             c._start()?;
-            CONNECTION.set(c);
+            match CONNECTION.set(c) {
+                Err(_) => return Err(Error::ConcurrencyError),
+                Ok(_) => {}
+            }
         });
 
         Ok(Self::existing().unwrap())

@@ -40,7 +40,9 @@ pub struct NaiveCF {
 }
 
 impl NaiveCF {
-    const BASE_GRAV_RATIO: f32 = 0.02;
+    const BASE_GRAV_RATIO: f32 = 0.005;
+    // const BASE_GRAV_RATIO: f32 = 0.0; //TODO: this disable grav
+
     // const BASE_MAG_RATIO: f32 = 0.5;
 
     const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; // microseconds
@@ -111,23 +113,33 @@ impl NaiveCF {
 
     fn update_acc(&mut self, acc_rub: &Vector3<f32>, _t: u64) -> () {
         let acc = Self::rub_to_frd(acc_rub);
-        let acc_flipped = Vector3::new(-acc.x, -acc.y, acc.z);
-        let uncorrected = self.attitude * Self::UP_FRD;
 
-        let delta_opt = UnitQuaternion::rotation_between(&uncorrected, &acc_flipped);
+        if acc.norm() < 1.0 {
+            return (); // almost in free fall, or acc disabled, do not correct
+        }
+
+        // let acc_flipped = Vector3::new(-acc.x, -acc.y, acc.z);
+        let uncorrected = self.attitude.inverse().transform_vector(&Self::UP_FRD);
+
+        let delta_opt = UnitQuaternion::rotation_between(&acc, &uncorrected);
 
         match delta_opt {
             Some(delta) => {
                 self.inconsistency = self.inconsistency * Self::INCONSISTENCY_DECAY + delta.angle();
 
-                let corrected = self.attitude
-                    * UnitQuaternion::slerp(
-                        &UnitQuaternion::identity(),
-                        &delta,
-                        Self::BASE_GRAV_RATIO,
-                    );
-
-                self.attitude = corrected;
+                match UnitQuaternion::try_slerp(
+                    &UnitQuaternion::identity(),
+                    &delta,
+                    Self::BASE_GRAV_RATIO,
+                    0.01,
+                ) {
+                    Some(correction) => {
+                        self.attitude = self.attitude * correction; // left-multiplication means rotation
+                    }
+                    None => {
+                        // no error no update
+                    }
+                };
             }
             None => {
                 // no error no update
