@@ -136,7 +136,7 @@ impl NaiveCF {
     }
 }
 
-unsafe impl Sync for NaiveCF {}
+// unsafe impl Sync for NaiveCF {}
 
 impl Fusion for NaiveCF {
     fn glasses(&mut self) -> &mut Box<dyn ARGlasses> {
