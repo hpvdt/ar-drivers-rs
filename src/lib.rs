@@ -152,7 +152,7 @@ fn rw_write<T>(v: &Rw<T>) -> std::sync::MutexGuard<T> {
 pub struct Connection {
     pub fusion: Option<Rw<Box<dyn Fusion>>>,
     pub terminating: Rw<bool>,
-    pub interrupting: Rw<bool>,
+    pub interrupting: Rw<bool>, // when interrupting, update is paused, opening the fusion mutex for reading
     pub thread: Option<JoinHandle<()>>,
 }
 
@@ -173,15 +173,16 @@ impl Connection {
 
         let _fusion = self.fusion.as_mut().unwrap().clone();
         let _terminating = self.terminating.clone();
+        let _interrupting = self.interrupting.clone();
 
         let handle = thread::spawn(move || loop {
             if *(rw_write(&_terminating)) {
                 break;
             }
 
-            // while (!_interrupting) {}
-
-            {
+            if *(rw_write(&_interrupting)) {
+                // do nothing, reader is busy
+            } else {
                 let mut ff = rw_write(&_fusion);
 
                 ff.update();
@@ -231,21 +232,26 @@ impl Connection {
         Ok(())
     }
 
-    pub fn with_fusion<T>(f: &dyn Fn(&mut Box<dyn Fusion>) -> T) -> T {
+    pub fn read_fusion<T>(f: &dyn Fn(&mut Box<dyn Fusion>) -> T) -> T {
         let c = Self::existing().unwrap();
-        let rw = c.fusion.as_ref().unwrap();
-        let mut fusion = rw_write(&rw);
+        *rw_write(&c.interrupting) = true;
 
-        f(&mut fusion)
+        let _fusion = c.fusion.as_ref().unwrap();
+        let mut fusion = rw_write(&_fusion);
+
+        let result = f(&mut fusion);
+
+        *rw_write(&c.interrupting) = false;
+        result
     }
 
     pub fn euler_rad() -> Result<Vector3<f32>> {
-        let euler = Self::with_fusion(&|ff| ff.attitude_frd_rad());
+        let euler = Self::read_fusion(&|ff| ff.attitude_frd_rad());
         Ok(euler)
     }
 
     pub fn euler_deg() -> Result<Vector3<f32>> {
-        let euler = Self::with_fusion(&|ff| ff.attitude_frd_deg());
+        let euler = Self::read_fusion(&|ff| ff.attitude_frd_deg());
         Ok(euler)
     }
 }
