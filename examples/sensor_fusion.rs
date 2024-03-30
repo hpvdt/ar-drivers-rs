@@ -3,7 +3,6 @@
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
 use ar_drivers::any_fusion;
-use ar_drivers::Fusion;
 
 fn main() {
     let mut fusion = any_fusion().unwrap(); // Declare conn as mutable
@@ -18,6 +17,7 @@ fn main() {
         let frd = fusion.attitude_frd_deg();
         let inconsistency = fusion.inconsistency_frd();
 
+        println!("quaternion:\t{:10.7}", quaternion);
         println!("euler:\t{:10.7}", frd.transpose());
 
         println!("inconsistency:\t{:10.7}", inconsistency);

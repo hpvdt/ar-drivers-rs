@@ -41,7 +41,7 @@ pub struct NaiveCF {
 
 impl NaiveCF {
     const BASE_GRAV_RATIO: f32 = 0.005;
-    // const BASE_GRAV_RATIO: f32 = 0.0; //TODO: this disable grav
+    // const BASE_GRAV_RATIO: f32 = 0.0; // this disables grav
 
     // const BASE_MAG_RATIO: f32 = 0.5;
 

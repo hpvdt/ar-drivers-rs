@@ -184,7 +184,7 @@ impl Connection {
             }
 
             if _interrupting.load(Self::ORDERING) {
-                println!("busy, no update")
+                // println!("busy, no update")
             } else {
                 let mut ff = rw_write(&_fusion);
 
