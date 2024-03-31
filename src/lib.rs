@@ -34,9 +34,8 @@
 //! All of them are enabled by default, which may bring in some unwanted dependencies if you
 //! only want to support a specific type.
 
-use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::thread::JoinHandle;
 
@@ -136,8 +135,8 @@ impl dyn Fusion {
 }
 
 pub fn any_fusion() -> Result<Box<dyn Fusion>> {
-    let glasses = any_glasses()?;
-    // let glasses = any_glasses_or_dummy()?;
+    // let glasses = any_glasses()?;
+    let glasses = any_glasses_or_dummy()?;
     Ok(Box::new(NaiveCF::new(glasses)?))
 }
 
@@ -152,23 +151,31 @@ fn rw_write<T>(v: &Rw<T>) -> std::sync::MutexGuard<T> {
 }
 
 pub struct Connection {
-    pub fusion: Option<Rw<Box<dyn Fusion>>>,
+    pub fusion: Rw<Box<dyn Fusion>>,
     pub terminating: Arc<AtomicBool>,
     pub interrupting: Arc<AtomicBool>, // when interrupting, update is paused, opening the fusion mutex for reading
     pub thread: Option<JoinHandle<()>>,
 }
 
-static CONNECTION: OnceLock<Connection> = OnceLock::new();
+static mut CONNECTION: Option<Connection> = None;
 
 impl Connection {
     const ORDERING: Ordering = Ordering::SeqCst;
 
     fn new() -> Self {
         Connection {
-            fusion: None,
+            fusion: rw(any_fusion().unwrap()),
             terminating: Arc::new(AtomicBool::new(false)),
-            interrupting: Arc::new(AtomicBool::new(false)),
+            interrupting: Arc::new(AtomicBool::new(false)), // thread: None,
             thread: None,
+        }
+    }
+
+    fn get() -> Result<&'static mut Connection> {
+        unsafe {
+            let existing = &mut CONNECTION;
+            let neo = existing.get_or_insert_with(|| Connection::new());
+            Ok(neo)
         }
     }
 
@@ -179,12 +186,10 @@ impl Connection {
         Ok(())
     }
 
-    pub fn _start(&mut self) -> Result<()> {
+    fn _start(&mut self) -> Result<()> {
         self._init()?;
 
-        self.fusion = Some(rw(any_fusion()?));
-
-        let _fusion = self.fusion.as_mut().unwrap().clone();
+        let _fusion = self.fusion.clone();
         let _terminating = self.terminating.clone();
         let _interrupting = self.interrupting.clone();
 
@@ -208,64 +213,62 @@ impl Connection {
         Ok(())
     }
 
-    pub fn existing() -> Option<&'static Connection> {
-        CONNECTION.get()
-    }
-
     pub fn start() -> Result<&'static Connection> {
-        let existing_opt = Self::existing();
+        let conn = Self::get()?;
 
-        let mut c: Connection;
+        conn._start()?;
 
-        match existing_opt {
-            Some(v) => Ok(v),
-            None => {
-                c = Connection::new();
-                c._start()?;
-                match CONNECTION.set(c) {
-                    Err(_) => return Err(Error::ConcurrencyError),
-                    Ok(_) => {}
-                }
-
-                Ok(Self::existing().unwrap())
-            }
-        }
+        Ok(conn)
     }
 
-    pub fn stop() -> Result<()> {
-        let c = Self::existing().unwrap();
+    fn _stop(&mut self) -> Result<()> {
+        self.terminating.store(true, Self::ORDERING);
 
-        &c.terminating.store(true, Self::ORDERING);
+        self.thread.take().unwrap().join().unwrap();
 
         Ok(())
     }
 
-    pub fn read_fusion<T>(f: &dyn Fn(&mut Box<dyn Fusion>) -> T) -> T {
-        let c = Self::existing().unwrap();
-        let _fusion = c.fusion.as_ref().unwrap();
+    pub fn stop() -> Result<()> {
+        unsafe {
+            let existing = &mut CONNECTION;
+            *existing = None;
+            Ok(())
+        }
+    }
 
-        c.interrupting.store(true, Self::ORDERING);
+    pub fn read_fusion<T>(f: &dyn Fn(&mut Box<dyn Fusion>) -> T) -> Result<T> {
+        let conn = Self::get()?;
+        let _fusion = &conn.fusion;
+
+        conn.interrupting.store(true, Self::ORDERING);
         let mut fusion = rw_write(&_fusion);
 
         let result = f(&mut fusion);
 
-        c.interrupting.store(false, Self::ORDERING);
-        result
+        conn.interrupting.store(false, Self::ORDERING);
+        Ok(result)
     }
 
     pub fn euler_rad() -> Result<Vector3<f32>> {
         let euler = Self::read_fusion(&|ff| ff.attitude_frd_rad());
-        Ok(euler)
+        euler
     }
 
     pub fn euler_deg() -> Result<Vector3<f32>> {
         let euler = Self::read_fusion(&|ff| ff.attitude_frd_deg());
-        Ok(euler)
+        euler
     }
 
     pub fn quaternion() -> Result<UnitQuaternion<f32>> {
         let q = Self::read_fusion(&|ff| ff.attitude_quaternion());
-        Ok(q)
+        q
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        self._stop().unwrap()
     }
 }
 
