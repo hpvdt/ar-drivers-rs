@@ -34,12 +34,13 @@
 //! All of them are enabled by default, which may bring in some unwanted dependencies if you
 //! only want to support a specific type.
 
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::thread;
 use std::thread::JoinHandle;
 
-use nalgebra::{Isometry3, Matrix3, UnitQuaternion, Vector2, Vector3};
+use nalgebra::{Isometry3, Matrix3, UnitQuaternion, Vector2, Vector3, Vector4};
 
 use crate::naive_cf::NaiveCF;
 
@@ -171,7 +172,16 @@ impl Connection {
         }
     }
 
+    pub fn _init(&self) -> Result<()> {
+        self.terminating.store(false, Self::ORDERING);
+        self.interrupting.store(false, Self::ORDERING);
+
+        Ok(())
+    }
+
     pub fn _start(&mut self) -> Result<()> {
+        self._init()?;
+
         self.fusion = Some(rw(any_fusion()?));
 
         let _fusion = self.fusion.as_mut().unwrap().clone();
@@ -203,33 +213,29 @@ impl Connection {
     }
 
     pub fn start() -> Result<&'static Connection> {
-        let mut c: Connection;
-        Self::existing().map(|_| ()).unwrap_or({
-            c = Connection::new();
-            c._start()?;
-            match CONNECTION.set(c) {
-                Err(_) => return Err(Error::ConcurrencyError),
-                Ok(_) => {}
-            }
-        });
+        let existing_opt = Self::existing();
 
-        Ok(Self::existing().unwrap())
+        let mut c: Connection;
+
+        match existing_opt {
+            Some(v) => Ok(v),
+            None => {
+                c = Connection::new();
+                c._start()?;
+                match CONNECTION.set(c) {
+                    Err(_) => return Err(Error::ConcurrencyError),
+                    Ok(_) => {}
+                }
+
+                Ok(Self::existing().unwrap())
+            }
+        }
     }
 
     pub fn stop() -> Result<()> {
         let c = Self::existing().unwrap();
 
-        let maybe = &c.fusion;
-
-        match maybe {
-            Some(_) => {
-                // let ff = rw_write(&rw);
-                // explicit form to be replaced easily
-                let _terminating = &c.terminating;
-                _terminating.store(true, Self::ORDERING);
-            }
-            None => return Err(Error::NotFound),
-        }
+        &c.terminating.store(true, Self::ORDERING);
 
         Ok(())
     }
@@ -255,6 +261,11 @@ impl Connection {
     pub fn euler_deg() -> Result<Vector3<f32>> {
         let euler = Self::read_fusion(&|ff| ff.attitude_frd_deg());
         Ok(euler)
+    }
+
+    pub fn quaternion() -> Result<UnitQuaternion<f32>> {
+        let q = Self::read_fusion(&|ff| ff.attitude_quaternion());
+        Ok(q)
     }
 }
 
@@ -286,14 +297,16 @@ pub extern "C" fn GetEuler() -> *const f32 {
     }
 }
 
-// #[no_mangle]
-// pub extern "C" fn GetQuaternion() -> *const f32 {
-//     let result = Connection::with_instance(&|c| c.copy_quaternion());
-//     result.as_ptr()
-// }
+static mut QUATERNION: Vector4<f32> = Vector4::new(0.0, 0.0, 0.0, 0.0);
+
 #[no_mangle]
-pub extern "C" fn Dummy() -> *const f32 {
-    dummy::GRAVITY_UP.as_ptr()
+pub extern "C" fn GetQuaternion() -> *const f32 {
+    unsafe {
+        let quaternion = Connection::quaternion().unwrap();
+
+        QUATERNION = quaternion.as_vector().clone();
+        QUATERNION.as_ptr()
+    }
 }
 
 impl std::error::Error for Error {
