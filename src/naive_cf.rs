@@ -40,18 +40,6 @@ pub struct NaiveCF {
 }
 
 impl NaiveCF {
-    const BASE_GRAV_RATIO: f32 = 0.005;
-    // const BASE_GRAV_RATIO: f32 = 0.0; // this disables grav
-
-    // const BASE_MAG_RATIO: f32 = 0.5;
-
-    const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; // microseconds
-
-    const INCONSISTENCY_DECAY: f32 = 0.90;
-
-    const UP_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -9.81);
-    // const NORTH_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -1.0);
-
     pub fn new(glasses: Box<dyn ARGlasses>) -> Result<Self> {
         // let attitude = ;
         // let prev_gyro = ;
@@ -80,6 +68,7 @@ impl NaiveCF {
             }
         }
     }
+
     /// read until next valid event. Blocks.
     fn next_event(&mut self) -> GlassesEvent {
         loop {
@@ -96,6 +85,21 @@ impl NaiveCF {
         let result = Vector3::new(-v.z, v.x, -v.y);
         result
     }
+
+    // const BASE_GRAV_RATIO: f32 = 0.005;
+    // const BASE_GRAV_RATIO: f32 = 0.0; // no grav
+    const BASE_GRAV_RATIO: f32 = 1.0; // absolute correction, no gyro
+
+    // const BASE_MAG_RATIO: f32 = 0.5;
+
+    const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; // microseconds
+
+    const INCONSISTENCY_DECAY: f32 = 0.90;
+
+    const UP_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -9.81);
+    // const NORTH_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -1.0);
+
+    // CAUTION: right-multiplication means rotation, unconventionally
 
     fn update_gyro_rub(&mut self, gyro_rub: &Vector3<f32>, t: u64) -> () {
         let gyro = Self::rub_to_frd(gyro_rub);
@@ -118,12 +122,14 @@ impl NaiveCF {
             return (); // almost in free fall, or acc disabled, do not correct
         }
 
-        // let acc_flipped = Vector3::new(-acc.x, -acc.y, acc.z);
-        let uncorrected = self.attitude.inverse().transform_vector(&Self::UP_FRD);
+        let delta_opt = || -> (Option<UnitQuaternion<f32>>) {
+            let uncorrected = self.attitude.inverse().transform_vector(&Self::UP_FRD);
+            let delta_opt = UnitQuaternion::rotation_between(&acc, &uncorrected);
 
-        let delta_opt = UnitQuaternion::rotation_between(&acc, &uncorrected);
+            delta_opt
+        };
 
-        match delta_opt {
+        match delta_opt() {
             Some(delta) => {
                 self.inconsistency = self.inconsistency * Self::INCONSISTENCY_DECAY + delta.angle();
 
@@ -134,10 +140,19 @@ impl NaiveCF {
                     0.01,
                 ) {
                     Some(correction) => {
-                        self.attitude = self.attitude * correction; // left-multiplication means rotation
+                        self.attitude = self.attitude * correction;
+
+                        {
+                            // TODO: verification code, clean up
+
+                            let residual = delta_opt().unwrap().angle().abs();
+                            if (residual >= 0.01) {
+                                println!("!!!!!!!!!! residual: {} !!!!!!!!!!", residual);
+                            }
+                        }
                     }
                     None => {
-                        // no error no update
+                        // TODO: opposite direction, don't know how to correct
                     }
                 };
             }
@@ -171,7 +186,7 @@ impl Fusion for NaiveCF {
                 gyroscope,
                 timestamp,
             } => {
-                self.update_gyro_rub(&gyroscope, timestamp);
+                // self.update_gyro_rub(&gyroscope, timestamp);
                 self.update_acc(&accelerometer, timestamp);
             }
             _ => {
