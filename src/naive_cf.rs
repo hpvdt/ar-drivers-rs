@@ -115,6 +115,21 @@ impl NaiveCF {
         self.prev_gyro = (gyro, t);
     }
 
+    fn dummy(&mut self) -> () {
+        let mut a = 0;
+
+        let delta_opt = || -> (Option<f32>) {
+            let a = self.attitude.inverse();
+            Some(a.i)
+        };
+        match delta_opt() {
+            Some(v) => {
+                self.attitude = UnitQuaternion::identity();
+            }
+            None => {}
+        }
+    }
+
     fn update_acc(&mut self, acc_rub: &Vector3<f32>, _t: u64) -> () {
         let acc = Self::rub_to_frd(acc_rub);
 
@@ -122,14 +137,15 @@ impl NaiveCF {
             return (); // almost in free fall, or acc disabled, do not correct
         }
 
-        let delta_opt = || -> (Option<UnitQuaternion<f32>>) {
+        let delta_opt = || -> Option<UnitQuaternion<f32>> {
             let uncorrected = self.attitude.inverse().transform_vector(&Self::UP_FRD);
             let delta_opt = UnitQuaternion::rotation_between(&acc, &uncorrected);
 
             delta_opt
         };
 
-        match delta_opt() {
+        let dd = delta_opt();
+        match dd {
             Some(delta) => {
                 self.inconsistency = self.inconsistency * Self::INCONSISTENCY_DECAY + delta.angle();
 
@@ -140,11 +156,11 @@ impl NaiveCF {
                     0.01,
                 ) {
                     Some(correction) => {
-                        self.attitude = self.attitude * correction;
+                        let new_attitude = self.attitude * correction;
+                        self.attitude = new_attitude;
 
                         {
                             // TODO: verification code, clean up
-
                             let residual = delta_opt().unwrap().angle().abs();
                             if (residual >= 0.01) {
                                 println!("!!!!!!!!!! residual: {} !!!!!!!!!!", residual);
