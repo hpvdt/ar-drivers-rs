@@ -239,6 +239,7 @@ impl Fusion for NaiveCF {
             } => {
                 //self.update_gyro_rub(&gyroscope, timestamp);
                 self.update_acc(&accelerometer, timestamp);
+                self.attitude.renormalize_fast()
             }
             _ => {
                 //TODO: add magnetometer event etc
