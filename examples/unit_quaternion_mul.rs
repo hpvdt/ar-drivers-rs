@@ -17,6 +17,7 @@ fn main() {
         let random = UnitQuaternion::from_euler_angles(u1, u2, u3);
 
         qq = random * qq;
+        qq.renormalize_fast();
 
         let norm = qq.quaternion().norm();
 
