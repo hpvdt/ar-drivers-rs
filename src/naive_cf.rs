@@ -29,9 +29,11 @@
 
 use crate::{ARGlasses, Error, Fusion, GlassesEvent};
 use nalgebra::{Quaternion, Unit, UnitQuaternion, Vector3};
+use rand::random;
+use std::ops::Sub;
 
 #[test]
-pub fn _get_correction() {
+pub fn __get_correction() {
     /*
 
     compute:
@@ -67,6 +69,7 @@ pub fn _get_correction() {
         correction
     );
 }
+
 type Result<T> = std::result::Result<T, Error>;
 
 pub struct NaiveCF {
@@ -122,7 +125,7 @@ impl NaiveCF {
         }
     }
 
-    fn rub_to_frd(v: Vector3<f32>) -> Vector3<f32> {
+    fn rub_to_frd(v: &Vector3<f32>) -> Vector3<f32> {
         let result = Vector3::new(-v.z, v.x, -v.y);
         result
     }
@@ -137,12 +140,12 @@ impl NaiveCF {
 
     const INCONSISTENCY_DECAY: f32 = 0.90;
 
-    // const UP_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -9.81);
+    const UP_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -9.81);
     //const NORTH_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -1.0);
 
     //CAUTION: right-multiplication means rotation, unconventionally
 
-    fn update_gyro_rub(&mut self, gyro_rub: Vector3<f32>, t: u64) -> () {
+    fn update_gyro_rub(&mut self, gyro_rub: &Vector3<f32>, t: u64) -> () {
         let gyro = Self::rub_to_frd(gyro_rub);
 
         let d_t1 = t - self.prev_gyro.1;
@@ -156,16 +159,18 @@ impl NaiveCF {
         self.prev_gyro = (gyro, t);
     }
 
-    fn update_acc(&mut self, acc_rub: Vector3<f32>, _t: u64) -> () {
-        let acc = Self::rub_to_frd(acc_rub).to_owned();
+    fn update_acc(&mut self, acc_rub: &Vector3<f32>, _t: u64) -> () {
+        let acc = Self::rub_to_frd(acc_rub);
 
         if acc.norm() < 1.0 {
             return (); //almost in free fall, or acc disabled, do not correct
         }
 
-        let attitude = self.attitude.to_owned();
+        let attitude = &self.attitude;
 
-        let correction_opt = Self::get_correction(acc, attitude);
+        let att_str = attitude.to_string();
+
+        let correction_opt = Self::get_correction(&acc, attitude);
 
         match correction_opt {
             Some(correction) => {
@@ -180,8 +185,8 @@ impl NaiveCF {
                     0.0,
                 ) {
                     Some(partial) => {
-                        let new_attitude = partial * self.attitude;
-                        self.attitude = new_attitude;
+                        let integrated = partial * attitude;
+                        self.attitude = integrated;
                     }
                     None => {
                         //TODO: opposite direction, don't know how to correct
@@ -194,22 +199,25 @@ impl NaiveCF {
         }
     }
 
-    pub fn get_correction(
-        acc: Vector3<f32>,
-        rotation: UnitQuaternion<f32>,
-    ) -> Option<UnitQuaternion<f32>> {
-        Self::get_correction_verified(&acc.to_owned(), &rotation.to_owned())
+    fn dummy_rotation() -> UnitQuaternion<f32> {
+        let axis = Vector3::new(-0.0015257122, -0.9227901, -0.38530007);
+        let angle = 2.262818;
+
+        let rotation = UnitQuaternion::from_axis_angle(&Unit::new_normalize(axis), angle);
+        rotation
     }
 
-    fn get_correction_raw(
+    fn dummy_vec3() -> Vector3<f32> {
+        Vector3::new(3.0176868, -0.74084723, 9.24847)
+    }
+
+    pub fn get_correction(
         acc: &Vector3<f32>,
         rotation: &UnitQuaternion<f32>,
     ) -> Option<UnitQuaternion<f32>> {
-        static UP_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -9.81);
-
-        let uncorrected = rotation.transform_vector(&UP_FRD);
-        let correction_opt = UnitQuaternion::rotation_between(&uncorrected, &acc);
-        correction_opt
+        Self::get_correction_verified(&Self::dummy_vec3(), &rotation.clone());
+        Self::get_correction_verified(&acc.clone(), &Self::dummy_rotation());
+        Self::get_correction_verified(&acc.clone(), &rotation.clone())
     }
 
     fn get_correction_verified(
@@ -219,6 +227,15 @@ impl NaiveCF {
         Self::get_correction_verified_internal(acc, rotation).0
     }
 
+    fn get_correction_raw(
+        acc: &Vector3<f32>,
+        rotation: &UnitQuaternion<f32>,
+    ) -> Option<UnitQuaternion<f32>> {
+        let uncorrected = rotation * Self::UP_FRD.normalize();
+        let correction_opt = UnitQuaternion::rotation_between(&uncorrected, &acc.normalize());
+        correction_opt
+    }
+
     fn get_correction_verified_internal(
         acc: &Vector3<f32>,
         rotation: &UnitQuaternion<f32>,
@@ -226,14 +243,14 @@ impl NaiveCF {
         let raw = Self::get_correction_raw(acc, rotation);
         match raw {
             Some(correction) => {
-                //round trip verification
+                //round-trip verification
+
                 let corrected = correction * rotation;
 
-                let should_be_zero = Self::get_correction_raw(acc, &corrected);
+                let should_be_zero = Self::get_correction_raw(acc, &corrected).unwrap().angle();
 
-                let zero = should_be_zero.unwrap().angle();
-                if zero > 0.01 {
-                    println!("residual={}", zero);
+                if should_be_zero > 0.1 {
+                    println!("residual={}", should_be_zero);
                     println!(
                         "compute: {}, {} => {}",
                         acc.transpose(),
@@ -241,11 +258,60 @@ impl NaiveCF {
                         correction
                     );
 
-                    // let again = Self::get_correction_verified_internal(acc, rotation);
-                    // assert!((raw, zero) == again)
+                    {
+                        let reconstructed = UnitQuaternion::from_axis_angle(
+                            &rotation.axis().unwrap(),
+                            rotation.angle(),
+                        );
+
+                        assert!((rotation * reconstructed.inverse()).angle() < 0.001);
+
+                        assert!(
+                            (rotation * Self::UP_FRD.normalize()
+                                - reconstructed * Self::UP_FRD.normalize())
+                            .norm()
+                                < 0.01
+                        )
+                    }
+
+                    {
+                        let again = Self::get_correction_raw(acc, rotation);
+                        assert!(raw == again)
+                    }
+
+                    {
+                        // verify rotation
+                        let inv = rotation.inverse();
+                        assert!((inv * rotation).angle() < 0.001);
+                        assert!((rotation * inv).angle() < 0.001);
+                    }
+
+                    {
+                        // verity acc
+                        let q = UnitQuaternion::rotation_between(&Self::UP_FRD, acc).unwrap();
+
+                        let round1 = (q * Self::UP_FRD.normalize() - acc.normalize()).norm();
+                        assert!(round1 < 0.001, "round1={}", round1);
+
+                        let round2 =
+                            (q.inverse() * acc.normalize() - Self::UP_FRD.normalize()).norm();
+                        assert!(round2 < 0.001, "round2={}", round2);
+                    }
+
+                    // {
+                    //     let uncorrected = rotation * Self::UP_FRD.normalize();
+                    //     let should_be_zero = (correction * uncorrected - acc.normalize()).norm();
+                    //     assert!(should_be_zero < 0.01, "diff={}", should_be_zero);
+                    // }
+                    //
+                    // {
+                    //     let should_be_zero =
+                    //         (corrected * Self::UP_FRD.normalize() - acc.normalize()).norm();
+                    //     assert!(should_be_zero < 0.01, "diff={}", should_be_zero);
+                    // }
                 }
 
-                (raw, zero)
+                (raw, should_be_zero)
             }
             None => (raw, 0.0),
         }
@@ -276,7 +342,7 @@ impl Fusion for NaiveCF {
                 timestamp,
             } => {
                 //self.update_gyro_rub(&gyroscope, timestamp);
-                self.update_acc(accelerometer, timestamp);
+                self.update_acc(&accelerometer, timestamp);
                 self.attitude.renormalize_fast()
             }
             _ => {

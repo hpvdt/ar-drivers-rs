@@ -483,8 +483,9 @@ pub struct DisplayMatrices {
 }
 
 pub fn any_glasses_or_dummy() -> Result<Box<dyn ARGlasses>> {
-    any_glasses().or({
-        println!("fall back to dummy glasses");
+    any_glasses().or_else(|e| {
+        println!("{} fall back to dummy glasses", e);
+
         Ok(Box::new(dummy::Dummy {}))
     })
 }
