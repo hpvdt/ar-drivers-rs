@@ -17,9 +17,9 @@ fn main() {
         let frd = fusion.attitude_frd_deg();
         let inconsistency = fusion.inconsistency_frd();
 
-        // println!("quaternion:\t{:10.7}", quaternion);
-        // println!("euler:\t{:10.7}", frd.transpose());
-        //
-        // println!("inconsistency:\t{:10.7}", inconsistency);
+        println!("quaternion:\t{:10.7}", quaternion);
+        println!("euler:\t{:10.7}", frd.transpose());
+
+        println!("inconsistency:\t{:10.7}", inconsistency);
     }
 }
