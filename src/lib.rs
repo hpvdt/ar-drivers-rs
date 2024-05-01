@@ -34,6 +34,7 @@
 //! All of them are enabled by default, which may bring in some unwanted dependencies if you
 //! only want to support a specific type.
 
+use std::f32::consts::PI;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
@@ -125,12 +126,37 @@ pub trait Fusion: Send {
 
 impl dyn Fusion {
     pub fn attitude_frd_rad(&self) -> Vector3<f32> {
-        let (roll, pitch, yaw) = self.attitude_quaternion().euler_angles();
+        let (roll, pitch, yaw) = (self.attitude_quaternion()).euler_angles();
         Vector3::new(roll, pitch, yaw)
     }
 
     pub fn attitude_frd_deg(&self) -> Vector3<f32> {
         self.attitude_frd_rad().map(|x| x.to_degrees())
+    }
+}
+
+struct FusionWithOffset {
+    fusion: Box<dyn Fusion>,
+    offset: UnitQuaternion<f32>,
+}
+
+impl Fusion for FusionWithOffset {
+    fn glasses(&mut self) -> &mut Box<dyn ARGlasses> {
+        self.fusion.glasses()
+    }
+
+    fn inconsistency_frd(&self) -> f32 {
+        self.fusion.inconsistency_frd()
+    }
+
+    fn update(&mut self) -> () {
+        self.fusion.update()
+    }
+
+    fn attitude_quaternion(&self) -> UnitQuaternion<f32> {
+        let original = self.fusion.attitude_quaternion();
+        let corrected = self.offset * original;
+        corrected
     }
 }
 
@@ -164,7 +190,14 @@ impl Connection {
 
     fn new() -> Self {
         Connection {
-            fusion: rw(any_fusion().unwrap()),
+            fusion: {
+                let raw = any_fusion().unwrap();
+                let corrected = FusionWithOffset {
+                    fusion: raw,
+                    offset: UnitQuaternion::from_euler_angles(0.0, PI * 0.5, 0.0),
+                };
+                rw(Box::new(corrected))
+            },
             terminating: Arc::new(AtomicBool::new(false)),
             interrupting: Arc::new(AtomicBool::new(false)), // thread: None,
             thread: None,
@@ -249,21 +282,6 @@ impl Connection {
         conn.interrupting.store(false, Self::ORDERING);
         Ok(result)
     }
-
-    pub fn euler_rad() -> Result<Vector3<f32>> {
-        let euler = Self::read_fusion(&|ff| ff.attitude_frd_rad());
-        euler
-    }
-
-    pub fn euler_deg() -> Result<Vector3<f32>> {
-        let euler = Self::read_fusion(&|ff| ff.attitude_frd_deg());
-        euler
-    }
-
-    pub fn quaternion() -> Result<UnitQuaternion<f32>> {
-        let q = Self::read_fusion(&|ff| ff.attitude_quaternion());
-        q
-    }
 }
 
 impl Drop for Connection {
@@ -293,7 +311,7 @@ static mut EULER: Vector3<f32> = Vector3::new(0.0, 0.0, 0.0);
 #[no_mangle]
 pub extern "C" fn GetEuler() -> *const f32 {
     unsafe {
-        let euler = Connection::euler_deg().unwrap();
+        let euler = Connection::read_fusion(&|ff| ff.attitude_frd_deg()).unwrap();
 
         EULER = euler.clone();
         EULER.as_ptr()
@@ -305,7 +323,7 @@ static mut QUATERNION: Vector4<f32> = Vector4::new(0.0, 0.0, 0.0, 0.0);
 #[no_mangle]
 pub extern "C" fn GetQuaternion() -> *const f32 {
     unsafe {
-        let quaternion = Connection::quaternion().unwrap();
+        let quaternion = Connection::read_fusion(&|ff| ff.attitude_quaternion()).unwrap();
 
         QUATERNION = quaternion.as_vector().clone();
         QUATERNION.as_ptr()

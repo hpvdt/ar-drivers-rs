@@ -27,10 +27,9 @@
 //! # example:
 //!  TODO: fill
 
+use nalgebra::{UnitQuaternion, Vector3};
+
 use crate::{ARGlasses, Error, Fusion, GlassesEvent};
-use nalgebra::{Quaternion, Unit, UnitQuaternion, Vector3};
-use rand::random;
-use std::ops::Sub;
 
 #[test]
 pub fn __get_correction() {
@@ -63,6 +62,7 @@ type Result<T> = std::result::Result<T, Error>;
 
 pub struct NaiveCF {
     pub glasses: Box<dyn ARGlasses>,
+
     //estimation
     pub attitude: UnitQuaternion<f32>,
 
@@ -213,7 +213,7 @@ impl NaiveCF {
         acc: &Vector3<f32>,
         rotation: &UnitQuaternion<f32>,
     ) -> Option<UnitQuaternion<f32>> {
-        Self::get_rotation_verified(acc, rotation)
+        Self::get_rotation_raw(acc, rotation)
     }
 
     fn get_rotation_raw(
