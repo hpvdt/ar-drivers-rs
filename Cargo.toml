@@ -32,10 +32,10 @@ tinyjson = { version = "2.5.1", optional = true }
 #yakf = { version = "0.1.12" }
 
 [target.'cfg(target_os = "android")'.dependencies]
-hidapi = { version = "2.4.1", default-features = false, features = ["linux-static-libusb"], optional = true }
+hidapi = { version = "2.6.1", default-features = false, features = ["linux-static-libusb"], optional = true }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-hidapi = { version = "2.4.1", optional = true }
+hidapi = { version = "2.6.1", optional = true }
 
 
 [dev-dependencies]
