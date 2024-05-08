@@ -1,2 +1,13 @@
 /target
-/Cargo.lock
+#/Cargo.lock
+
+# IntelliJ-IDEA
+*.iml
+.idea/
+.idea_modules/
+
+# VSCode
+config.json
+
+# MacOS
+.DS_Store

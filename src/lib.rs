@@ -34,18 +34,29 @@
 //! All of them are enabled by default, which may bring in some unwanted dependencies if you
 //! only want to support a specific type.
 
-use nalgebra::{Isometry3, Matrix3, UnitQuaternion, Vector2, Vector3};
+use std::f32::consts::PI;
+use std::sync::{Arc, Mutex, PoisonError};
+
+use nalgebra::{Isometry3, Matrix3, Quaternion, UnitQuaternion, Vector2, Vector3, Vector4};
+
+use crate::naive_cf::NaiveCF;
 
 #[cfg(feature = "grawoow")]
 pub mod grawoow;
 #[cfg(feature = "mad_gaze")]
 pub mod mad_gaze;
+mod naive_cf;
 #[cfg(feature = "nreal")]
 pub mod nreal_air;
 #[cfg(feature = "nreal")]
 pub mod nreal_light;
 #[cfg(feature = "rokid")]
 pub mod rokid;
+
+pub mod connection;
+
+mod dummy;
+pub mod ffi;
 mod util;
 
 /// Possible errors resulting from `ar-drivers` API calls
@@ -73,9 +84,183 @@ pub enum Error {
     /// Other fatal error, usually a problem with the library itself, or
     /// a device support issue. File a bug if you encounter this.
     Other(&'static str),
+    /// Cannot get mutex lock
+    ConcurrencyError,
 }
 
 type Result<T> = std::result::Result<T, Error>;
+
+/*
+high level interface of glasses & state estimation, with the following built-in fusion pipeline:
+
+(the first version should only use complementary filter for simplicity and sanity test)
+
+- roll/pitch <= acc + gyro (complementary filter)
+  - assuming that acc vector always pointed up, spacecraft moving in that direction can create 1G artificial gravity
+    - TODO: this obviously assumes no steadily accelerating frame, at which point up d_acc has to be used for correction
+  - TODO: use ESKF (error-state/multiplicatory KF, https://arxiv.org/abs/1711.02508)
+- gyro-yaw <= gyro (integrate over time)
+- mag-yaw <= mag + roll/pitch (arctan)
+  - TODO: mag calibration?
+     (continuous ellipsoid fitting, assuming homogeneous E-M environment & hardpoint-mounted E-M interference)
+- yaw <= mag-yaw + gyro-gyro (complementary filter)
+  - TODO: use EKF
+
+CAUTION: unlike [[GlassesEvent]], all states & outputs should use FRD reference frame
+ (forward, right, down, corresponding to roll, pitch, yaw in Euler angles-represented rotation)
+
+FRD is the standard frame for aerospace, and is also the default frame for NALgebra
+*/
+pub trait Fusion: Send {
+    fn glasses(&mut self) -> &mut Box<dyn ARGlasses>;
+    // TODO: only declared mutable as many API of ARGlasses are also mutable
+
+    /// primary estimation output
+    /// can be used to convert to Euler angles of different conventions
+    fn attitude_quaternion(&self) -> UnitQuaternion<f32>;
+
+    /// use FRD frame as error in Quaternion is multiplicative & is over-defined
+    fn inconsistency(&self) -> f32;
+
+    fn update(&mut self) -> ();
+}
+
+impl dyn Fusion {
+    pub fn any_cf() -> Result<Box<dyn Fusion>> {
+        // let glasses = any_glasses()?;
+        let glasses = any_glasses_or_dummy()?;
+        Ok(Box::new(NaiveCF::new(glasses)?))
+    }
+}
+
+pub struct AHRS {
+    fusion: Box<dyn Fusion>,
+    neutral_bias: (UnitQuaternion<f32>, UnitQuaternion<f32>), // multiplicative
+    euler_bias: Vector3<f32>,
+    euler_order: Vector3<i16>, // each element represents an index + sign of an Euler angle axis
+    quaternion_bias: (UnitQuaternion<f32>, UnitQuaternion<f32>),
+    quaternion_order: Vector4<i16>,
+}
+
+impl AHRS {
+    // default reference system used by most robotics applications
+    //
+    // Euler-Angle: forward-right-down, right hand axes, right hand rotation
+    //
+    // Quaternion: right hand, ijkw
+    pub fn frd(fusion: Box<dyn Fusion>) -> AHRS {
+        AHRS {
+            // defaults to RUF reference frame of Unity game engine
+            fusion,
+            neutral_bias: (AHRS::q_id(), AHRS::q_id()),
+            euler_bias: Vector3::new(0.0, 0.0, 0.0),
+            euler_order: Vector3::new(1, 2, 3),
+            quaternion_bias: (AHRS::q_id(), AHRS::q_id()),
+            quaternion_order: Vector4::new(1, 2, 3, 4),
+        }
+    }
+
+    // reference system used by AirAPI_Windows
+    // neutral heading is 90 degree pitch down
+    //
+    // Euler-Angle: forward-right-up, left hand axes, right hand rotation
+    // CAUTION: this is a heterochiral system (using different hands for axes and rotation)
+    //   in practice it should be avoided due to being highly corruptive
+    //   but here it is used for backward compatibility
+    //
+    // Quaternion: left hand, ijkw ?
+    pub fn left_fru_down(fusion: Box<dyn Fusion>) -> AHRS {
+        AHRS {
+            // defaults to RUF reference frame of Unity game engine
+            fusion,
+            // neutral_bias: UnitQuaternion::from_euler_angles(0.0, PI * 0.5, 0.0),
+            neutral_bias: (AHRS::q_id(), AHRS::q_id()),
+            euler_bias: Vector3::new(0.0, PI * 0.5, 0.0),
+            euler_order: Vector3::new(1, 2, -3),
+            quaternion_bias: (
+                // UnitQuaternion::from_euler_angles(0.0, PI * 0.5, 0.0),
+                AHRS::q_id(),
+                UnitQuaternion::from_euler_angles(0.0, PI * 0.5, 0.0),
+                // AHRS::q_id(),
+            ),
+            quaternion_order: Vector4::new(2, 1, -3, 4),
+        }
+    }
+
+    fn q_id() -> UnitQuaternion<f32> {
+        UnitQuaternion::identity()
+    }
+
+    fn attitude_quaternion_frd(&self) -> UnitQuaternion<f32> {
+        let original = self.fusion.attitude_quaternion();
+        let corrected = self.neutral_bias.0 * original * self.neutral_bias.1;
+        corrected
+    }
+
+    pub fn attitude_euler_rad(&self) -> Vector3<f32> {
+        let (roll, pitch, yaw) = self.attitude_quaternion_frd().euler_angles();
+        let frd = Vector3::new(roll, pitch, yaw);
+        let biased = frd + self.euler_bias;
+        let ordered = self.euler_order.map(|v| {
+            let index = (v.abs() - 1) as usize;
+            let vv = biased.get(index).unwrap();
+            let vv_with_sign = vv * (v.signum() as f32);
+            vv_with_sign
+        });
+        ordered
+    }
+
+    pub fn attitude_euler_deg(&self) -> Vector3<f32> {
+        self.attitude_euler_rad().map(|x| x.to_degrees())
+    }
+}
+
+impl Fusion for AHRS {
+    fn glasses(&mut self) -> &mut Box<dyn ARGlasses> {
+        self.fusion.glasses()
+    }
+
+    fn inconsistency(&self) -> f32 {
+        self.fusion.inconsistency()
+    }
+
+    fn update(&mut self) -> () {
+        self.fusion.update()
+    }
+
+    fn attitude_quaternion(&self) -> UnitQuaternion<f32> {
+        let q_raw = self.attitude_quaternion_frd();
+
+        let q_biased = self.quaternion_bias.0 * q_raw * self.quaternion_bias.1;
+
+        let q_inv = q_biased.inverse();
+        // let q_biased = q_raw * self.quaternion_bias;
+        let biased = q_biased.coords;
+
+        let ordered = self.quaternion_order.map(|v| {
+            let index = (v.abs() - 1) as usize;
+            let vv = biased.get(index).unwrap();
+            let vv_with_sign = vv * (v.signum() as f32);
+            vv_with_sign
+        });
+
+        let q_ordered = UnitQuaternion::from_quaternion(Quaternion::new(
+            ordered[3], ordered[0], ordered[1], ordered[2],
+        ));
+
+        q_ordered
+    }
+}
+
+type Rw<T> = Arc<Mutex<T>>;
+
+fn rw<T>(v: T) -> Rw<T> {
+    Arc::new(Mutex::new(v))
+}
+
+fn rw_write<T>(v: &Rw<T>) -> std::sync::MutexGuard<T> {
+    v.lock().unwrap()
+}
 
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
@@ -102,6 +287,7 @@ impl std::fmt::Display for Error {
             Error::HidError(_) => "Hidapi error",
             #[cfg(feature = "serialport")]
             Error::SerialPortError(_) => "Serial error",
+            Error::ConcurrencyError => "concurrency error",
             Error::NotFound => "Glasses not found",
             Error::NotImplemented => "Not implemented for these glasses",
             Error::PacketTimeout => "Packet timeout",
@@ -126,6 +312,9 @@ pub enum GlassesEvent {
         accelerometer: Vector3<f32>,
         /// Gyroscope data. Right handed rotation in rad/sec,
         /// e.g. turning left is positive y axis.
+        /// from left to right:
+        /// pitch, yaw, roll
+        /// Right, Up, Back (RUB)
         gyroscope: Vector3<f32>,
         /// Timestamp, in device time, in microseconds
         timestamp: u64,
@@ -243,30 +432,51 @@ pub struct DisplayMatrices {
     pub isometry: Isometry3<f64>,
 }
 
+pub fn any_glasses_or_dummy() -> Result<Box<dyn ARGlasses>> {
+    any_glasses().or_else(|e| {
+        println!("{} fall back to dummy glasses", e);
+
+        Ok(Box::new(dummy::Dummy {}))
+    })
+}
+
+fn upcast<G: ARGlasses + 'static>(result: Result<G>) -> Result<Box<dyn ARGlasses>> {
+    result.map(|glasses| Box::new(glasses) as Box<dyn ARGlasses>)
+}
+
 /// Convenience function to detect and connect to any of the supported glasses
 #[cfg(not(target_os = "android"))]
 pub fn any_glasses() -> Result<Box<dyn ARGlasses>> {
-    #[cfg(feature = "rokid")]
-    if let Ok(glasses) = rokid::RokidAir::new() {
-        return Ok(Box::new(glasses));
-    };
-    #[cfg(feature = "nreal")]
-    if let Ok(glasses) = nreal_air::NrealAir::new() {
-        return Ok(Box::new(glasses));
-    };
-    #[cfg(feature = "nreal")]
-    if let Ok(glasses) = nreal_light::NrealLight::new() {
-        return Ok(Box::new(glasses));
-    };
-    #[cfg(feature = "grawoow")]
-    if let Ok(glasses) = grawoow::GrawoowG530::new() {
-        return Ok(Box::new(glasses));
-    };
-    #[cfg(feature = "mad_gaze")]
-    if let Ok(glasses) = mad_gaze::MadGazeGlow::new() {
-        return Ok(Box::new(glasses));
-    };
-    Err(Error::NotFound)
+    let glasses_factories: Vec<(&str, fn() -> Result<Box<dyn ARGlasses>>)> = vec![
+        #[cfg(feature = "rokid")]
+        ("RokidAir", || upcast(rokid::RokidAir::new())),
+        #[cfg(feature = "nreal")]
+        ("NrealAir", || upcast(nreal_air::NrealAir::new())),
+        #[cfg(feature = "nreal")]
+        ("NrealLight", || upcast(nreal_light::NrealLight::new())),
+        #[cfg(feature = "grawoow")]
+        ("GrawoowG530", || upcast(grawoow::GrawoowG530::new())),
+        #[cfg(feature = "mad_gaze")]
+        ("MadGazeGlow", || upcast(mad_gaze::MadGazeGlow::new())),
+    ];
+
+    glasses_factories
+        .into_iter()
+        .find_map(|(glasses_type, factory)| {
+            let factory: fn() -> Result<Box<dyn ARGlasses>> = factory;
+
+            factory()
+                .map_err(|e| {
+                    //
+                    println!("can't find {}: {}", glasses_type, e)
+                })
+                .ok()
+                .map(|v| {
+                    println!("found {}", glasses_type);
+                    v
+                })
+        })
+        .ok_or(Error::NotFound)
 }
 
 impl From<std::io::Error> for Error {
@@ -293,6 +503,12 @@ impl From<hidapi::HidError> for Error {
 impl From<serialport::Error> for Error {
     fn from(e: serialport::Error) -> Self {
         Error::SerialPortError(e)
+    }
+}
+
+impl<T> From<PoisonError<T>> for Error {
+    fn from(_e: PoisonError<T>) -> Self {
+        Error::ConcurrencyError
     }
 }
 
