@@ -55,6 +55,7 @@ pub mod nreal_air;
 pub mod nreal_light;
 #[cfg(feature = "rokid")]
 pub mod rokid;
+mod dummy;
 mod util;
 
 /// Possible errors resulting from `ar-drivers` API calls

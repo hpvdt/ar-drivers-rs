@@ -31,33 +31,6 @@ use nalgebra::{UnitQuaternion, Vector3};
 
 use crate::{ARGlasses, Error, Fusion, GlassesEvent};
 
-#[test]
-pub fn __get_correction() {
-    /*
-        compute:
-      ┌                                     ┐
-      │   3.0176868 -0.74084723     9.24847 │
-      └                                     ┘
-
-    , UnitQuaternion angle: 2.262818 − axis: (-0.0015257121, -0.92279005, -0.38530007) => UnitQuaternion angle: 0.87873745 − axis: (-0.67957145, -0.71493566, 0.16446783)
-         */
-
-    let acc = Vector3::new(3.0176868, -0.74084723, 9.24847);
-    let axis = Vector3::new(-0.0015257122, -0.9227901, -0.38530007);
-    let angle = 2.262818;
-
-    let rotation = UnitQuaternion::from_axis_angle(&Unit::new_normalize(axis), angle);
-
-    let correction = NaiveCF::get_rotation_verified(&acc, &rotation).unwrap();
-
-    println!(
-        "compute: {}, {} => {}",
-        acc.transpose(),
-        rotation,
-        correction
-    );
-}
-
 type Result<T> = std::result::Result<T, Error>;
 
 pub struct NaiveCF {
