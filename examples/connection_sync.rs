@@ -2,9 +2,10 @@
 // This file is part of ar-drivers-rs
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
-use ar_drivers::{Connection, GetEuler, StartConnection, StopConnection};
+use ar_drivers::connection::{Connection};
 use nalgebra::Vector3;
 use std::slice;
+use ar_drivers::ffi::{GetEuler, StartConnection, StopConnection};
 
 fn main() {
     // stress test to ensure connection after disconnection works

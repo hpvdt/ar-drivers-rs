@@ -35,12 +35,9 @@
 //! only want to support a specific type.
 
 use std::f32::consts::PI;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::thread;
-use std::thread::JoinHandle;
 
-use nalgebra::{Isometry3, Matrix3, UnitQuaternion, Vector2, Vector3, Vector4};
+use nalgebra::{Isometry3, Matrix3, Quaternion, UnitQuaternion, Vector2, Vector3, Vector4};
 
 use crate::naive_cf::NaiveCF;
 
@@ -55,7 +52,11 @@ pub mod nreal_air;
 pub mod nreal_light;
 #[cfg(feature = "rokid")]
 pub mod rokid;
+
+pub mod connection;
+
 mod dummy;
+pub mod ffi;
 mod util;
 
 /// Possible errors resulting from `ar-drivers` API calls
@@ -125,22 +126,96 @@ pub trait Fusion: Send {
 }
 
 impl dyn Fusion {
-    pub fn attitude_frd_rad(&self) -> Vector3<f32> {
-        let (roll, pitch, yaw) = (self.attitude_quaternion()).euler_angles();
-        Vector3::new(roll, pitch, yaw)
-    }
-
-    pub fn attitude_frd_deg(&self) -> Vector3<f32> {
-        self.attitude_frd_rad().map(|x| x.to_degrees())
+    pub fn any_cf() -> Result<Box<dyn Fusion>> {
+        // let glasses = any_glasses()?;
+        let glasses = any_glasses_or_dummy()?;
+        Ok(Box::new(NaiveCF::new(glasses)?))
     }
 }
 
-struct FusionWithOffset {
+pub struct AHRS {
     fusion: Box<dyn Fusion>,
-    offset: UnitQuaternion<f32>,
+    neutral_bias: (UnitQuaternion<f32>, UnitQuaternion<f32>), // multiplicative
+    euler_bias: Vector3<f32>,
+    euler_order: Vector3<i16>, // each element represents an index + sign of an Euler angle axis
+    quaternion_bias: (UnitQuaternion<f32>, UnitQuaternion<f32>),
+    quaternion_order: Vector4<i16>,
 }
 
-impl Fusion for FusionWithOffset {
+impl AHRS {
+    // default reference system used by most robotics applications
+    //
+    // Euler-Angle: forward-right-down, right hand axes, right hand rotation
+    //
+    // Quaternion: right hand, ijkw
+    pub fn frd(fusion: Box<dyn Fusion>) -> AHRS {
+        AHRS {
+            // defaults to RUF reference frame of Unity game engine
+            fusion,
+            neutral_bias: (AHRS::q_id(), AHRS::q_id()),
+            euler_bias: Vector3::new(0.0, 0.0, 0.0),
+            euler_order: Vector3::new(1, 2, 3),
+            quaternion_bias: (AHRS::q_id(), AHRS::q_id()),
+            quaternion_order: Vector4::new(1, 2, 3, 4),
+        }
+    }
+
+    // reference system used by AirAPI_Windows
+    // neutral heading is 90 degree pitch down
+    //
+    // Euler-Angle: forward-right-up, left hand axes, right hand rotation
+    // CAUTION: this is a heterochiral system (using different hands for axes and rotation)
+    //   in practice it should be avoided due to being highly corruptive
+    //   but here it is used for backward compatibility
+    //
+    // Quaternion: left hand, ijkw ?
+    pub fn left_fru_down(fusion: Box<dyn Fusion>) -> AHRS {
+        AHRS {
+            // defaults to RUF reference frame of Unity game engine
+            fusion,
+            // neutral_bias: UnitQuaternion::from_euler_angles(0.0, PI * 0.5, 0.0),
+            neutral_bias: (AHRS::q_id(), AHRS::q_id()),
+            euler_bias: Vector3::new(0.0, PI * 0.5, 0.0),
+            euler_order: Vector3::new(1, 2, -3),
+            quaternion_bias: (
+                // UnitQuaternion::from_euler_angles(0.0, PI * 0.5, 0.0),
+                AHRS::q_id(),
+                UnitQuaternion::from_euler_angles(0.0, PI * 0.5, 0.0),
+                // AHRS::q_id(),
+            ),
+            quaternion_order: Vector4::new(2, 1, -3, 4),
+        }
+    }
+
+    fn q_id() -> UnitQuaternion<f32> {
+        UnitQuaternion::identity()
+    }
+
+    fn attitude_quaternion_frd(&self) -> UnitQuaternion<f32> {
+        let original = self.fusion.attitude_quaternion();
+        let corrected = self.neutral_bias.0 * original * self.neutral_bias.1;
+        corrected
+    }
+
+    pub fn attitude_euler_rad(&self) -> Vector3<f32> {
+        let (roll, pitch, yaw) = self.attitude_quaternion_frd().euler_angles();
+        let frd = Vector3::new(roll, pitch, yaw);
+        let biased = frd + self.euler_bias;
+        let ordered = self.euler_order.map(|v| {
+            let index = (v.abs() - 1) as usize;
+            let vv = biased.get(index).unwrap();
+            let vv_with_sign = vv * (v.signum() as f32);
+            vv_with_sign
+        });
+        ordered
+    }
+
+    pub fn attitude_euler_deg(&self) -> Vector3<f32> {
+        self.attitude_euler_rad().map(|x| x.to_degrees())
+    }
+}
+
+impl Fusion for AHRS {
     fn glasses(&mut self) -> &mut Box<dyn ARGlasses> {
         self.fusion.glasses()
     }
@@ -154,16 +229,27 @@ impl Fusion for FusionWithOffset {
     }
 
     fn attitude_quaternion(&self) -> UnitQuaternion<f32> {
-        let original = self.fusion.attitude_quaternion();
-        let corrected = self.offset * original;
-        corrected
-    }
-}
+        let q_raw = self.attitude_quaternion_frd();
 
-pub fn any_fusion() -> Result<Box<dyn Fusion>> {
-    // let glasses = any_glasses()?;
-    let glasses = any_glasses_or_dummy()?;
-    Ok(Box::new(NaiveCF::new(glasses)?))
+        let q_biased = self.quaternion_bias.0 * q_raw * self.quaternion_bias.1;
+
+        let q_inv = q_biased.inverse();
+        // let q_biased = q_raw * self.quaternion_bias;
+        let biased = q_biased.coords;
+
+        let ordered = self.quaternion_order.map(|v| {
+            let index = (v.abs() - 1) as usize;
+            let vv = biased.get(index).unwrap();
+            let vv_with_sign = vv * (v.signum() as f32);
+            vv_with_sign
+        });
+
+        let q_ordered = UnitQuaternion::from_quaternion(Quaternion::new(
+            ordered[3], ordered[0], ordered[1], ordered[2],
+        ));
+
+        q_ordered
+    }
 }
 
 type Rw<T> = Arc<Mutex<T>>;
@@ -174,160 +260,6 @@ fn rw<T>(v: T) -> Rw<T> {
 
 fn rw_write<T>(v: &Rw<T>) -> std::sync::MutexGuard<T> {
     v.lock().unwrap()
-}
-
-pub struct Connection {
-    pub fusion: Rw<Box<dyn Fusion>>,
-    pub terminating: Arc<AtomicBool>,
-    pub interrupting: Arc<AtomicBool>, // when interrupting, update is paused, opening the fusion mutex for reading
-    pub thread: Option<JoinHandle<()>>,
-}
-
-static mut CONNECTION: Option<Connection> = None;
-
-impl Connection {
-    const ORDERING: Ordering = Ordering::SeqCst;
-
-    fn new() -> Self {
-        Connection {
-            fusion: {
-                let raw = any_fusion().unwrap();
-                let corrected = FusionWithOffset {
-                    fusion: raw,
-                    offset: UnitQuaternion::from_euler_angles(0.0, PI * 0.5, 0.0),
-                };
-                rw(Box::new(corrected))
-            },
-            terminating: Arc::new(AtomicBool::new(false)),
-            interrupting: Arc::new(AtomicBool::new(false)), // thread: None,
-            thread: None,
-        }
-    }
-
-    fn get() -> Result<&'static mut Connection> {
-        unsafe {
-            let existing = &mut CONNECTION;
-            let neo = existing.get_or_insert_with(|| Connection::new());
-            Ok(neo)
-        }
-    }
-
-    pub fn _init(&self) -> Result<()> {
-        self.terminating.store(false, Self::ORDERING);
-        self.interrupting.store(false, Self::ORDERING);
-
-        Ok(())
-    }
-
-    fn _start(&mut self) -> Result<()> {
-        self._init()?;
-
-        let _fusion = self.fusion.clone();
-        let _terminating = self.terminating.clone();
-        let _interrupting = self.interrupting.clone();
-
-        let handle = thread::spawn(move || loop {
-            if _terminating.load(Self::ORDERING) {
-                break;
-            }
-
-            if _interrupting.load(Self::ORDERING) {
-                // println!("busy, no update")
-            } else {
-                let mut ff = rw_write(&_fusion);
-
-                ff.update();
-                // println!("UPDATE!")
-            }
-        });
-
-        self.thread = Some(handle);
-
-        Ok(())
-    }
-
-    pub fn start() -> Result<&'static Connection> {
-        let conn = Self::get()?;
-
-        conn._start()?;
-
-        Ok(conn)
-    }
-
-    fn _stop(&mut self) -> Result<()> {
-        self.terminating.store(true, Self::ORDERING);
-
-        self.thread.take().unwrap().join().unwrap();
-
-        Ok(())
-    }
-
-    pub fn stop() -> Result<()> {
-        unsafe {
-            let existing = &mut CONNECTION;
-            *existing = None;
-            Ok(())
-        }
-    }
-
-    pub fn read_fusion<T>(f: &dyn Fn(&mut Box<dyn Fusion>) -> T) -> Result<T> {
-        let conn = Self::get()?;
-        let _fusion = &conn.fusion;
-
-        conn.interrupting.store(true, Self::ORDERING);
-        let mut fusion = rw_write(&_fusion);
-
-        let result = f(&mut fusion);
-
-        conn.interrupting.store(false, Self::ORDERING);
-        Ok(result)
-    }
-}
-
-impl Drop for Connection {
-    fn drop(&mut self) {
-        self._stop().unwrap()
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn StartConnection() -> i32 {
-    Connection::start().unwrap();
-    // println!("connection started");
-    1
-    // .map_or_else(|_| 1, |_| 0)
-}
-
-#[no_mangle]
-pub extern "C" fn StopConnection() -> i32 {
-    Connection::stop().unwrap();
-    // println!("connection stopped");
-    1
-    // .map_or_else(|_| 1, |_| 0)
-}
-
-static mut EULER: Vector3<f32> = Vector3::new(0.0, 0.0, 0.0);
-
-#[no_mangle]
-pub extern "C" fn GetEuler() -> *const f32 {
-    unsafe {
-        let euler = Connection::read_fusion(&|ff| ff.attitude_frd_deg()).unwrap();
-
-        EULER = euler.clone();
-        EULER.as_ptr()
-    }
-}
-
-static mut QUATERNION: Vector4<f32> = Vector4::new(0.0, 0.0, 0.0, 0.0);
-
-#[no_mangle]
-pub extern "C" fn GetQuaternion() -> *const f32 {
-    unsafe {
-        let quaternion = Connection::read_fusion(&|ff| ff.attitude_quaternion()).unwrap();
-
-        QUATERNION = quaternion.as_vector().clone();
-        QUATERNION.as_ptr()
-    }
 }
 
 impl std::error::Error for Error {
