@@ -5,3 +5,6 @@
 *.iml
 .idea/
 .idea_modules/
+
+config.json
+.mcp.json
