@@ -1,8 +1,8 @@
-use std::sync::Arc;
+use crate::{rw, rw_write, Fusion, Rw, AHRS};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::thread::JoinHandle;
-use crate::{AHRS, Fusion, Rw, rw, rw_write};
 
 pub struct Connection {
     pub fusion: Rw<AHRS>,
@@ -11,31 +11,34 @@ pub struct Connection {
     pub thread: Option<JoinHandle<()>>,
 }
 
-static mut CONNECTION: Option<Connection> = None;
+static CONNECTION: Mutex<Option<Connection>> = Mutex::new(None);
 
 impl Connection {
     const ORDERING: Ordering = Ordering::SeqCst;
 
-    fn new() -> Self {
-        Connection {
-            fusion: {
-                let fusion = <dyn Fusion>::any_cf().unwrap();
-                // let ahrs = AHRS::frd(fusion);
-                let ahrs = AHRS::left_fru_down(fusion);
-                rw(ahrs)
-            },
-            terminating: Arc::new(AtomicBool::new(false)),
-            interrupting: Arc::new(AtomicBool::new(false)), // thread: None,
-            thread: None,
+    fn get() -> crate::Result<MutexGuard<'static, Option<Connection>>> {
+        let mut existing = Self::get_locked()?;
+
+        if existing.is_none() {
+            let fusion = <dyn Fusion>::any_cf()?;
+            // let ahrs = AHRS::frd(fusion);
+            let ahrs = AHRS::left_fru_down(fusion);
+
+            *existing = Some(Connection {
+                fusion: rw(ahrs),
+                terminating: Arc::new(AtomicBool::new(false)),
+                interrupting: Arc::new(AtomicBool::new(false)), // thread: None,
+                thread: None,
+            });
         }
+
+        Ok(existing)
     }
 
-    fn get() -> crate::Result<&'static mut Connection> {
-        unsafe {
-            let existing = &mut CONNECTION;
-            let neo = existing.get_or_insert_with(|| Connection::new());
-            Ok(neo)
-        }
+    fn get_locked() -> crate::Result<MutexGuard<'static, Option<Connection>>> {
+        CONNECTION
+            .lock()
+            .map_err(|_| crate::Error::ConcurrencyError)
     }
 
     pub fn _init(&self) -> crate::Result<()> {
@@ -46,6 +49,10 @@ impl Connection {
     }
 
     fn _start(&mut self) -> crate::Result<()> {
+        if self.thread.is_some() {
+            return Ok(());
+        }
+
         self._init()?;
 
         let _fusion = self.fusion.clone();
@@ -72,46 +79,55 @@ impl Connection {
         Ok(())
     }
 
-    pub fn start() -> crate::Result<&'static Connection> {
-        let conn = Self::get()?;
+    pub fn start() -> crate::Result<()> {
+        let mut existing = Self::get()?;
+        let conn = existing.as_mut().ok_or(crate::Error::ConcurrencyError)?;
 
-        conn._start()?;
-
-        Ok(conn)
+        conn._start()
     }
 
     fn _stop(&mut self) -> crate::Result<()> {
         self.terminating.store(true, Self::ORDERING);
 
-        self.thread.take().unwrap().join().unwrap();
+        if let Some(handle) = self.thread.take() {
+            handle
+                .join()
+                .map_err(|_| crate::Error::Other("connection thread panicked"))?;
+        }
 
         Ok(())
     }
 
     pub fn stop() -> crate::Result<()> {
-        unsafe {
-            let existing = &mut CONNECTION;
-            *existing = None;
-            Ok(())
+        let mut existing = Self::get_locked()?;
+
+        if let Some(mut conn) = existing.take() {
+            conn._stop()?;
         }
+
+        Ok(())
     }
 
     pub fn read_fusion<T>(f: &dyn Fn(&mut AHRS) -> T) -> crate::Result<T> {
-        let conn = Self::get()?;
-        let _fusion = &conn.fusion;
+        let (_fusion, _interrupting) = {
+            let existing = Self::get()?;
 
-        conn.interrupting.store(true, Self::ORDERING);
+            let conn = existing.as_ref().ok_or(crate::Error::ConcurrencyError)?;
+            (conn.fusion.clone(), conn.interrupting.clone())
+        };
+
+        _interrupting.store(true, Self::ORDERING);
         let mut ahrs = rw_write(&_fusion);
 
         let result = f(&mut ahrs);
 
-        conn.interrupting.store(false, Self::ORDERING);
+        _interrupting.store(false, Self::ORDERING);
         Ok(result)
     }
 }
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        self._stop().unwrap()
+        let _ = self._stop();
     }
 }
