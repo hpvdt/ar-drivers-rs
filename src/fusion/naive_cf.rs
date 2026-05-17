@@ -29,21 +29,14 @@
 
 use nalgebra::{UnitQuaternion, Vector3};
 
-use crate::{ARGlasses, Error, Fusion, GlassesEvent};
+use super::{Fusion, FusionState};
+use crate::{ARGlasses, Error, GlassesEvent};
 
 type Result<T> = std::result::Result<T, Error>;
 
 pub struct NaiveCF {
-    pub glasses: Box<dyn ARGlasses>,
-
-    //estimation
-    pub attitude: UnitQuaternion<f32>,
-
-    //just old readings
-    //prevAcc: (Vector3<f32>, u64),
+    pub state: FusionState,
     pub prev_gyro: (Vector3<f32>, u64), //FRD
-    //prevMag: (Vector3<f32>, u64),
-    pub inconsistency: f32, //roll, pitch. yaw
 }
 
 impl NaiveCF {
@@ -51,11 +44,8 @@ impl NaiveCF {
         //let attitude = ;
         //let prev_gyro = ;
         let mut fusion = NaiveCF {
-            glasses,
-            attitude: UnitQuaternion::identity(),
-            // attitude: UnitQuaternion::from_euler_angles(0.0, 0.0, std::f32::consts::PI), // seeing backwards
+            state: FusionState::new(glasses),
             prev_gyro: (Vector3::zeros(), 0),
-            inconsistency: 0.0,
         };
 
         loop {
@@ -80,7 +70,7 @@ impl NaiveCF {
     ///read until next valid event. Blocks.
     fn next_event(&mut self) -> GlassesEvent {
         loop {
-            match self.glasses.read_event() {
+            match self.state.glasses.read_event() {
                 Ok(event) => return event,
                 Err(e) => {
                     println!("Error reading event: {}", e);
@@ -119,7 +109,7 @@ impl NaiveCF {
         let increment = UnitQuaternion::from_euler_angles(d_s1_t1.x, d_s1_t1.y, d_s1_t1.z);
 
         // self.attitude = (increment.inverse() * self.attitude.inverse()).inverse();
-        self.attitude = self.attitude * increment;
+        self.state.attitude = self.state.attitude * increment;
 
         self.prev_gyro = (gyro, t);
     }
@@ -131,7 +121,7 @@ impl NaiveCF {
             return; //almost in free fall, or acc disabled, do not correct
         }
 
-        let attitude = &self.attitude;
+        let attitude = &self.state.attitude;
         // let acc_inv = Vector3::new(-acc.x, -acc.y, acc.z);
 
         let correction_opt = Self::get_correction(&acc, &attitude.inverse(), Self::BASE_GRAV_RATIO);
@@ -139,11 +129,11 @@ impl NaiveCF {
         match correction_opt {
             Some(correction_inv) => {
                 let correction = correction_inv.inverse();
-                self.inconsistency =
-                    self.inconsistency * Self::INCONSISTENCY_DECAY + correction.angle();
+                self.state.inconsistency =
+                    self.state.inconsistency * Self::INCONSISTENCY_DECAY + correction.angle();
 
                 // self.attitude = (correction_inv * attitude.inverse()).inverse();
-                self.attitude = attitude * correction;
+                self.state.attitude = attitude * correction;
             }
             None => {
                 //TODO: opposite direction, don't know how to correct
@@ -278,15 +268,15 @@ impl NaiveCF {
 
 impl Fusion for NaiveCF {
     fn glasses(&mut self) -> &mut Box<dyn ARGlasses> {
-        &mut self.glasses
+        &mut self.state.glasses
     }
 
     fn attitude_quaternion(&self) -> UnitQuaternion<f32> {
-        self.attitude
+        self.state.attitude
     }
 
     fn inconsistency(&self) -> f32 {
-        self.inconsistency
+        self.state.inconsistency
     }
 
     fn update(&mut self) -> () {
@@ -299,7 +289,7 @@ impl Fusion for NaiveCF {
             } => {
                 self.update_gyro_rub(&gyroscope, timestamp);
                 self.update_acc(&accelerometer, timestamp);
-                self.attitude.renormalize();
+                self.state.attitude.renormalize();
                 // self.attitude.renormalize_fast(); // TODO: switch to it after rigorous testing
             }
             _ => {

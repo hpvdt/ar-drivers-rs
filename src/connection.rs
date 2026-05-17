@@ -1,11 +1,12 @@
-use crate::{rw, rw_write, Fusion, Rw, AHRS};
+use crate::{rw, rw_write, Rw};
+use crate::fusion::{Fusion, AhrsCorrection};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::thread::JoinHandle;
 
 pub struct Connection {
-    pub fusion: Rw<AHRS>,
+    pub fusion: Rw<AhrsCorrection>,
     pub terminating: Arc<AtomicBool>,
     pub interrupting: Arc<AtomicBool>, // when interrupting, update is paused, opening the fusion mutex for reading
     pub thread: Option<JoinHandle<()>>,
@@ -22,7 +23,7 @@ impl Connection {
         if existing.is_none() {
             let fusion = <dyn Fusion>::any_cf()?;
             // let ahrs = AHRS::frd(fusion);
-            let ahrs = AHRS::left_fru_down(fusion);
+            let ahrs = AhrsCorrection::left_fru_down(fusion);
 
             *existing = Some(Connection {
                 fusion: rw(ahrs),
@@ -108,7 +109,7 @@ impl Connection {
         Ok(())
     }
 
-    pub fn read_fusion<T>(f: &dyn Fn(&mut AHRS) -> T) -> crate::Result<T> {
+    pub fn read_fusion<T>(f: &dyn Fn(&mut AhrsCorrection) -> T) -> crate::Result<T> {
         let (_fusion, _interrupting) = {
             let existing = Self::get()?;
 

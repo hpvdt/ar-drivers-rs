@@ -6,7 +6,7 @@ use ar_drivers::connection::{Connection};
 use nalgebra::Vector3;
 use std::slice;
 use ar_drivers::ffi::{GetEuler, StartConnection, StopConnection};
-use ar_drivers::Fusion;
+use ar_drivers::fusion::Fusion;
 
 fn main() {
     // stress test to ensure connection after disconnection works

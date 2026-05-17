@@ -1,7 +1,7 @@
 use nalgebra::{Vector3, Vector4};
 
 use crate::connection::Connection;
-use crate::Fusion;
+use crate::fusion::Fusion;
 
 #[no_mangle]
 pub extern "C" fn StartConnection() -> i32 {

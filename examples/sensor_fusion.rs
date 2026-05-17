@@ -2,8 +2,7 @@
 // This file is part of ar-drivers-rs
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
-use ar_drivers::Fusion;
-use ar_drivers::AHRS;
+use ar_drivers::fusion::{Fusion, AhrsCorrection};
 
 fn main() {
     let mut fusion = <dyn Fusion>::any_cf().unwrap(); // Declare conn as mutable
@@ -13,7 +12,7 @@ fn main() {
     println!("");
 
     // let mut ahrs = AHRS::frd(fusion);
-    let mut ahrs = AHRS::left_fru_down(fusion);
+    let mut ahrs = AhrsCorrection::left_fru_down(fusion);
 
     loop {
         ahrs.update();
