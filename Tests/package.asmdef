@@ -1,0 +1,16 @@
+{
+  "name": "ca.hpvdt.ArGlassesSDK.Tests",
+  "rootNamespace": "ArGlassesSDK",
+  "references": [
+    "ca.hpvdt.ArGlassesSDK.Runtime",
+    "UnityEngine.TestRunner"
+  ],
+  "allowUnsafeCode": false,
+  "overrideReferences": true,
+  "precompiledReferences": [
+    "nunit.framework.dll"
+  ],
+  "defineConstraints": [
+    "UNITY_INCLUDE_TESTS"
+  ]
+}

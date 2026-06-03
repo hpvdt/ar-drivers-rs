@@ -1,0 +1,30 @@
+{
+  "name": "ca.hpvdt.arglassessdk",
+  "version": "1.0.0",
+  "displayName": "AR Glasses SDK",
+  "description": "A Unity package providing SDK support for AR glasses communication and pose tracking.",
+  "keywords": [
+    "ar",
+    "glasses",
+    "sdk",
+    "pose"
+  ],
+  "author": {
+    "name": "HPVDT.ca",
+    "email": "contact@hpvdt.ca",
+    "url": "https://hpvdt.ca"
+  },
+  "samples": [
+    {
+      "displayName": "Scenes",
+      "description": "Demo scene for AR glasses.",
+      "path": "Scenes"
+    }
+  ],
+  "dependencies": {
+    "com.unity.xr.management": "4.5.1"
+  },
+  "testables": [
+    "ca.hpvdt.ArGlassesSDK.Tests"
+  ]
+}
