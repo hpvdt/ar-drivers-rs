@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 
-# to run applications without sudo privileges, connect the glasses,
-# make sure that permission to device files are set to 777 (it will be reverted after next login):
+cargo clean
 
-# TODO: should only be useful on Linux, need alternatives on Windows & MacOS
+echo "[Start Compiling ... Zig compiler and cargo-zigbuild must be installed]"
 
-#echo "Please give sudo permission to open access to hidraw device(s) ..."
-#sudo chmod 777 /dev/hidraw*
-#echo "... permission granted:"
-#ls -l /dev/hidraw*
+cargo zigbuild --target x86_64-pc-windows-gnu --release
+cargo zigbuild --target aarch64-apple-darwin --release
+
+# TODO: this will fail on OS without libudev (I mean linux)
+cargo zigbuild --target x86_64-unknown-linux-gnu --release || \
+  cargo zigbuild --target x86_64-unknown-linux-gnu --release --no-default-features --features rokid,nreal,grawoow
