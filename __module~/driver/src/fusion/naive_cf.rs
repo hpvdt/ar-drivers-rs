@@ -88,7 +88,7 @@ impl NaiveCF {
     //const BASE_GRAV_RATIO: f32 = 0.0; //no grav
     // const BASE_GRAV_RATIO: f32 = 1.0; //absolute correction, no gyro
 
-    //const BASE_MAG_RATIO: f32 = 0.5;
+    const BASE_MAG_RATIO: f32 = 0.1;
 
     const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; //microseconds
 
@@ -133,6 +133,32 @@ impl NaiveCF {
                     self.state.inconsistency * Self::INCONSISTENCY_DECAY + correction.angle();
 
                 // self.attitude = (correction_inv * attitude.inverse()).inverse();
+                self.state.attitude = attitude * correction;
+            }
+            None => {
+                //TODO: opposite direction, don't know how to correct
+            }
+        }
+    }
+
+    fn update_mag(&mut self, mag_rub: &Vector3<f32>, _t: u64) -> () {
+        let mag = Self::rub_to_frd(mag_rub);
+
+        if mag.norm() < 1.0 {
+            return; // very weak magnetic field, do not correct
+        }
+
+        let attitude = &self.state.attitude;
+        let north_frd = Vector3::new(1.0, 0.0, 0.0);
+        let estimated_north = attitude.inverse() * north_frd;
+        let correction_opt =
+            UnitQuaternion::scaled_rotation_between(&estimated_north, &mag.normalize(), Self::BASE_MAG_RATIO);
+
+        match correction_opt {
+            Some(correction_inv) => {
+                let correction = correction_inv.inverse();
+                self.state.inconsistency =
+                    self.state.inconsistency * Self::INCONSISTENCY_DECAY + correction.angle();
                 self.state.attitude = attitude * correction;
             }
             None => {
@@ -292,9 +318,15 @@ impl Fusion for NaiveCF {
                 self.state.attitude.renormalize();
                 // self.attitude.renormalize_fast(); // TODO: switch to it after rigorous testing
             }
-            _ => {
-                //TODO: add magnetometer event etc
+
+            GlassesEvent::Magnetometer {
+                magnetometer,
+                timestamp,
+            } => {
+                self.update_mag(&magnetometer, timestamp);
             }
+
+            _ => {}
         }
     }
 }
