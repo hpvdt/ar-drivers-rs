@@ -52,12 +52,28 @@ impl dyn Fusion {
     }
 }
 
+pub struct Correction {
+
+    pub prev: f32, // previous
+    pub avg_decay: f32, // averaging decay rate
+    pub avg: f32 // average
+}
+
+pub struct Corrections {
+
+    pub acc: Correction,
+    pub gyro: Correction,
+    pub mag: Correction,
+}
+
 pub struct FusionState {
     pub glasses: Box<dyn ARGlasses>,
 
     // following data will be updated in memory directly,
     pub attitude: UnitQuaternion<f32>,
     pub inconsistency: f32,
+
+    pub corrections: Corrections,
 
     // mag calibration state, will be used by all Fusion impls
     pub mag: MagCalibrator<63>,
