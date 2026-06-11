@@ -301,10 +301,6 @@ impl Fusion for NaiveCF {
         self.state.attitude
     }
 
-    fn inconsistency(&self) -> f32 {
-        self.state.corrections.inconsistency()
-    }
-
     fn corrections(&self) -> Corrections {
         self.state.corrections
     }

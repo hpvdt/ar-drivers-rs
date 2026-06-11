@@ -30,18 +30,25 @@ use crate::{any_glasses_or_dummy, ARGlasses, Result};
 mod mag_calibration;
 mod naive_cf;
 
-pub trait Fusion: Send {
+/// Non-overridable fusion inconsistency computation.
+pub trait FusionInconsistency {
+    /// use FRD frame as error in Quaternion is multiplicative & is over-defined
+    fn inconsistency(&self) -> f32;
+}
+
+impl<T: Fusion + ?Sized> FusionInconsistency for T {
+    fn inconsistency(&self) -> f32 {
+        self.corrections().inconsistency()
+    }
+}
+
+pub trait Fusion: Send + FusionInconsistency {
     fn glasses(&mut self) -> &mut Box<dyn ARGlasses>;
     // TODO: only declared mutable as many API of ARGlasses are also mutable
 
     /// primary estimation output
     /// can be used to convert to Euler angles of different conventions
     fn attitude_quaternion(&self) -> UnitQuaternion<f32>;
-
-    /// use FRD frame as error in Quaternion is multiplicative & is over-defined
-    fn inconsistency(&self) -> f32 {
-        self.corrections().inconsistency()
-    }
 
     /// Per-sensor correction magnitudes tracked by the fusion algorithm.
     fn corrections(&self) -> Corrections;
@@ -211,15 +218,16 @@ impl AhrsCorrection {
     pub fn attitude_euler_deg(&self) -> Vector3<f32> {
         self.attitude_euler_rad().map(|x| x.to_degrees())
     }
+
+    /// Returns the non-overridable fusion inconsistency computation.
+    pub fn inconsistency(&self) -> f32 {
+        <Self as FusionInconsistency>::inconsistency(self)
+    }
 }
 
 impl Fusion for AhrsCorrection {
     fn glasses(&mut self) -> &mut Box<dyn ARGlasses> {
         self.fusion.glasses()
-    }
-
-    fn inconsistency(&self) -> f32 {
-        self.fusion.inconsistency()
     }
 
     fn corrections(&self) -> Corrections {
