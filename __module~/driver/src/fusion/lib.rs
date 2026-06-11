@@ -61,33 +61,31 @@ impl dyn Fusion {
 #[derive(Clone, Copy, Debug)]
 pub struct Correction {
     /// Most recent correction magnitude in radians.
-    pub prev: f32,      // previous
-    /// Exponential averaging decay rate.
-    pub avg_decay: f32, // averaging decay rate, TODO: how to make it a constant?
+    pub prev: f32, // previous
     /// Exponential moving average of correction magnitude in radians.
-    pub avg: f32,       // average
+    pub avg: f32, // average
 }
 
 impl Correction {
-    const DEFAULT_AVG_DECAY: f32 = 0.90;
+    /// Exponential averaging decay rate.
+    pub const AVG_DECAY: f32 = 0.90;
 
-    fn new(avg_decay: f32) -> Self {
+    fn new() -> Self {
         Self {
             prev: 0.0,
-            avg_decay,
             avg: 0.0,
         }
     }
 
     fn record(&mut self, correction: f32) -> () {
         self.prev = correction;
-        self.avg = self.avg * self.avg_decay + correction * (1.0 - self.avg_decay);
+        self.avg = self.avg * Self::AVG_DECAY + correction * (1.0 - Self::AVG_DECAY);
     }
 }
 
 impl Default for Correction {
     fn default() -> Self {
-        Self::new(Self::DEFAULT_AVG_DECAY)
+        Self::new()
     }
 }
 
