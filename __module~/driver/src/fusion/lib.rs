@@ -39,7 +39,7 @@ pub trait FusionInconsistency {
 
 impl<T: Fusion + ?Sized> FusionInconsistency for T {
     fn inconsistency(&self) -> f32 {
-        self.corrections().inconsistency()
+        self.corrections().totalAvg()
     }
 }
 
@@ -115,8 +115,8 @@ pub struct Corrections {
 }
 
 impl Corrections {
-    fn inconsistency(&self) -> f32 {
-        self.acc.avg + self.mag.avg
+    fn totalAvg(&self) -> f32 {
+        self.acc.avg + self.gyro.avg + self.mag.avg
     }
 }
 
