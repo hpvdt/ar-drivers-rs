@@ -18,7 +18,7 @@ fn main() {
         ahrs.update();
         let quaternion = ahrs.attitude_quaternion();
         let frd = ahrs.attitude_euler_deg();
-        let inconsistency = ahrs.inconsistency();
+        let corrections = ahrs.corrections();
 
         println!(
             "quaternion:\t{:10.7}\t:\t{:10.7}\t{:10.7}\t{:10.7}\t{:10.7}",
@@ -26,6 +26,6 @@ fn main() {
         );
         println!("euler:\t{:10.7}", frd.transpose());
 
-        println!("inconsistency:\t{:10.7}", inconsistency);
+        println!("corrections:\t{}", corrections);
     }
 }

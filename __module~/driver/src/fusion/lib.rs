@@ -20,6 +20,7 @@ CAUTION: unlike [[GlassesEvent]], all states & outputs should use FRD reference 
 FRD is the standard frame for aerospace, and is also the default frame for NALgebra
 */
 use std::f32::consts::PI;
+use std::fmt;
 
 use nalgebra::{Quaternion, UnitQuaternion, Vector3, Vector4};
 
@@ -96,6 +97,12 @@ impl Default for Correction {
     }
 }
 
+impl fmt::Display for Correction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "prev={:10.7}, avg={:10.7}", self.prev, self.avg)
+    }
+}
+
 /// Correction magnitudes tracked independently for each sensor.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Corrections {
@@ -110,6 +117,12 @@ pub struct Corrections {
 impl Corrections {
     fn inconsistency(&self) -> f32 {
         self.acc.avg + self.mag.avg
+    }
+}
+
+impl fmt::Display for Corrections {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "acc: {}, gyro: {}, mag: {}", self.acc, self.gyro, self.mag)
     }
 }
 
