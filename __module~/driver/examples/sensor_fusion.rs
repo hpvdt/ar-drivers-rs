@@ -27,5 +27,7 @@ fn main() {
         println!("euler:\t{:10.7}", frd.transpose());
 
         println!("corrections:\t{}", corrections);
+
+        println!("---")
     }
 }

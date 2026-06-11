@@ -142,7 +142,7 @@ impl NaiveCF {
     fn update_mag(&mut self, mag_rub: &Vector3<f32>, _t: u64) -> () {
         let mag = Self::rub_to_frd(mag_rub);
 
-        if mag.norm() < 1.0 {
+        if mag.norm() < 0.01 {
             return; // very weak magnetic field, do not correct
         }
 
