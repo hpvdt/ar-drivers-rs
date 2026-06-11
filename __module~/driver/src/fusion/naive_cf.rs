@@ -29,7 +29,7 @@
 
 use nalgebra::{UnitQuaternion, Vector3};
 
-use super::{Fusion, FusionState};
+use super::{Corrections, Fusion, FusionState};
 use crate::{ARGlasses, Error, GlassesEvent};
 
 type Result<T> = std::result::Result<T, Error>;
@@ -92,8 +92,6 @@ impl NaiveCF {
 
     const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; //microseconds
 
-    const INCONSISTENCY_DECAY: f32 = 0.90;
-
     const UP_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -9.81);
     //const NORTH_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -1.0);
 
@@ -110,6 +108,7 @@ impl NaiveCF {
 
         // self.attitude = (increment.inverse() * self.attitude.inverse()).inverse();
         self.state.attitude = self.state.attitude * increment;
+        self.state.corrections.gyro.record(increment.angle());
 
         self.prev_gyro = (gyro, t);
     }
@@ -129,8 +128,7 @@ impl NaiveCF {
         match correction_opt {
             Some(correction_inv) => {
                 let correction = correction_inv.inverse();
-                self.state.inconsistency =
-                    self.state.inconsistency * Self::INCONSISTENCY_DECAY + correction.angle();
+                self.state.corrections.acc.record(correction.angle());
 
                 // self.attitude = (correction_inv * attitude.inverse()).inverse();
                 self.state.attitude = attitude * correction;
@@ -151,14 +149,16 @@ impl NaiveCF {
         let attitude = &self.state.attitude;
         let north_frd = Vector3::new(1.0, 0.0, 0.0);
         let estimated_north = attitude.inverse() * north_frd;
-        let correction_opt =
-            UnitQuaternion::scaled_rotation_between(&estimated_north, &mag.normalize(), Self::BASE_MAG_RATIO);
+        let correction_opt = UnitQuaternion::scaled_rotation_between(
+            &estimated_north,
+            &mag.normalize(),
+            Self::BASE_MAG_RATIO,
+        );
 
         match correction_opt {
             Some(correction_inv) => {
                 let correction = correction_inv.inverse();
-                self.state.inconsistency =
-                    self.state.inconsistency * Self::INCONSISTENCY_DECAY + correction.angle();
+                self.state.corrections.mag.record(correction.angle());
                 self.state.attitude = attitude * correction;
             }
             None => {
@@ -302,7 +302,11 @@ impl Fusion for NaiveCF {
     }
 
     fn inconsistency(&self) -> f32 {
-        self.state.inconsistency
+        self.state.corrections.inconsistency()
+    }
+
+    fn corrections(&self) -> Corrections {
+        self.state.corrections
     }
 
     fn update(&mut self) -> () {

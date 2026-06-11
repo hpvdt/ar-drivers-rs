@@ -39,7 +39,12 @@ pub trait Fusion: Send {
     fn attitude_quaternion(&self) -> UnitQuaternion<f32>;
 
     /// use FRD frame as error in Quaternion is multiplicative & is over-defined
-    fn inconsistency(&self) -> f32;
+    fn inconsistency(&self) -> f32 {
+        self.corrections().inconsistency()
+    }
+
+    /// Per-sensor correction magnitudes tracked by the fusion algorithm.
+    fn corrections(&self) -> Corrections;
 
     fn update(&mut self) -> ();
 }
@@ -52,18 +57,55 @@ impl dyn Fusion {
     }
 }
 
+/// Last and averaged correction magnitudes for a sensor.
+#[derive(Clone, Copy, Debug)]
 pub struct Correction {
-
-    pub prev: f32, // previous
-    pub avg_decay: f32, // averaging decay rate
-    pub avg: f32 // average
+    /// Most recent correction magnitude in radians.
+    pub prev: f32,      // previous
+    /// Exponential averaging decay rate.
+    pub avg_decay: f32, // averaging decay rate, TODO: how to make it a constant?
+    /// Exponential moving average of correction magnitude in radians.
+    pub avg: f32,       // average
 }
 
-pub struct Corrections {
+impl Correction {
+    const DEFAULT_AVG_DECAY: f32 = 0.90;
 
+    fn new(avg_decay: f32) -> Self {
+        Self {
+            prev: 0.0,
+            avg_decay,
+            avg: 0.0,
+        }
+    }
+
+    fn record(&mut self, correction: f32) -> () {
+        self.prev = correction;
+        self.avg = self.avg * self.avg_decay + correction * (1.0 - self.avg_decay);
+    }
+}
+
+impl Default for Correction {
+    fn default() -> Self {
+        Self::new(Self::DEFAULT_AVG_DECAY)
+    }
+}
+
+/// Correction magnitudes tracked independently for each sensor.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Corrections {
+    /// Accelerometer correction.
     pub acc: Correction,
+    /// Gyroscope integration increment.
     pub gyro: Correction,
+    /// Magnetometer correction.
     pub mag: Correction,
+}
+
+impl Corrections {
+    fn inconsistency(&self) -> f32 {
+        self.acc.avg + self.mag.avg
+    }
 }
 
 pub struct FusionState {
@@ -71,8 +113,8 @@ pub struct FusionState {
 
     // following data will be updated in memory directly,
     pub attitude: UnitQuaternion<f32>,
-    pub inconsistency: f32,
 
+    /// Per-sensor correction magnitudes.
     pub corrections: Corrections,
 
     // mag calibration state, will be used by all Fusion impls
@@ -85,7 +127,7 @@ impl FusionState {
         Self {
             glasses,
             attitude: UnitQuaternion::identity(),
-            inconsistency: 0.0,
+            corrections: Corrections::default(),
             mag: MagCalibrator::new(),
         }
     }
@@ -180,6 +222,10 @@ impl Fusion for AhrsCorrection {
 
     fn inconsistency(&self) -> f32 {
         self.fusion.inconsistency()
+    }
+
+    fn corrections(&self) -> Corrections {
+        self.fusion.corrections()
     }
 
     fn update(&mut self) -> () {
