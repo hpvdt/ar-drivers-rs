@@ -29,6 +29,7 @@
 
 use nalgebra::{UnitQuaternion, Vector3};
 
+use super::mag_bias_calibration::MagBiasCalibration;
 use super::{Corrections, Fusion, FusionState};
 use crate::{ARGlasses, Error, GlassesEvent};
 
@@ -37,6 +38,7 @@ type Result<T> = std::result::Result<T, Error>;
 pub struct NaiveCF {
     pub state: FusionState,
     pub prev_gyro: (Vector3<f32>, u64), //FRD
+    mag_calibration: MagBiasCalibration<5000>,
 }
 
 impl NaiveCF {
@@ -46,6 +48,7 @@ impl NaiveCF {
         let mut fusion = NaiveCF {
             state: FusionState::new(glasses),
             prev_gyro: (Vector3::zeros(), 0),
+            mag_calibration: MagBiasCalibration::new(),
         };
 
         loop {
@@ -139,11 +142,16 @@ impl NaiveCF {
         }
     }
 
-    fn update_mag(&mut self, mag_rub: &Vector3<f32>, _t: u64) -> () {
-        let mag = Self::rub_to_frd(mag_rub);
+    pub(super) fn update_mag(&mut self, mag_rub: &Vector3<f32>, _t: u64) -> () {
+        let raw_mag = Self::rub_to_frd(mag_rub); // reading is always muT (microTesla) pointing to north
 
-        if mag.norm() < 0.01 {
+        if raw_mag.norm() < 0.4 {
             return; // very weak magnetic field, do not correct
+        }
+
+        let mag = self.mag_calibration.corrected_sample(raw_mag, _t);
+        if mag.norm() < 0.4 {
+            return; // calibration removed most of the signal, do not correct
         }
 
         let attitude = &self.state.attitude;

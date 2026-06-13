@@ -29,7 +29,12 @@ use crate::fusion::mag_calibration::MagCalibrator;
 use crate::{any_glasses_or_dummy, ARGlasses, Result};
 
 mod mag_calibration;
+mod mag_bias_calibration;
 mod naive_cf;
+#[cfg(test)]
+mod mag_bias_calibration_test;
+#[cfg(test)]
+mod naive_cf_test;
 
 /// Non-overridable fusion inconsistency computation.
 pub trait FusionInconsistency {
