@@ -4,21 +4,21 @@
 
 use std::{
     io::{self, Stdout},
-    sync::mpsc::{self, Receiver, Sender},
+    sync::mpsc::{self, Receiver, SyncSender},
     thread,
     time::Duration,
 };
 
 use ar_drivers::{any_glasses_or_dummy, ARGlasses, GlassesEvent};
-use crossterm::{
-    cursor::{Hide, Show},
-    event::{self, Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
 use nalgebra::Vector3;
 use ratatui::{
     backend::CrosstermBackend,
+    crossterm::{
+        cursor::{Hide, Show},
+        event::{self, Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+        execute,
+        terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    },
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -35,7 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut terminal = TerminalGuard::new()?;
     let state = DashboardState::new(device_name, serial);
-    let (sender, receiver) = mpsc::channel();
+    let (sender, receiver) = mpsc::sync_channel(1);
 
     thread::spawn(move || read_events(glasses, sender));
     run_app(&mut terminal, receiver, state)?;
@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn read_events(mut glasses: Box<dyn ARGlasses>, sender: Sender<SensorMessage>) {
+fn read_events(mut glasses: Box<dyn ARGlasses>, sender: SyncSender<SensorMessage>) {
     loop {
         match glasses.read_event() {
             Ok(event) => {
@@ -87,10 +87,11 @@ fn run_app(
 }
 
 fn drain_messages(receiver: &Receiver<SensorMessage>, state: &mut DashboardState) {
-    while let Ok(message) = receiver.try_recv() {
-        match message {
-            SensorMessage::Event(event) => state.apply_event(event),
-            SensorMessage::ReadError(error) => state.apply_error(error),
+    for _ in 0..64 {
+        match receiver.try_recv() {
+            Ok(SensorMessage::Event(event)) => state.apply_event(event),
+            Ok(SensorMessage::ReadError(error)) => state.apply_error(error),
+            Err(_) => break,
         }
     }
 }

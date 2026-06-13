@@ -74,7 +74,6 @@ dependencies = [
  "bytemuck",
  "byteorder",
  "clap",
- "crossterm",
  "hidapi",
  "nalgebra",
  "ratatui",
