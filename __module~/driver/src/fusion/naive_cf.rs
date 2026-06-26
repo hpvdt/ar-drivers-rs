@@ -30,7 +30,7 @@
 use nalgebra::{UnitQuaternion, Vector3};
 
 use super::mag_bias_calibration::MagBiasCalibration;
-use super::{Corrections, Fusion, FusionState};
+use super::{Correction, Fusion, FusionState, NineAxis};
 use crate::{ARGlasses, Error, GlassesEvent};
 
 type Result<T> = std::result::Result<T, Error>;
@@ -309,7 +309,7 @@ impl Fusion for NaiveCF {
         self.state.attitude
     }
 
-    fn corrections(&self) -> Corrections {
+    fn corrections(&self) -> NineAxis<Correction> {
         self.state.corrections
     }
 

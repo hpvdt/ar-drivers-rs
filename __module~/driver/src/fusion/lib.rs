@@ -57,7 +57,7 @@ pub trait Fusion: Send + FusionInconsistency {
     fn attitude_quaternion(&self) -> UnitQuaternion<f32>;
 
     /// Per-sensor correction magnitudes tracked by the fusion algorithm.
-    fn corrections(&self) -> Corrections;
+    fn corrections(&self) -> NineAxis<Correction>;
 
     fn update(&mut self) -> ();
 }
@@ -118,24 +118,13 @@ pub struct NineAxis<T> {
     pub mag: T,
 }
 
-/// Correction magnitudes tracked independently for each sensor.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Corrections {
-    /// Accelerometer correction.
-    pub acc: Correction,
-    /// Gyroscope integration increment.
-    pub gyro: Correction,
-    /// Magnetometer correction.
-    pub mag: Correction,
-}
-
-impl Corrections {
+impl NineAxis<Correction> {
     fn totalAvg(&self) -> f32 {
         self.acc.avg + self.gyro.avg + self.mag.avg
     }
 }
 
-impl fmt::Display for Corrections {
+impl fmt::Display for NineAxis<Correction> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "acc: {}, gyro: {}, mag: {}", self.acc, self.gyro, self.mag)
     }
@@ -148,7 +137,7 @@ pub struct FusionState {
     pub attitude: UnitQuaternion<f32>,
 
     /// Per-sensor correction magnitudes.
-    pub corrections: Corrections,
+    pub corrections: NineAxis<Correction>,
 
     // mag calibration state, will be used by all Fusion impls
     pub mag: MagCalibrator<63>,
@@ -160,7 +149,7 @@ impl FusionState {
         Self {
             glasses,
             attitude: UnitQuaternion::identity(),
-            corrections: Corrections::default(),
+            corrections: NineAxis::default(),
             mag: MagCalibrator::new(),
         }
     }
@@ -258,7 +247,7 @@ impl Fusion for AhrsCorrection {
         self.fusion.glasses()
     }
 
-    fn corrections(&self) -> Corrections {
+    fn corrections(&self) -> NineAxis<Correction> {
         self.fusion.corrections()
     }
 
