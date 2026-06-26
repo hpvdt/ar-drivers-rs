@@ -108,6 +108,16 @@ impl fmt::Display for Correction {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NineAxis<T> {
+    /// Accelerometer correction.
+    pub acc: T,
+    /// Gyroscope integration increment.
+    pub gyro: T,
+    /// Magnetometer correction.
+    pub mag: T,
+}
+
 /// Correction magnitudes tracked independently for each sensor.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Corrections {
