@@ -1,5 +1,8 @@
 // use core::cmp::Ordering;
-use nalgebra::{ComplexField, SMatrix, SMatrixView, Vector3};
+use nalgebra::{DMatrix, SMatrix, SMatrixView, Vector3};
+
+const DESIGN_COLUMNS: usize = 6;
+const SVD_RELATIVE_TOLERANCE: f32 = 1.0e-6;
 
 /// Lightweight least squares approach to
 /// determining the offset and scaling
@@ -153,9 +156,19 @@ impl<const N: usize> MagCalibrator<N> {
             .enumerate()
             .for_each(|(i, row)| w[i] = row[0] * row[0]);
 
-        // Perform least squares using pseudo inverse
-        let x =
-            (self.matrix.transpose() * self.matrix).try_inverse()? * self.matrix.transpose() * w;
+        let design = DMatrix::from_column_slice(N, DESIGN_COLUMNS, self.matrix.as_slice());
+        let svd = design.svd(true, true);
+        if svd.singular_values.len() < DESIGN_COLUMNS {
+            return None;
+        }
+        let max_singular = svd.singular_values[0];
+        let rank_tolerance = max_singular.max(1.0) * SVD_RELATIVE_TOLERANCE;
+        if svd.rank(rank_tolerance) < DESIGN_COLUMNS {
+            return None;
+        }
+
+        let w = DMatrix::from_column_slice(N, 1, w.as_slice());
+        let x = svd.solve(&w, rank_tolerance).ok()?;
 
         // Calculate offsets and scale factors
         let off = [x[0] / 2., x[1] / (2. * x[3]), x[2] / (2. * x[4])];

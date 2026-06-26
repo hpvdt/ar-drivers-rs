@@ -32,6 +32,8 @@ mod mag_calibration;
 mod mag_bias_calibration;
 mod naive_cf;
 #[cfg(test)]
+mod mag_calibration_test;
+#[cfg(test)]
 mod mag_bias_calibration_test;
 #[cfg(test)]
 mod naive_cf_test;
