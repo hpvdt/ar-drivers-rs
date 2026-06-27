@@ -142,28 +142,16 @@ impl NaiveCF {
     pub(super) fn update_mag(&mut self, mag_rub: &Vector3<f32>, _t: u64) -> () {
         let raw_mag = Self::rub_to_frd(mag_rub); // reading is always muT (microTesla) pointing to north
 
-        if raw_mag.norm() < 0.4 {
-            return; // very weak magnetic field, do not correct
-        }
-
-        self.state.mag.evaluate_sample_vec(raw_mag);
-        let calibration = self.state.mag.perform_calibration();
-        let mag: Vector3<f32> = match calibration {
-            Some((offset, scale)) => {
-                let offset: Vector3<f32> = Vector3::from(offset);
-                let scale: Vector3<f32> = Vector3::from(scale);
-                (raw_mag - offset).component_div(&scale)
+        let mag_north: Vector3<f32> = match self.state.mag_north(raw_mag) {
+            Some(mag_north) => mag_north,
+            None => {
+                return;
             }
-            None => raw_mag,
         };
-        if mag.norm() < 0.4 {
-            return; // calibration removed most of the signal, do not correct
-        }
 
         let attitude = &self.state.attitude;
         let north_frd = Vector3::new(1.0, 0.0, 0.0);
         let estimated_north = attitude.inverse() * north_frd;
-        let mag_north: Vector3<f32> = mag.normalize();
         let correction_opt = UnitQuaternion::scaled_rotation_between(
             &estimated_north,
             &mag_north,

@@ -147,6 +147,8 @@ pub struct FusionState {
 }
 
 impl FusionState {
+    const MIN_MAG_NORM: f32 = 0.4;
+
     /// Creates a shared fusion state with identity attitude and empty calibration state.
     pub fn new(glasses: Box<dyn ARGlasses>) -> Self {
         Self {
@@ -154,6 +156,29 @@ impl FusionState {
             attitude: UnitQuaternion::identity(),
             corrections: NineAxis::default(),
             mag: MagCalibrator::new(),
+        }
+    }
+
+    fn mag_north(&mut self, raw_mag: Vector3<f32>) -> Option<Vector3<f32>> {
+        if raw_mag.norm() < Self::MIN_MAG_NORM {
+            return None;
+        }
+
+        self.mag.evaluate_sample_vec(raw_mag);
+        let calibration = self.mag.perform_calibration();
+        let mag: Vector3<f32> = match calibration {
+            Some((offset, scale)) => {
+                let offset: Vector3<f32> = Vector3::from(offset);
+                let scale: Vector3<f32> = Vector3::from(scale);
+                (raw_mag - offset).component_div(&scale)
+            }
+            None => raw_mag,
+        };
+
+        if mag.norm() < Self::MIN_MAG_NORM {
+            None
+        } else {
+            Some(mag.normalize())
         }
     }
 }
