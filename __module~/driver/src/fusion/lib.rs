@@ -29,10 +29,9 @@ use crate::fusion::mag_calibration::MagCalibrator;
 use crate::{any_glasses_or_dummy, ARGlasses, Result};
 
 mod mag_calibration;
-mod mag_bias_calibration;
-mod naive_cf;
 #[cfg(test)]
-mod mag_bias_calibration_test;
+mod mag_calibration_test;
+mod naive_cf;
 #[cfg(test)]
 mod naive_cf_test;
 
@@ -126,7 +125,11 @@ impl NineAxis<Correction> {
 
 impl fmt::Display for NineAxis<Correction> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "acc: {}, gyro: {}, mag: {}", self.acc, self.gyro, self.mag)
+        write!(
+            f,
+            "acc: {}, gyro: {}, mag: {}",
+            self.acc, self.gyro, self.mag
+        )
     }
 }
 
