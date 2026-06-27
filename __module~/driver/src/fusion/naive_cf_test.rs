@@ -1,5 +1,6 @@
 use nalgebra::{UnitQuaternion, Vector3};
 
+use super::{mag_calibration_can_divide, MIN_MAG_SCALE_DIVISOR};
 use super::mag_calibration::MagCalibrator;
 use super::naive_cf::NaiveCF;
 
@@ -24,6 +25,14 @@ fn update_mag_uses_shared_mag_calibrator() {
 
     assert!(fusion.state.corrections.mag.prev < 0.001);
     assert!(fusion.state.attitude.angle() < 0.001);
+}
+
+#[test]
+fn get_calibrated_mag_discards_unsafe_scale_divisor() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let scale = Vector3::new(3.0, MIN_MAG_SCALE_DIVISOR * 0.5, 1.5);
+
+    assert!(!mag_calibration_can_divide(&offset, &scale));
 }
 
 fn seeded_calibrator(offset: Vector3<f32>, scale: Vector3<f32>) -> MagCalibrator<63> {

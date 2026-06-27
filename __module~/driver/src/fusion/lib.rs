@@ -146,6 +146,8 @@ pub struct FusionState {
     pub mag: MagCalibrator<63>,
 }
 
+const MIN_MAG_SCALE_DIVISOR: f32 = 1.0e-6;
+
 impl FusionState {
     const MIN_MAG_NORM: f32 = 0.4;
 
@@ -170,6 +172,9 @@ impl FusionState {
             Some((offset, scale)) => {
                 let offset: Vector3<f32> = Vector3::from(offset);
                 let scale: Vector3<f32> = Vector3::from(scale);
+                if !mag_calibration_can_divide(&offset, &scale) {
+                    return None;
+                }
                 (raw_mag - offset).component_div(&scale)
             }
             None => raw_mag,
@@ -181,6 +186,16 @@ impl FusionState {
             Some(mag.normalize())
         }
     }
+}
+
+fn mag_calibration_can_divide(offset: &Vector3<f32>, scale: &Vector3<f32>) -> bool {
+    offset
+        .iter()
+        .chain(scale.iter())
+        .all(|component| component.is_finite())
+        && scale
+            .iter()
+            .all(|component| component.abs() >= MIN_MAG_SCALE_DIVISOR)
 }
 
 pub struct AhrsCorrection {
