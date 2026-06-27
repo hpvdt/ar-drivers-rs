@@ -147,10 +147,11 @@ impl NaiveCF {
         }
 
         self.state.mag.evaluate_sample_vec(raw_mag);
-        let mag = match self.state.mag.perform_calibration() {
+        let calibration = self.state.mag.perform_calibration();
+        let mag: Vector3<f32> = match calibration {
             Some((offset, scale)) => {
-                let offset = Vector3::from(offset);
-                let scale = Vector3::from(scale);
+                let offset: Vector3<f32> = Vector3::from(offset);
+                let scale: Vector3<f32> = Vector3::from(scale);
                 (raw_mag - offset).component_div(&scale)
             }
             None => raw_mag,
@@ -162,7 +163,7 @@ impl NaiveCF {
         let attitude = &self.state.attitude;
         let north_frd = Vector3::new(1.0, 0.0, 0.0);
         let estimated_north = attitude.inverse() * north_frd;
-        let mag_north = mag.normalize();
+        let mag_north: Vector3<f32> = mag.normalize();
         let correction_opt = UnitQuaternion::scaled_rotation_between(
             &estimated_north,
             &mag_north,
