@@ -159,7 +159,7 @@ impl FusionState {
         }
     }
 
-    fn mag_north(&mut self, raw_mag: Vector3<f32>) -> Option<Vector3<f32>> {
+    fn getCalibratedMag(&mut self, raw_mag: Vector3<f32>) -> Option<Vector3<f32>> {
         if raw_mag.norm() < Self::MIN_MAG_NORM {
             return None;
         }
