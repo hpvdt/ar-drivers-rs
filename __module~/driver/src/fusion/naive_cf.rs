@@ -29,7 +29,7 @@
 
 use nalgebra::{UnitQuaternion, Vector3};
 
-use super::{Correction, Fusion, FusionState, NineAxis};
+use super::{rub_to_frd, Correction, Fusion, FusionState, NineAxis};
 use crate::{ARGlasses, Error, GlassesEvent};
 
 type Result<T> = std::result::Result<T, Error>;
@@ -79,11 +79,6 @@ impl NaiveCF {
         }
     }
 
-    fn rub_to_frd(v: &Vector3<f32>) -> Vector3<f32> {
-        let result = Vector3::new(-v.z, v.x, -v.y);
-        result
-    }
-
     const BASE_GRAV_RATIO: f32 = 0.005;
     //const BASE_GRAV_RATIO: f32 = 0.0; //no grav
     // const BASE_GRAV_RATIO: f32 = 1.0; //absolute correction, no gyro
@@ -98,7 +93,7 @@ impl NaiveCF {
     //CAUTION: right-multiplication means rotation, unconventionally
 
     fn update_gyro_rub(&mut self, gyro_rub: &Vector3<f32>, t: u64) -> () {
-        let gyro = Self::rub_to_frd(gyro_rub);
+        let gyro = rub_to_frd(gyro_rub);
 
         let d_t1 = t - self.prev_gyro.1;
         let d_t1_f = d_t1 as f32 / Self::GYRO_SPEED_IN_TIMESTAMP_FACTOR;
@@ -114,7 +109,7 @@ impl NaiveCF {
     }
 
     fn update_acc(&mut self, acc_rub: &Vector3<f32>, _t: u64) -> () {
-        let acc = Self::rub_to_frd(acc_rub);
+        let acc = rub_to_frd(acc_rub);
 
         if acc.norm() < 1.0 {
             return; //almost in free fall, or acc disabled, do not correct
@@ -140,7 +135,7 @@ impl NaiveCF {
     }
 
     pub(super) fn update_mag(&mut self, mag_rub: &Vector3<f32>, _t: u64) -> () {
-        let raw_mag = Self::rub_to_frd(mag_rub); // reading is always muT (microTesla) pointing to north
+        let raw_mag = rub_to_frd(mag_rub); // reading is always muT (microTesla) pointing to north
 
         let mag_north: Vector3<f32> = match self.state.getCalibratedMag(raw_mag) {
             Some(mag_north) => mag_north,

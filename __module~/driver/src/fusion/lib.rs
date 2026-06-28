@@ -35,6 +35,11 @@ mod naive_cf;
 #[cfg(test)]
 mod naive_cf_test;
 
+/// Converts a raw sensor vector from RUB (right, up, back) into FRD (forward, right, down).
+pub fn rub_to_frd(v: &Vector3<f32>) -> Vector3<f32> {
+    Vector3::new(-v.z, v.x, -v.y)
+}
+
 /// Non-overridable fusion inconsistency computation.
 pub trait FusionInconsistency {
     /// use FRD frame as error in Quaternion is multiplicative & is over-defined
