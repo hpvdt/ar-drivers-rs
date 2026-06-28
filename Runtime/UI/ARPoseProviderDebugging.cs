@@ -64,8 +64,10 @@ namespace ArGlassesSDK.UI
 
                     var angle = Quaternion.Angle(r1, r2);
 
-                    Debug.Assert(fwd.magnitude <= errorBound,
-                        $"fwd = {fwd} ; rev = {rev} ; angle = {angle}");
+                    var errorInfo =
+                        $"inconsistency between Read_direct and Read_euler:\n\tfwd = {fwd} ; rev = {rev} ; angle = {angle}";
+
+                    Debug.Assert(fwd.magnitude <= errorBound, errorInfo);
                 }
 
 
