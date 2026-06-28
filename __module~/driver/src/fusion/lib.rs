@@ -177,7 +177,7 @@ impl FusionState {
                 }
                 (raw_mag - offset).component_div(&scale)
             }
-            None => raw_mag,
+            None => return None,
         };
 
         if mag.norm() < Self::MIN_MAG_NORM {

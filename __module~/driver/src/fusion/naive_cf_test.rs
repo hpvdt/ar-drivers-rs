@@ -1,8 +1,8 @@
 use nalgebra::{UnitQuaternion, Vector3};
 
-use super::{mag_calibration_can_divide, MIN_MAG_SCALE_DIVISOR};
 use super::mag_calibration::MagCalibrator;
 use super::naive_cf::NaiveCF;
+use super::{mag_calibration_can_divide, FusionState, MIN_MAG_SCALE_DIVISOR};
 
 fn frd_to_rub(v: Vector3<f32>) -> Vector3<f32> {
     Vector3::new(v.y, -v.z, -v.x)
@@ -33,6 +33,22 @@ fn get_calibrated_mag_discards_unsafe_scale_divisor() {
     let scale = Vector3::new(3.0, MIN_MAG_SCALE_DIVISOR * 0.5, 1.5);
 
     assert!(!mag_calibration_can_divide(&offset, &scale));
+}
+
+#[test]
+fn get_calibrated_mag_discards_unavailable_calibration() {
+    let mut state = FusionState::new(Box::new(crate::dummy::Dummy {}));
+    let raw_mag = Vector3::new(5.0, 6.0, 7.0);
+
+    assert!(state.getCalibratedMag(raw_mag).is_none());
+}
+
+#[test]
+fn get_calibrated_mag_discards_weak_raw_reading() {
+    let mut state = FusionState::new(Box::new(crate::dummy::Dummy {}));
+    let raw_mag = Vector3::new(0.1, 0.1, 0.1);
+
+    assert!(state.getCalibratedMag(raw_mag).is_none());
 }
 
 fn seeded_calibrator(offset: Vector3<f32>, scale: Vector3<f32>) -> MagCalibrator<63> {
