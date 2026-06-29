@@ -153,19 +153,30 @@ pub struct FusionState {
 
 const MIN_MAG_SCALE_DIVISOR: f32 = 1.0e-6;
 
+/// Reason a magnetometer vector could not produce a calibrated FRD reading.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum BadMagDataCause {
+pub enum BadMagDataCause {
+    /// The raw magnetometer vector is too small to be useful.
     WeakRawReading {
+        /// Actual raw vector norm.
         norm: f32,
+        /// Minimum accepted vector norm.
         min_norm: f32,
     },
+    /// The calibration solver does not have an accepted calibration yet.
     CalibrationUnavailable,
+    /// The accepted calibration cannot be safely applied.
     UnsafeCalibration {
+        /// Calibration offset.
         offset: Vector3<f32>,
+        /// Calibration scale.
         scale: Vector3<f32>,
     },
+    /// The calibrated vector is too small to be useful.
     WeakCalibratedReading {
+        /// Actual calibrated vector norm.
         norm: f32,
+        /// Minimum accepted vector norm.
         min_norm: f32,
     },
 }
@@ -183,7 +194,8 @@ impl FusionState {
         }
     }
 
-    fn getCalibratedMag(
+    /// Calibrates a magnetometer vector that has already been converted to FRD.
+    pub fn getCalibratedMag(
         &mut self,
         raw_mag: Vector3<f32>,
     ) -> std::result::Result<Vector3<f32>, BadMagDataCause> {
