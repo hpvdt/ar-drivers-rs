@@ -153,6 +153,23 @@ pub struct FusionState {
 
 const MIN_MAG_SCALE_DIVISOR: f32 = 1.0e-6;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum BadMagDataCause {
+    WeakRawReading {
+        norm: f32,
+        min_norm: f32,
+    },
+    CalibrationUnavailable,
+    UnsafeCalibration {
+        offset: Vector3<f32>,
+        scale: Vector3<f32>,
+    },
+    WeakCalibratedReading {
+        norm: f32,
+        min_norm: f32,
+    },
+}
+
 impl FusionState {
     const MIN_MAG_NORM: f32 = 0.4;
 
@@ -166,9 +183,16 @@ impl FusionState {
         }
     }
 
-    fn getCalibratedMag(&mut self, raw_mag: Vector3<f32>) -> Option<Vector3<f32>> {
-        if raw_mag.norm() < Self::MIN_MAG_NORM {
-            return None;
+    fn getCalibratedMag(
+        &mut self,
+        raw_mag: Vector3<f32>,
+    ) -> std::result::Result<Vector3<f32>, BadMagDataCause> {
+        let raw_norm = raw_mag.norm();
+        if raw_norm < Self::MIN_MAG_NORM {
+            return Err(BadMagDataCause::WeakRawReading {
+                norm: raw_norm,
+                min_norm: Self::MIN_MAG_NORM,
+            });
         }
 
         self.mag.evaluate_sample_vec(raw_mag);
@@ -178,17 +202,21 @@ impl FusionState {
                 let offset: Vector3<f32> = Vector3::from(offset);
                 let scale: Vector3<f32> = Vector3::from(scale);
                 if !mag_calibration_can_divide(&offset, &scale) {
-                    return None;
+                    return Err(BadMagDataCause::UnsafeCalibration { offset, scale });
                 }
                 (raw_mag - offset).component_div(&scale)
             }
-            None => return None,
+            None => return Err(BadMagDataCause::CalibrationUnavailable),
         };
 
-        if mag.norm() < Self::MIN_MAG_NORM {
-            None
+        let mag_norm = mag.norm();
+        if mag_norm < Self::MIN_MAG_NORM {
+            Err(BadMagDataCause::WeakCalibratedReading {
+                norm: mag_norm,
+                min_norm: Self::MIN_MAG_NORM,
+            })
         } else {
-            Some(mag.normalize())
+            Ok(mag.normalize())
         }
     }
 }
