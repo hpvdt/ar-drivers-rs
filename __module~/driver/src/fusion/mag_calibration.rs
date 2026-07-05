@@ -7,6 +7,8 @@ use nalgebra::{ComplexField, SMatrix, SMatrixView, Vector3};
 /// Also includes the capability to automatically
 /// collect good data points, using a `const`-sized
 /// buffer matrix, and a k-nearest neighbors.
+///
+/// source: https://github.com/peterkrull/mag-calibrator-rs/blob/main/src/lib.rs
 pub struct MagCalibrator<const N: usize> {
     matrix: SMatrix<f32, N, 6>,
     matrix_filled: usize,
