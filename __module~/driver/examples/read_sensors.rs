@@ -16,13 +16,12 @@ fn main() {
     loop {
         let event = fusion.glasses.read_event().unwrap();
 
-        println!("Raw Event: {:?}", event);
-
         match event {
             GlassesEvent::AccGyro { accelerometer, gyroscope, timestamp } => {
                 let acc_frd = rub_to_frd(&accelerometer);
                 let gyr_frd = rub_to_frd(&gyroscope);
                 println!("AccGyro FRD: acc={:10.7} gyr={:10.7} ts={}", acc_frd.transpose(), gyr_frd.transpose(), timestamp);
+                println!("  - converted from: {:?}", event);
             }
             GlassesEvent::Magnetometer { magnetometer, timestamp } => {
                 let mag_frd = rub_to_frd(&magnetometer);
@@ -31,8 +30,11 @@ fn main() {
                     Ok(calibrated) => println!("  calibrated (normalized): {:10.7}", calibrated.transpose()),
                     Err(cause) => println!("  calibration unavailable: {:?}", cause),
                 }
+                println!("  - converted from: {:?}", event);
             }
-            _ => {} // do nothing
+            _ => {
+                println!("Raw event: {:?}", event);
+            } // do nothing
         }
     }
 }
