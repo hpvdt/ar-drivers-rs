@@ -45,14 +45,14 @@ fn main() {
                     "Magnetometer FRD: mag=[x={:+10.4}, y={:+10.4}, z={:+10.4}] timestamp={:>12}",
                     mag_frd.x, mag_frd.y, mag_frd.z, timestamp
                 );
+                println!("  - converted from raw {:?}", event);
                 match fusion.getCalibratedMag(mag_frd) {
                     Ok(calibrated) => println!(
-                        "  calibrated (normalized): [x={:+10.4}, y={:+10.4}, z={:+10.4}]",
+                        "Magnetometer FRD (Calibrated): [x={:+10.4}, y={:+10.4}, z={:+10.4}]",
                         calibrated.x, calibrated.y, calibrated.z
                     ),
-                    Err(cause) => println!("  calibration unavailable: {:?}", cause),
+                    Err(cause) => println!("Magnetometer calibration unavailable: {:?}", cause),
                 }
-                println!("  - converted from raw {:?}", event);
             }
             _ => {
                 println!("Raw event: {:?}", event);

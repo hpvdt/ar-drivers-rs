@@ -136,16 +136,16 @@ fn format_event(
             );
             let calibration = match fusion.getCalibratedMag(mag_frd) {
                 Ok(calibrated) => format!(
-                    "  calibrated (normalized): [x={:+10.4}, y={:+10.4}, z={:+10.4}]",
+                    "Magnetometer FRD (Calibrated): [x={:+10.4}, y={:+10.4}, z={:+10.4}]",
                     calibrated.x, calibrated.y, calibrated.z
                 ),
-                Err(cause) => format!("  calibration unavailable: {:?}", cause),
+                Err(cause) => format!("Magnetometer calibration unavailable: {:?}", cause),
             };
             let source = format!("  - converted from raw {:?}", event);
             latest.magnetometer.clone_from(&reading);
             latest.calibration.clone_from(&calibration);
             latest.magnetometer_source.clone_from(&source);
-            vec![reading, calibration, source]
+            vec![reading, source, calibration]
         }
         _ => {
             let raw = format!("Raw event: {:?}", event);
