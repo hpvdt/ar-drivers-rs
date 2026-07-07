@@ -1,6 +1,7 @@
 use nalgebra::Vector3;
 
 use super::mag_calibration::MagCalibrator;
+use super::BadMagDataCause;
 
 #[test]
 fn mag_calibrator_solves_synthetic_offset_and_scale() {
@@ -21,7 +22,10 @@ fn mag_calibrator_degenerate_data_does_not_panic() {
         calibrator.evaluate_sample_vec(Vector3::new(5.0, 6.0, 7.0));
     }
 
-    assert!(calibrator.perform_calibration().is_none());
+    assert!(matches!(
+        calibrator.perform_calibration(),
+        Err(BadMagDataCause::DegenerateCalibrationSamples)
+    ));
 }
 
 fn seeded_calibrator<const N: usize>(

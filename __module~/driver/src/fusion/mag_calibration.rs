@@ -1,6 +1,8 @@
 // use core::cmp::Ordering;
 use nalgebra::{ComplexField, SMatrix, SMatrixView, Vector3};
 
+use super::BadMagDataCause;
+
 /// Lightweight least squares approach to
 /// determining the offset and scaling
 /// factors for magnetometer calibration.
@@ -137,11 +139,11 @@ impl<const N: usize> MagCalibrator<N> {
         self.mean_distance
     }
 
-    /// Try to calculate calibration offset and scale values. Returns None if
-    /// it was not possible to calculate the pseudo inverse, or if some of the
-    /// parameters are `NaN`. In that case it would be best to restart the whole
-    /// calibration and collect new samples. The tuple contains (offset , scale).
-    pub fn perform_calibration(&mut self) -> Option<([f32; 3], [f32; 3])> {
+    /// Try to calculate calibration offset and scale values. Returns the cause
+    /// when the calibration cannot be produced. The tuple contains (offset, scale).
+    pub fn perform_calibration(
+        &mut self,
+    ) -> std::result::Result<([f32; 3], [f32; 3]), BadMagDataCause> {
         // Calculate column 4 and 5 of H matrix
         self.matrix.row_iter_mut().for_each(|mut mag| {
             mag[3] = -mag[1] * mag[1];
@@ -156,8 +158,10 @@ impl<const N: usize> MagCalibrator<N> {
             .for_each(|(i, row)| w[i] = row[0] * row[0]);
 
         // Perform least squares using pseudo inverse
-        let x =
-            (self.matrix.transpose() * self.matrix).try_inverse()? * self.matrix.transpose() * w;
+        let inverse = (self.matrix.transpose() * self.matrix)
+            .try_inverse()
+            .ok_or(BadMagDataCause::DegenerateCalibrationSamples)?;
+        let x = inverse * self.matrix.transpose() * w;
 
         // Calculate offsets and scale factors
         let off = [x[0] / 2., x[1] / (2. * x[3]), x[2] / (2. * x[4])];
@@ -165,13 +169,16 @@ impl<const N: usize> MagCalibrator<N> {
         let scale = [temp.sqrt(), (temp / x[3]).sqrt(), (temp / x[4]).sqrt()];
 
         // Check that off and scale vectors contain valid values
-        for x in off.iter().chain(scale.iter()) {
-            if !x.is_finite() {
-                return None;
+        for component in off.iter().chain(scale.iter()) {
+            if !component.is_finite() {
+                return Err(BadMagDataCause::NonFiniteCalibration {
+                    offset: Vector3::from(off),
+                    scale: Vector3::from(scale),
+                });
             }
         }
 
         // TODO Add option for low-pass filtering this result
-        Some((off, scale))
+        Ok((off, scale))
     }
 }

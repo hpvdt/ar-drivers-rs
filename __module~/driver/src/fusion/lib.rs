@@ -163,8 +163,27 @@ pub enum BadMagDataCause {
     //     /// Minimum accepted vector norm.
     //     min_norm: f32,
     // },
-    /// The calibration solver does not have an accepted calibration yet.
-    InsufficientSamples,
+    /// The accepted samples cannot produce an invertible calibration solve.
+    DegenerateCalibrationSamples,
+    /// The calibration solve produced a non-finite offset or scale.
+    NonFiniteCalibration {
+        /// Calibration offset.
+        #[debug(
+            "[x={:+10.4}, y={:+10.4}, z={:+10.4}]",
+            offset.x,
+            offset.y,
+            offset.z
+        )]
+        offset: Vector3<f32>,
+        /// Calibration scale.
+        #[debug(
+            "[x={:+10.4}, y={:+10.4}, z={:+10.4}]",
+            scale.x,
+            scale.y,
+            scale.z
+        )]
+        scale: Vector3<f32>,
+    },
     /// The accepted calibration cannot be safely applied.
     NumericallyUnstableCalibration {
         /// Calibration offset.
@@ -222,18 +241,13 @@ impl FusionState {
         // }
 
         self.mag.evaluate_sample_vec(raw_mag);
-        let calibration = self.mag.perform_calibration();
-        let mag: Vector3<f32> = match calibration {
-            Some((offset, scale)) => {
-                let offset: Vector3<f32> = Vector3::from(offset);
-                let scale: Vector3<f32> = Vector3::from(scale);
-                if !mag_calibration_can_divide(&offset, &scale) {
-                    return Err(BadMagDataCause::NumericallyUnstableCalibration { offset, scale });
-                }
-                (raw_mag - offset).component_div(&scale)
-            }
-            None => return Err(BadMagDataCause::InsufficientSamples),
-        };
+        let (offset, scale) = self.mag.perform_calibration()?;
+        let offset: Vector3<f32> = Vector3::from(offset);
+        let scale: Vector3<f32> = Vector3::from(scale);
+        if !mag_calibration_can_divide(&offset, &scale) {
+            return Err(BadMagDataCause::NumericallyUnstableCalibration { offset, scale });
+        }
+        let mag = (raw_mag - offset).component_div(&scale);
 
         let mag_norm = mag.norm();
         if mag_norm < Self::MIN_MAG_NORM {

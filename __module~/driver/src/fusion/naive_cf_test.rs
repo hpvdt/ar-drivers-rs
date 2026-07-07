@@ -36,13 +36,13 @@ fn get_calibrated_mag_discards_unsafe_scale_divisor() {
 }
 
 #[test]
-fn get_calibrated_mag_discards_unavailable_calibration() {
+fn get_calibrated_mag_discards_non_finite_calibration() {
     let mut state = FusionState::new(Box::new(crate::dummy::Dummy {}));
     let raw_mag = Vector3::new(5.0, 6.0, 7.0);
 
     assert!(matches!(
         state.getCalibratedMag(raw_mag),
-        Err(super::BadMagDataCause::InsufficientSamples)
+        Err(super::BadMagDataCause::NonFiniteCalibration { .. })
     ));
 }
 
@@ -57,9 +57,9 @@ fn get_calibrated_mag_discards_unavailable_calibration() {
 //     ));
 // }
 
-fn seeded_calibrator(offset: Vector3<f32>, scale: Vector3<f32>) -> MagCalibrator<63> {
+fn seeded_calibrator(offset: Vector3<f32>, scale: Vector3<f32>) -> MagCalibrator<255> {
     let mut calibrator = MagCalibrator::new();
-    for i in 0..63 {
+    for i in 0..255 {
         let direction = sample_direction(i);
         calibrator.evaluate_sample_vec(offset + scale.component_mul(&direction));
     }
@@ -68,7 +68,7 @@ fn seeded_calibrator(offset: Vector3<f32>, scale: Vector3<f32>) -> MagCalibrator
 
 fn sample_direction(i: usize) -> Vector3<f32> {
     let theta = 0.37 + i as f32 * 1.21;
-    let z = -0.8 + 1.6 * i as f32 / 62.0;
+    let z = -0.8 + 1.6 * i as f32 / 254.0;
     let radius = (1.0 - z * z).sqrt();
     Vector3::new(radius * theta.cos(), radius * theta.sin(), z)
 }
