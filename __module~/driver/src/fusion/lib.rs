@@ -148,7 +148,7 @@ pub struct FusionState {
     pub corrections: NineAxis<Correction>,
 
     // mag calibration state, will be used by all Fusion impls
-    pub mag: MagCalibrator<63>,
+    pub mag: MagCalibrator<255>,
 }
 
 const MIN_MAG_SCALE_DIVISOR: f32 = 1.0e-6;
