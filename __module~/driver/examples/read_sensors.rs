@@ -20,17 +20,17 @@ fn main() {
             GlassesEvent::AccGyro { accelerometer, gyroscope, timestamp } => {
                 let acc_frd = rub_to_frd(&accelerometer);
                 let gyr_frd = rub_to_frd(&gyroscope);
-                println!("AccGyro FRD: acc={:10.7} gyr={:10.7} ts={}", acc_frd.transpose(), gyr_frd.transpose(), timestamp);
-                println!("  - converted from: {:?}", event);
+                println!("AccGyro FRD: accelerometer:: {:?} gyroscope:: {:?} timestamp:={}", acc_frd, gyr_frd, timestamp);
+                println!("  - converted from raw {:?}", event);
             }
             GlassesEvent::Magnetometer { magnetometer, timestamp } => {
                 let mag_frd = rub_to_frd(&magnetometer);
-                println!("Magnetometer FRD: mag={:10.7} ts={}", mag_frd.transpose(), timestamp);
+                println!("Magnetometer FRD: mag={:?} timestamp={}", mag_frd, timestamp);
                 match fusion.getCalibratedMag(mag_frd) {
-                    Ok(calibrated) => println!("  calibrated (normalized): {:10.7}", calibrated.transpose()),
+                    Ok(calibrated) => println!("  calibrated (normalized): {:?}", calibrated),
                     Err(cause) => println!("  calibration unavailable: {:?}", cause),
                 }
-                println!("  - converted from: {:?}", event);
+                println!("  - converted from raw {:?}", event);
             }
             _ => {
                 println!("Raw event: {:?}", event);
