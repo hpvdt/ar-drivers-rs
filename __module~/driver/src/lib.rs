@@ -140,7 +140,7 @@ impl std::fmt::Display for Error {
 ///
 /// Coordinate system is "RUB": Positive X is Right, Positive Y is Up, Positive Z is backwards.
 /// This is the same as the Android sensor coordinate system.
-#[derive(Debug, Clone)]
+#[derive(derive_more::Debug, Clone)]
 pub enum GlassesEvent {
     /// Synchronized accelerometer and gyroscope data.
     AccGyro {
@@ -149,12 +149,24 @@ pub enum GlassesEvent {
         /// Remember that while gravitational acceleration is "down", the acceleration
         /// the device "feels" is the one opposite from that, so the normal reading
         /// when the device is upright is (0, 9.81, 0)
+        #[debug(
+            "[x={:+10.4}, y={:+10.4}, z={:+10.4}]",
+            accelerometer.x,
+            accelerometer.y,
+            accelerometer.z
+        )]
         accelerometer: Vector3<f32>,
         /// Gyroscope data. Right handed rotation in rad/sec,
         /// e.g. turning left is positive y axis.
         /// from left to right:
         /// pitch, yaw, roll
         /// Right, Up, Back (RUB)
+        #[debug(
+            "[x={:+10.4}, y={:+10.4}, z={:+10.4}]",
+            gyroscope.x,
+            gyroscope.y,
+            gyroscope.z
+        )]
         gyroscope: Vector3<f32>,
         /// Timestamp, in device time, in microseconds
         timestamp: u64,
@@ -162,6 +174,12 @@ pub enum GlassesEvent {
     /// Magnetometer data.
     Magnetometer {
         /// Direction of magnetic north (more or less). Unit is uT.
+        #[debug(
+            "[x={:+10.4}, y={:+10.4}, z={:+10.4}]",
+            magnetometer.x,
+            magnetometer.y,
+            magnetometer.z
+        )]
         magnetometer: Vector3<f32>,
         /// Timestamp, in device time, in microseconds
         timestamp: u64,

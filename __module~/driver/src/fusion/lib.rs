@@ -154,7 +154,7 @@ pub struct FusionState {
 const MIN_MAG_SCALE_DIVISOR: f32 = 1.0e-6;
 
 /// Reason a magnetometer vector could not produce a calibrated FRD reading.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, derive_more::Debug, PartialEq)]
 pub enum BadMagDataCause {
     /// The raw magnetometer vector is too small to be useful. TODO: this is actually not a problem as hard-iron zero can be very far
     // WeakRawReading {
@@ -168,15 +168,29 @@ pub enum BadMagDataCause {
     /// The accepted calibration cannot be safely applied.
     NumericallyUnstableCalibration {
         /// Calibration offset.
+        #[debug(
+            "[x={:+10.4}, y={:+10.4}, z={:+10.4}]",
+            offset.x,
+            offset.y,
+            offset.z
+        )]
         offset: Vector3<f32>,
         /// Calibration scale.
+        #[debug(
+            "[x={:+10.4}, y={:+10.4}, z={:+10.4}]",
+            scale.x,
+            scale.y,
+            scale.z
+        )]
         scale: Vector3<f32>,
     },
     /// The calibrated vector is too small to be useful.
     WeakCalibratedReading {
         /// Actual calibrated vector norm.
+        #[debug("{:+10.4}", norm)]
         norm: f32,
         /// Minimum accepted vector norm.
+        #[debug("{:+10.4}", min_norm)]
         min_norm: f32,
     },
 }
