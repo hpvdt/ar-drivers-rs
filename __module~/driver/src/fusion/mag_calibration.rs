@@ -118,8 +118,7 @@ impl<const N: usize> MagCalibrator<N> {
 
     /// Add a sample if it is deemed more useful than the least useful sample.
     pub fn evaluate_sample_vec(&mut self, x: Vector3<f32>) {
-        // Ensure all entries are normal (not Inf or NaN)
-        if !x.iter().all(|e| e.is_normal()) {
+        if !x.iter().all(|e| e.is_finite()) || x.norm_squared() <= f32::EPSILON {
             return;
         }
         // Check if buffer is not yet "initialized" with real measurements

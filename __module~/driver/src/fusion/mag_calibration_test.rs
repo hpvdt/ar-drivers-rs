@@ -68,6 +68,27 @@ fn mag_calibrator_clamps_k_and_excludes_self_distance() {
     assert!((mean_distance_after_replacement(99) - 51.666668).abs() < 0.001);
 }
 
+#[test]
+fn mag_calibrator_accepts_zero_components_and_rejects_bad_vectors() {
+    let mut calibrator = MagCalibrator::<6>::new();
+    for sample in [
+        Vector3::new(45.0, 0.0, -12.0),
+        Vector3::new(f32::NAN, 1.0, 1.0),
+        Vector3::new(f32::INFINITY, 1.0, 1.0),
+        Vector3::new(1.0e-8, 0.0, 0.0),
+    ] {
+        calibrator.evaluate_sample_vec(sample);
+    }
+
+    assert!(matches!(
+        calibrator.perform_calibration(),
+        Err(BadMagDataCause::InsufficientCalibrationSamples {
+            samples: 1,
+            required: 6
+        })
+    ));
+}
+
 fn mean_distance_after_replacement(k: usize) -> f32 {
     let mut calibrator = MagCalibrator::<4>::new().num_neighbors(k);
     for x in [1.0, 11.0, 21.0, 101.0] {
