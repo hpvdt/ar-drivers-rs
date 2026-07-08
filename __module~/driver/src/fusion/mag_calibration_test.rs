@@ -24,7 +24,42 @@ fn mag_calibrator_degenerate_data_does_not_panic() {
 
     assert!(matches!(
         calibrator.perform_calibration(),
-        Err(BadMagDataCause::DegenerateCalibrationSamples)
+        Err(BadMagDataCause::DegenerateCalibrationSamples {
+            rank: _,
+            required_rank: 6
+        })
+    ));
+}
+
+#[test]
+fn mag_calibrator_rejects_insufficient_samples() {
+    let mut calibrator = MagCalibrator::<6>::new();
+    for i in 0..5 {
+        calibrator.evaluate_sample_vec(Vector3::new(5.0 + i as f32, 6.0, 7.0));
+    }
+
+    assert!(matches!(
+        calibrator.perform_calibration(),
+        Err(BadMagDataCause::InsufficientCalibrationSamples {
+            samples: 5,
+            required: 6
+        })
+    ));
+}
+
+#[test]
+fn mag_calibrator_rejects_nearly_collinear_samples() {
+    let mut calibrator = MagCalibrator::<12>::new();
+    for i in 0..12 {
+        let t = i as f32 * 0.0001;
+        calibrator.evaluate_sample_vec(Vector3::new(10.0 + t, -5.0 + 2.0 * t, 3.0 + 0.5 * t));
+    }
+
+    assert!(matches!(
+        calibrator.perform_calibration(),
+        Err(BadMagDataCause::DegenerateCalibrationSamples {
+            ..
+        } | BadMagDataCause::IllConditionedCalibrationSamples { .. })
     ));
 }
 

@@ -2,7 +2,7 @@ use nalgebra::{UnitQuaternion, Vector3};
 
 use super::mag_calibration::MagCalibrator;
 use super::naive_cf::NaiveCF;
-use super::{mag_calibration_can_divide, FusionState, MIN_MAG_SCALE_DIVISOR};
+use super::{mag_calibration_can_divide, BadMagDataCause, FusionState, MIN_MAG_SCALE_DIVISOR};
 
 fn frd_to_rub(v: Vector3<f32>) -> Vector3<f32> {
     Vector3::new(v.y, -v.z, -v.x)
@@ -36,14 +36,34 @@ fn get_calibrated_mag_discards_unsafe_scale_divisor() {
 }
 
 #[test]
-fn get_calibrated_mag_discards_non_finite_calibration() {
+fn get_calibrated_mag_discards_underconstrained_calibration() {
     let mut state = FusionState::new(Box::new(crate::dummy::Dummy {}));
     let raw_mag = Vector3::new(5.0, 6.0, 7.0);
 
     assert!(matches!(
         state.getCalibratedMag(raw_mag),
-        Err(super::BadMagDataCause::NonFiniteCalibration { .. })
+        Err(BadMagDataCause::InsufficientCalibrationSamples {
+            samples: 1,
+            required: 6
+        })
     ));
+}
+
+#[test]
+fn update_mag_discards_ill_conditioned_calibration() {
+    let mut fusion = NaiveCF::new(Box::new(crate::dummy::Dummy {})).unwrap();
+    fusion.state.mag = nearly_collinear_calibrator();
+    fusion.state.attitude = UnitQuaternion::identity();
+    fusion.state.corrections.mag = Default::default();
+
+    let raw_mag = Vector3::new(10.0005, -4.9990, 3.00025);
+    let mag_rub = frd_to_rub(raw_mag);
+
+    fusion.update_mag(&mag_rub, 0);
+
+    assert_eq!(fusion.state.corrections.mag.prev, 0.0);
+    assert_eq!(fusion.state.corrections.mag.avg, 0.0);
+    assert!(fusion.state.attitude.angle() < 0.001);
 }
 
 // #[test]
@@ -62,6 +82,15 @@ fn seeded_calibrator(offset: Vector3<f32>, scale: Vector3<f32>) -> MagCalibrator
     for i in 0..255 {
         let direction = sample_direction(i);
         calibrator.evaluate_sample_vec(offset + scale.component_mul(&direction));
+    }
+    calibrator
+}
+
+fn nearly_collinear_calibrator() -> MagCalibrator<255> {
+    let mut calibrator = MagCalibrator::new();
+    for i in 0..255 {
+        let t = i as f32 * 0.0001;
+        calibrator.evaluate_sample_vec(Vector3::new(10.0 + t, -5.0 + 2.0 * t, 3.0 + 0.5 * t));
     }
     calibrator
 }

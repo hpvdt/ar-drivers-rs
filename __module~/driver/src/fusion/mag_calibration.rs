@@ -1,7 +1,11 @@
 // use core::cmp::Ordering;
-use nalgebra::{ComplexField, SMatrix, SMatrixView, Vector3};
+use nalgebra::{DMatrix, DVector, SMatrix, SMatrixView, Vector3, SVD};
 
 use super::BadMagDataCause;
+
+const DESIGN_MATRIX_COLUMNS: usize = 6;
+const SVD_EPSILON_RATIO: f32 = 1.0e-6;
+const MAX_SVD_CONDITION: f32 = 1.0e6;
 
 /// Lightweight least squares approach to
 /// determining the offset and scaling
@@ -144,24 +148,60 @@ impl<const N: usize> MagCalibrator<N> {
     pub fn perform_calibration(
         &mut self,
     ) -> std::result::Result<([f32; 3], [f32; 3]), BadMagDataCause> {
-        // Calculate column 4 and 5 of H matrix
-        self.matrix.row_iter_mut().for_each(|mut mag| {
-            mag[3] = -mag[1] * mag[1];
-            mag[4] = -mag[2] * mag[2];
+        let sample_count = self.matrix_filled.min(N);
+        if sample_count < DESIGN_MATRIX_COLUMNS {
+            return Err(BadMagDataCause::InsufficientCalibrationSamples {
+                samples: sample_count,
+                required: DESIGN_MATRIX_COLUMNS,
+            });
+        }
+
+        // Calculate column 4 and 5 of H matrix for the real samples only.
+        self.matrix
+            .row_iter_mut()
+            .take(sample_count)
+            .for_each(|mut mag| {
+                mag[3] = -mag[1] * mag[1];
+                mag[4] = -mag[2] * mag[2];
+            });
+
+        let design = DMatrix::from_fn(sample_count, DESIGN_MATRIX_COLUMNS, |row, col| {
+            self.matrix[(row, col)]
+        });
+        let w = DVector::from_fn(sample_count, |row, _| {
+            self.matrix[(row, 0)] * self.matrix[(row, 0)]
         });
 
-        // Calculate W vector
-        let mut w: SMatrix<f32, N, 1> = SMatrix::from_element(0.0);
-        self.matrix
-            .row_iter()
-            .enumerate()
-            .for_each(|(i, row)| w[i] = row[0] * row[0]);
+        let svd = SVD::new(design, true, true);
+        let singular_values = svd.singular_values.as_slice();
+        let max_singular_value = singular_values[0];
+        let min_singular_value = singular_values[DESIGN_MATRIX_COLUMNS - 1];
+        let epsilon = max_singular_value * SVD_EPSILON_RATIO;
 
-        // Perform least squares using pseudo inverse
-        let inverse = (self.matrix.transpose() * self.matrix)
-            .try_inverse()
-            .ok_or(BadMagDataCause::DegenerateCalibrationSamples)?;
-        let x = inverse * self.matrix.transpose() * w;
+        let rank = svd.rank(epsilon);
+        if !max_singular_value.is_finite()
+            || max_singular_value <= 0.0
+            || rank < DESIGN_MATRIX_COLUMNS
+        {
+            return Err(BadMagDataCause::DegenerateCalibrationSamples {
+                rank,
+                required_rank: DESIGN_MATRIX_COLUMNS,
+            });
+        }
+
+        let condition = max_singular_value / min_singular_value;
+        if !condition.is_finite() || condition > MAX_SVD_CONDITION {
+            return Err(BadMagDataCause::IllConditionedCalibrationSamples {
+                condition,
+                max_condition: MAX_SVD_CONDITION,
+            });
+        }
+
+        // Solve the least-squares system with a Moore-Penrose pseudo-inverse.
+        let pseudo_inverse = svd
+            .pseudo_inverse(epsilon)
+            .map_err(|message| BadMagDataCause::CalibrationSolveFailed { message })?;
+        let x = pseudo_inverse * w;
 
         // Calculate offsets and scale factors
         let off = [x[0] / 2., x[1] / (2. * x[3]), x[2] / (2. * x[4])];

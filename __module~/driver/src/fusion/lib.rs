@@ -163,8 +163,34 @@ pub enum BadMagDataCause {
     //     /// Minimum accepted vector norm.
     //     min_norm: f32,
     // },
-    /// The accepted samples cannot produce an invertible calibration solve.
-    DegenerateCalibrationSamples,
+    /// Not enough accepted samples have been collected for the calibration model.
+    InsufficientCalibrationSamples {
+        /// Number of accepted samples currently available.
+        samples: usize,
+        /// Minimum number of samples required by the calibration model.
+        required: usize,
+    },
+    /// The accepted samples cannot span the calibration model.
+    DegenerateCalibrationSamples {
+        /// Effective rank of the calibration design matrix.
+        rank: usize,
+        /// Minimum rank required by the calibration model.
+        required_rank: usize,
+    },
+    /// The SVD-based calibration solve failed after the sample checks passed.
+    CalibrationSolveFailed {
+        /// Original rejection message.
+        message: &'static str,
+    },
+    /// The accepted samples produce a numerically unstable calibration solve.
+    IllConditionedCalibrationSamples {
+        /// Estimated condition number of the calibration design matrix.
+        #[debug("{:+10.4}", condition)]
+        condition: f32,
+        /// Maximum accepted condition number.
+        #[debug("{:+10.4}", max_condition)]
+        max_condition: f32,
+    },
     /// The calibration solve produced a non-finite offset or scale.
     NonFiniteCalibration {
         /// Calibration offset.
