@@ -57,10 +57,24 @@ fn mag_calibrator_rejects_nearly_collinear_samples() {
 
     assert!(matches!(
         calibrator.perform_calibration(),
-        Err(BadMagDataCause::DegenerateCalibrationSamples {
-            ..
-        } | BadMagDataCause::IllConditionedCalibrationSamples { .. })
+        Err(BadMagDataCause::DegenerateCalibrationSamples { .. }
+            | BadMagDataCause::IllConditionedCalibrationSamples { .. })
     ));
+}
+
+#[test]
+fn mag_calibrator_clamps_k_and_excludes_self_distance() {
+    assert!((mean_distance_after_replacement(0) - 27.5).abs() < 0.001);
+    assert!((mean_distance_after_replacement(99) - 51.666668).abs() < 0.001);
+}
+
+fn mean_distance_after_replacement(k: usize) -> f32 {
+    let mut calibrator = MagCalibrator::<4>::new().num_neighbors(k);
+    for x in [1.0, 11.0, 21.0, 101.0] {
+        calibrator.evaluate_sample_vec(Vector3::new(x, 1.0, 1.0));
+    }
+    calibrator.evaluate_sample_vec(Vector3::new(201.0, 1.0, 1.0));
+    calibrator.get_mean_distance()
 }
 
 fn seeded_calibrator<const N: usize>(

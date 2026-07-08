@@ -43,7 +43,10 @@ impl<const N: usize> MagCalibrator<N> {
 
     /// Configure the number of `k` neighbors to calculate distance to.
     pub fn num_neighbors(self, k: usize) -> Self {
-        Self { k, ..self }
+        Self {
+            k: k.clamp(1, N.saturating_sub(1).max(1)),
+            ..self
+        }
     }
 
     /// Configure sample pre scaler, prevents ill-conditioning if given
@@ -66,11 +69,16 @@ impl<const N: usize> MagCalibrator<N> {
 
         // Sort floats and return mean distance to nearest neighbors
         squared_dists.sort_unstable_by(|a, b| a.total_cmp(b));
+        let k = self.k.min(N.saturating_sub(1));
+        if k == 0 {
+            return f32::INFINITY;
+        }
         squared_dists
             .iter()
-            .take(self.k + 1)
+            .skip(1)
+            .take(k)
             .rfold(0., |a, &b| a + b)
-            / N as f32
+            / k as f32
     }
 
     /// Calculates mean squared distance to the `k` nearest neighbors

@@ -10,8 +10,3 @@
     - Samples are divided by `pre_scaler` before storage, but returned offsets and scales are not converted back.
     - Define the intended unit contract for `pre_scaler` and adjust returned offset/scale values accordingly.
     - Add a test that changing `pre_scaler` does not silently change physical calibration units.
-
-- [ ] Fix k-nearest-neighbor distance calculation
-    - `mean_distance_from_single` includes self-distance for existing rows, excludes it for new samples, and divides by `N` instead of the neighbor count.
-    - Compute the mean over exactly `k` comparable neighbors, with consistent handling for existing and candidate samples.
-    - Clamp or reject invalid `k` values so the method has defined behavior.
