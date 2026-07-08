@@ -2,38 +2,52 @@
 
 ## Compass calibration follow-ups
 
-These tasks should revise the fusion integration layer, not `mag_calibration.rs`.
-`MagCalibrator` is maintained separately; keep offset/scale interpretation and
-runtime discard policy in `FusionState`.
+These tasks should keep the runtime discard policy in `FusionState`, but may
+revise `MagCalibrator` when the validity check depends on the calibration solve
+itself.
 
-### 1. Avoid solving before enough magnetometer samples have been submitted
+### 1. Reject ill-conditioned magnetometer calibration solves
 
 Current code to revise:
 
-- `src/fusion/lib.rs`, `FusionState::getCalibratedMag`
+- `src/fusion/mag_calibration.rs`, `MagCalibrator::perform_calibration`
 - Specifically the sequence:
-  `self.mag.evaluate_sample_vec(raw_mag);`
-  followed immediately by `self.mag.perform_calibration();`
+  `(self.matrix.transpose() * self.matrix).try_inverse()`
+  followed by applying that inverse to the least-squares right-hand side.
+- `src/fusion/lib.rs`, `FusionState::getCalibratedMag`
+- Specifically its handling of `self.mag.perform_calibration()?`
 
 Problem:
 
-`FusionState::getCalibratedMag` calls `perform_calibration()` on every accepted compass
-reading. `MagCalibrator` may return `None` for failed solves, but it does not
-expose whether the fixed-size buffer has been filled with real samples, so early
-successful solves may still be based partly on default matrix rows.
+The current rejection criterion is only whether the normal-equation matrix can
+be inverted with `try_inverse()`. That rejects singular sample sets, but it can
+still accept extremely ill-conditioned solves. A small fixed-size buffer can be
+filled quickly with samples concentrated in one direction or one small region;
+such data may produce an invertible matrix while still giving a poorly
+constrained offset/scale estimate.
 
 Expected revision:
 
-Add readiness tracking in `FusionState`, next to the existing `mag:
-MagCalibrator<63>` field. Initialize it in `FusionState::new`, update it in
-`FusionState::getCalibratedMag` after a raw sample passes the `MIN_MAG_NORM`
-check, and only call `perform_calibration()` after the readiness policy says
-calibration is allowed. If the policy is not ready, `getCalibratedMag` should
-return `None` so the raw magnetometer reading is discarded as a heading input.
+Before accepting a calibration result, compute a numerical conditioning measure
+for the same normal-equation matrix used by the current solver. Because the
+implementation currently uses `try_inverse()` and not SVD, start with a
+condition proxy such as `normal.norm() * inverse.norm()` after
+`try_inverse()` succeeds, with an empirically chosen maximum condition number.
+If the matrix is singular or exceeds that conditioning threshold,
+`perform_calibration()` should return a `BadMagDataCause` and
+`FusionState::getCalibratedMag` should continue discarding the raw
+magnetometer reading as heading input.
+
+Do not replace this with a simple "number of accepted samples" gate. A full
+buffer is not enough evidence that the calibration problem is observable; the
+accepted samples must also span enough independent directions to produce a
+stable solve. If the solver is later changed to QR or SVD, move the criterion to
+the decomposition's rank/condition information instead of keeping the
+normal-equation proxy.
 
 Tests to update or add:
 
-- `src/fusion/naive_cf_test.rs`: verify early magnetometer updates are discarded
-  until calibration readiness allows a solve.
-- `src/fusion/mag_calibration_test.rs`: keep tests focused on existing
-  `MagCalibrator` behavior; do not add readiness state to `MagCalibrator`.
+- `src/fusion/mag_calibration_test.rs`: add concentrated or nearly collinear
+  sample sets that are not accepted as valid calibration solves.
+- `src/fusion/naive_cf_test.rs`: verify that an ill-conditioned calibration
+  result is discarded and does not update heading correction.
