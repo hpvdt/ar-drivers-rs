@@ -211,21 +211,21 @@ impl<const N: usize> MagCalibrator<N> {
         let x = pseudo_inverse * w;
 
         // Calculate offsets and scale factors
-        let off = [x[0] / 2., x[1] / (2. * x[3]), x[2] / (2. * x[4])];
-        let temp = x[5] + (off[0] * off[0]) + x[3] * (off[1] * off[1]) + x[4] * (off[2] * off[2]);
+        let offset = [x[0] / 2., x[1] / (2. * x[3]), x[2] / (2. * x[4])];
+        let temp = x[5] + (offset[0] * offset[0]) + x[3] * (offset[1] * offset[1]) + x[4] * (offset[2] * offset[2]);
         let scale = [temp.sqrt(), (temp / x[3]).sqrt(), (temp / x[4]).sqrt()];
 
         // Check that off and scale vectors contain valid values
-        for component in off.iter().chain(scale.iter()) {
+        for component in offset.iter().chain(scale.iter()) {
             if !component.is_finite() {
                 return Err(BadMagDataCause::NonFiniteCalibration {
-                    offset: Vector3::from(off),
+                    offset: Vector3::from(offset),
                     scale: Vector3::from(scale),
                 });
             }
         }
 
         // TODO Add option for low-pass filtering this result
-        Ok((off, scale))
+        Ok((offset, scale))
     }
 }

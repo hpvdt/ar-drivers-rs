@@ -286,6 +286,11 @@ impl NaiveCF {
             None => raw,
         }
     }
+
+    fn renormalize(&mut self) {
+        // self.attitude.renormalize_fast(); // TODO: switch to it after rigorous testing
+        self.state.attitude.renormalize();
+    }
 }
 
 //unsafe impl Sync for NaiveCF {}
@@ -313,8 +318,7 @@ impl Fusion for NaiveCF {
             } => {
                 self.update_gyro_rub(&gyroscope, timestamp);
                 self.update_acc(&accelerometer, timestamp);
-                self.state.attitude.renormalize();
-                // self.attitude.renormalize_fast(); // TODO: switch to it after rigorous testing
+                self.renormalize();
             }
 
             GlassesEvent::Magnetometer {
@@ -322,9 +326,11 @@ impl Fusion for NaiveCF {
                 timestamp,
             } => {
                 self.update_mag(&magnetometer, timestamp);
+                self.renormalize();
             }
 
             _ => {}
         }
+
     }
 }
