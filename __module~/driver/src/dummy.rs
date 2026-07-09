@@ -1,38 +1,306 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+//! Deterministic simulated AR glasses for integration tests.
 
-use nalgebra::{Isometry3, Vector3};
+use std::f32::consts::PI;
 
-use crate::{ARGlasses, DisplayMode, GlassesEvent, Side};
+use nalgebra::{Isometry3, Matrix3, UnitQuaternion, Vector3};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+use rand_distr::{Distribution, Normal};
 
+use crate::{ARGlasses, DisplayMode, GlassesEvent, Result, Side};
+
+/// The physical gravity direction for a level stationary fixture in RUB.
+pub static GRAVITY_DOWN: Vector3<f32> = Vector3::new(0.0, -9.81, 0.0);
+
+/// The felt acceleration direction for a level stationary fixture in RUB.
 pub static GRAVITY_UP: Vector3<f32> = Vector3::new(0.0, 9.81, 0.0);
+
+/// A zero sensor vector.
 pub static ZERO: Vector3<f32> = Vector3::new(0.0, 0.0, 0.0);
 
-pub struct Dummy {}
+const DEFAULT_SEED: u64 = 0xA15E_D00D_5EED_0001;
+const MAX_MAGNETIC_DIP_RAD: f32 = PI / 6.0;
+const SECONDS_PER_MINUTE: f32 = 60.0;
+const MICROS_PER_SECOND: f32 = 1_000_000.0;
 
-impl Dummy {}
+/// Configuration for [`Dummy`].
+#[derive(Clone, Debug)]
+pub struct DummyConfig {
+    /// Seed for all deterministic random sampling.
+    pub seed: u64,
+    /// Virtual elapsed time between emitted sensor events, in microseconds.
+    pub event_period_us: u64,
+    /// Maximum absolute angular body rate per RUB axis, in rotations per minute.
+    pub max_body_rate_rpm: f32,
+    /// Standard deviation for linear jerk sampling, in m/s^3.
+    pub linear_jerk_std_dev: f32,
+    /// Exponential damping applied to linear acceleration, in 1/s.
+    pub linear_accel_damping: f32,
+    /// Exponential damping applied to linear velocity, in 1/s.
+    pub linear_velocity_damping: f32,
+    /// Maximum magnitude of simulated linear acceleration, in m/s^2.
+    pub max_linear_accel: f32,
+    /// Maximum magnitude of simulated linear velocity, in m/s.
+    pub max_linear_velocity: f32,
+    /// Gyroscope Gaussian noise standard deviation, in rad/s.
+    pub gyro_noise_std_dev: f32,
+    /// Accelerometer Gaussian noise standard deviation, in m/s^2.
+    pub acc_noise_std_dev: f32,
+    /// Magnetometer Gaussian noise standard deviation, in microtesla.
+    pub mag_noise_std_dev: f32,
+    /// Magnetic field magnitude, in microtesla.
+    pub magnetic_field_strength: f32,
+    /// Magnetic field vertical dip from the horizon, clamped to +/-30 degrees.
+    pub magnetic_dip_rad: f32,
+    /// Base hard-iron magnetometer offset, in microtesla.
+    pub hard_iron_base: Vector3<f32>,
+    /// Slow hard-iron drift amplitude, in microtesla.
+    pub hard_iron_drift: Vector3<f32>,
+    /// Base soft-iron magnetometer distortion matrix.
+    pub soft_iron_base: Matrix3<f32>,
+    /// Slow soft-iron distortion drift amplitude.
+    pub soft_iron_drift: Matrix3<f32>,
+    /// Period for one full hard/soft iron drift cycle, in microseconds.
+    pub distortion_drift_period_us: u64,
+}
+
+impl Default for DummyConfig {
+    fn default() -> Self {
+        Self {
+            seed: DEFAULT_SEED,
+            event_period_us: 10_000,
+            max_body_rate_rpm: 1.0,
+            linear_jerk_std_dev: 1.2,
+            linear_accel_damping: 0.8,
+            linear_velocity_damping: 0.25,
+            max_linear_accel: 3.0,
+            max_linear_velocity: 2.0,
+            gyro_noise_std_dev: 0.002,
+            acc_noise_std_dev: 0.12,
+            mag_noise_std_dev: 1.5,
+            magnetic_field_strength: 50.0,
+            magnetic_dip_rad: 20.0f32.to_radians(),
+            hard_iron_base: Vector3::new(24.0, -18.0, 12.0),
+            hard_iron_drift: Vector3::new(2.0, 1.5, 2.5),
+            soft_iron_base: Matrix3::new(1.30, 0.18, -0.08, 0.06, 0.75, 0.12, -0.10, 0.16, 1.18),
+            soft_iron_drift: Matrix3::new(
+                0.030, -0.012, 0.010, -0.008, 0.020, -0.009, 0.011, -0.010, 0.025,
+            ),
+            distortion_drift_period_us: 5 * 60 * 1_000_000,
+        }
+    }
+}
+
+/// Current internal state of a [`Dummy`] fixture.
+#[derive(Clone, Debug)]
+pub struct DummySnapshot {
+    /// Current virtual time, in microseconds.
+    pub timestamp_us: u64,
+    /// Whether the next emitted event will be `GlassesEvent::AccGyro`.
+    pub next_event_is_acc_gyro: bool,
+    /// Current body-to-world attitude in RUB coordinates.
+    pub attitude: UnitQuaternion<f32>,
+    /// Current world-frame position in RUB coordinates, in meters.
+    pub position: Vector3<f32>,
+    /// Current world-frame velocity in RUB coordinates, in m/s.
+    pub velocity: Vector3<f32>,
+    /// Current world-frame linear acceleration in RUB coordinates, in m/s^2.
+    pub acceleration: Vector3<f32>,
+    /// Most recent world-frame jerk sample in RUB coordinates, in m/s^3.
+    pub jerk: Vector3<f32>,
+    /// Fixed RUB angular body rate used by the simulator, in rad/s.
+    pub angular_rate_rub: Vector3<f32>,
+    /// Current display mode stored by the fixture.
+    pub display_mode: DisplayMode,
+    /// Current hard-iron magnetometer offset, in microtesla.
+    pub hard_iron: Vector3<f32>,
+    /// Current soft-iron magnetometer distortion matrix.
+    pub soft_iron: Matrix3<f32>,
+}
+
+/// Public deterministic AR glasses simulator.
+pub struct Dummy {
+    config: DummyConfig,
+    rng: StdRng,
+    attitude: UnitQuaternion<f32>,
+    position: Vector3<f32>,
+    velocity: Vector3<f32>,
+    acceleration: Vector3<f32>,
+    jerk: Vector3<f32>,
+    angular_rate_rub: Vector3<f32>,
+    timestamp_us: u64,
+    next_event_is_acc_gyro: bool,
+    display_mode: DisplayMode,
+}
+
+impl Dummy {
+    /// Creates a deterministic dummy fixture with default configuration.
+    pub fn new() -> Self {
+        Self::with_config(DummyConfig::default())
+    }
+
+    /// Creates a deterministic dummy fixture using `seed` and default dynamics.
+    pub fn with_seed(seed: u64) -> Self {
+        Self::with_config(DummyConfig {
+            seed,
+            ..DummyConfig::default()
+        })
+    }
+
+    /// Creates a deterministic dummy fixture using the provided configuration.
+    pub fn with_config(config: DummyConfig) -> Self {
+        let config = normalize_config(config);
+        let mut rng = StdRng::seed_from_u64(config.seed);
+        let angular_rate_rub = sample_angular_rate(&mut rng, config.max_body_rate_rpm);
+
+        Self {
+            config,
+            rng,
+            attitude: UnitQuaternion::identity(),
+            position: ZERO,
+            velocity: ZERO,
+            acceleration: ZERO,
+            jerk: ZERO,
+            angular_rate_rub,
+            timestamp_us: 0,
+            next_event_is_acc_gyro: true,
+            display_mode: DisplayMode::SameOnBoth,
+        }
+    }
+
+    /// Returns a copy of the fixture's current internal state.
+    pub fn snapshot(&self) -> DummySnapshot {
+        DummySnapshot {
+            timestamp_us: self.timestamp_us,
+            next_event_is_acc_gyro: self.next_event_is_acc_gyro,
+            attitude: self.attitude,
+            position: self.position,
+            velocity: self.velocity,
+            acceleration: self.acceleration,
+            jerk: self.jerk,
+            angular_rate_rub: self.angular_rate_rub,
+            display_mode: self.display_mode,
+            hard_iron: self.current_hard_iron(),
+            soft_iron: self.current_soft_iron(),
+        }
+    }
+
+    fn advance_state(&mut self) {
+        let dt = self.config.event_period_us as f32 / MICROS_PER_SECOND;
+        self.timestamp_us = self
+            .timestamp_us
+            .saturating_add(self.config.event_period_us);
+
+        let rotation_increment = UnitQuaternion::from_scaled_axis(self.angular_rate_rub * dt);
+        self.attitude *= rotation_increment;
+        self.attitude.renormalize();
+
+        self.jerk = self.sample_noise_vec(self.config.linear_jerk_std_dev);
+        self.acceleration += self.jerk * dt;
+        self.acceleration *= damping_factor(self.config.linear_accel_damping, dt);
+        self.acceleration = clamp_norm(self.acceleration, self.config.max_linear_accel);
+
+        self.velocity += self.acceleration * dt;
+        self.velocity *= damping_factor(self.config.linear_velocity_damping, dt);
+        self.velocity = clamp_norm(self.velocity, self.config.max_linear_velocity);
+
+        self.position += self.velocity * dt;
+    }
+
+    fn accelerometer_reading(&mut self) -> Vector3<f32> {
+        let felt_acceleration = GRAVITY_UP + self.acceleration;
+        let body_acceleration = self.attitude.inverse() * felt_acceleration;
+        body_acceleration + self.sample_noise_vec(self.config.acc_noise_std_dev)
+    }
+
+    fn gyroscope_reading(&mut self) -> Vector3<f32> {
+        self.angular_rate_rub + self.sample_noise_vec(self.config.gyro_noise_std_dev)
+    }
+
+    fn magnetometer_reading(&mut self) -> Vector3<f32> {
+        let magnetic_world = self.magnetic_north_world_rub();
+        let ideal_body = self.attitude.inverse() * magnetic_world;
+        let distorted = self.current_soft_iron() * ideal_body + self.current_hard_iron();
+
+        distorted + self.sample_noise_vec(self.config.mag_noise_std_dev)
+    }
+
+    fn magnetic_north_world_rub(&self) -> Vector3<f32> {
+        let dip = self
+            .config
+            .magnetic_dip_rad
+            .clamp(-MAX_MAGNETIC_DIP_RAD, MAX_MAGNETIC_DIP_RAD);
+        Vector3::new(0.0, dip.sin(), -dip.cos()) * self.config.magnetic_field_strength
+    }
+
+    fn current_hard_iron(&self) -> Vector3<f32> {
+        let phase = self.drift_phase();
+        let drift_shape = Vector3::new(
+            phase.sin(),
+            (phase * 0.73 + 1.1).sin(),
+            (phase * 0.37 + 2.3).sin(),
+        );
+
+        self.config.hard_iron_base + self.config.hard_iron_drift.component_mul(&drift_shape)
+    }
+
+    fn current_soft_iron(&self) -> Matrix3<f32> {
+        self.config.soft_iron_base + self.config.soft_iron_drift * self.drift_phase().sin()
+    }
+
+    fn drift_phase(&self) -> f32 {
+        let period = self.config.distortion_drift_period_us as f32;
+        2.0 * PI * self.timestamp_us as f32 / period
+    }
+
+    fn sample_noise_vec(&mut self, std_dev: f32) -> Vector3<f32> {
+        Vector3::new(
+            sample_noise(&mut self.rng, std_dev),
+            sample_noise(&mut self.rng, std_dev),
+            sample_noise(&mut self.rng, std_dev),
+        )
+    }
+}
+
+impl Default for Dummy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ARGlasses for Dummy {
-    fn serial(&mut self) -> crate::Result<String> {
+    fn serial(&mut self) -> Result<String> {
         Ok(String::from("dummy!"))
     }
 
-    fn read_event(&mut self) -> crate::Result<GlassesEvent> {
-        let result = GlassesEvent::AccGyro {
-            accelerometer: GRAVITY_UP,
-            gyroscope: ZERO,
-            timestamp: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+    fn read_event(&mut self) -> Result<GlassesEvent> {
+        let timestamp = self.timestamp_us;
+        let result = if self.next_event_is_acc_gyro {
+            self.next_event_is_acc_gyro = false;
+            GlassesEvent::AccGyro {
+                accelerometer: self.accelerometer_reading(),
+                gyroscope: self.gyroscope_reading(),
+                timestamp,
+            }
+        } else {
+            self.next_event_is_acc_gyro = true;
+            GlassesEvent::Magnetometer {
+                magnetometer: self.magnetometer_reading(),
+                timestamp,
+            }
         };
+
+        self.advance_state();
+
         Ok(result)
     }
 
-    fn get_display_mode(&mut self) -> crate::Result<DisplayMode> {
-        Ok(DisplayMode::SameOnBoth)
+    fn get_display_mode(&mut self) -> Result<DisplayMode> {
+        Ok(self.display_mode)
     }
 
-    fn set_display_mode(&mut self, _display_mode: DisplayMode) -> crate::Result<()> {
+    fn set_display_mode(&mut self, display_mode: DisplayMode) -> Result<()> {
+        self.display_mode = display_mode;
         Ok(())
     }
 
@@ -41,7 +309,7 @@ impl ARGlasses for Dummy {
     }
 
     fn imu_to_display_matrix(&self, _side: Side, _ipd: f32) -> Isometry3<f64> {
-        todo!()
+        Isometry3::identity()
     }
 
     fn name(&self) -> &'static str {
@@ -50,5 +318,162 @@ impl ARGlasses for Dummy {
 
     fn display_delay(&self) -> u64 {
         0
+    }
+}
+
+fn normalize_config(mut config: DummyConfig) -> DummyConfig {
+    config.event_period_us = config.event_period_us.max(1);
+    config.max_body_rate_rpm = config.max_body_rate_rpm.max(0.0);
+    config.linear_jerk_std_dev = config.linear_jerk_std_dev.max(0.0);
+    config.linear_accel_damping = config.linear_accel_damping.max(0.0);
+    config.linear_velocity_damping = config.linear_velocity_damping.max(0.0);
+    config.max_linear_accel = config.max_linear_accel.max(0.0);
+    config.max_linear_velocity = config.max_linear_velocity.max(0.0);
+    config.gyro_noise_std_dev = config.gyro_noise_std_dev.max(0.0);
+    config.acc_noise_std_dev = config.acc_noise_std_dev.max(0.0);
+    config.mag_noise_std_dev = config.mag_noise_std_dev.max(0.0);
+    config.magnetic_field_strength = config.magnetic_field_strength.abs();
+    config.magnetic_dip_rad = config
+        .magnetic_dip_rad
+        .clamp(-MAX_MAGNETIC_DIP_RAD, MAX_MAGNETIC_DIP_RAD);
+    config.distortion_drift_period_us = config.distortion_drift_period_us.max(1);
+
+    config
+}
+
+fn sample_angular_rate(rng: &mut StdRng, max_body_rate_rpm: f32) -> Vector3<f32> {
+    let max_rad_per_sec = max_body_rate_rpm * 2.0 * PI / SECONDS_PER_MINUTE;
+
+    if max_rad_per_sec <= 0.0 {
+        return ZERO;
+    }
+
+    Vector3::new(
+        sample_axis_rate(rng, max_rad_per_sec),
+        sample_axis_rate(rng, max_rad_per_sec),
+        sample_axis_rate(rng, max_rad_per_sec),
+    )
+}
+
+fn sample_axis_rate(rng: &mut StdRng, max_rad_per_sec: f32) -> f32 {
+    rng.gen_range(f32::EPSILON..=max_rad_per_sec)
+}
+
+fn sample_noise(rng: &mut StdRng, std_dev: f32) -> f32 {
+    if std_dev <= 0.0 || !std_dev.is_finite() {
+        return 0.0;
+    }
+
+    Normal::new(0.0, std_dev as f64)
+        .map(|normal| normal.sample(rng) as f32)
+        .unwrap_or(0.0)
+}
+
+fn damping_factor(rate: f32, dt: f32) -> f32 {
+    (-rate * dt).exp()
+}
+
+fn clamp_norm(v: Vector3<f32>, max_norm: f32) -> Vector3<f32> {
+    let norm = v.norm();
+    if max_norm > 0.0 && norm > max_norm {
+        v * (max_norm / norm)
+    } else {
+        v
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fusion::rub_to_frd;
+
+    fn quiet_config() -> DummyConfig {
+        DummyConfig {
+            max_body_rate_rpm: 0.0,
+            linear_jerk_std_dev: 0.0,
+            gyro_noise_std_dev: 0.0,
+            acc_noise_std_dev: 0.0,
+            mag_noise_std_dev: 0.0,
+            magnetic_dip_rad: 0.0,
+            hard_iron_base: ZERO,
+            hard_iron_drift: ZERO,
+            soft_iron_base: Matrix3::identity(),
+            soft_iron_drift: Matrix3::zeros(),
+            ..DummyConfig::default()
+        }
+    }
+
+    #[test]
+    fn starts_level_with_felt_gravity_up_frd() {
+        let mut dummy = Dummy::with_config(quiet_config());
+
+        match dummy.read_event().unwrap() {
+            GlassesEvent::AccGyro {
+                accelerometer,
+                timestamp,
+                ..
+            } => {
+                assert_eq!(timestamp, 0);
+                let acc_frd = rub_to_frd(&accelerometer);
+                let expected = Vector3::new(0.0, 0.0, -9.81);
+
+                assert!(
+                    (acc_frd - expected).norm() < 1.0e-5,
+                    "acc_frd={:?}",
+                    acc_frd
+                );
+            }
+            event => panic!("expected AccGyro, got {:?}", event),
+        }
+    }
+
+    #[test]
+    fn starts_with_magnetic_north_forward_frd() {
+        let mut dummy = Dummy::with_config(quiet_config());
+        let _ = dummy.read_event().unwrap();
+
+        match dummy.read_event().unwrap() {
+            GlassesEvent::Magnetometer {
+                magnetometer,
+                timestamp,
+            } => {
+                assert_eq!(timestamp, 10_000);
+                let mag_frd = rub_to_frd(&magnetometer);
+                let expected = Vector3::new(50.0, 0.0, 0.0);
+
+                assert!(
+                    (mag_frd - expected).norm() < 1.0e-5,
+                    "mag_frd={:?}",
+                    mag_frd
+                );
+            }
+            event => panic!("expected Magnetometer, got {:?}", event),
+        }
+    }
+
+    #[test]
+    fn default_hard_iron_bias_is_under_50_microtesla() {
+        let hard_iron = Dummy::new().snapshot().hard_iron;
+
+        assert!(
+            hard_iron.norm() < 50.0,
+            "hard_iron={:?}, norm={}",
+            hard_iron,
+            hard_iron.norm()
+        );
+    }
+
+    #[test]
+    fn default_gyro_body_rates_are_nonnegative() {
+        let angular_rate = Dummy::new().snapshot().angular_rate_rub;
+        let max_rad_per_sec = 6.0 * 2.0 * PI / SECONDS_PER_MINUTE;
+
+        for component in angular_rate.iter() {
+            assert!(
+                *component >= 0.0 && *component <= max_rad_per_sec,
+                "angular_rate={:?}",
+                angular_rate
+            );
+        }
     }
 }
