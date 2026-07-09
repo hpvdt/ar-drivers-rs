@@ -51,6 +51,10 @@ impl<const N: usize> MagCalibrator<N> {
 
     /// Configure sample pre scaler, prevents ill-conditioning if given
     /// a value close to the expected magnitude of the magnetic field strength.
+    /// This is an internal numerical aid only: it scales samples before the
+    /// least-squares fit and is undone before returning, so the offset and scale
+    /// from `perform_calibration` are always in the same units as the raw samples
+    /// and are unaffected by this value.
     pub fn pre_scaler(self, pre_scaler: f32) -> Self {
         Self { pre_scaler, ..self }
     }
@@ -210,22 +214,25 @@ impl<const N: usize> MagCalibrator<N> {
             .map_err(|message| BadMagDataCause::CalibrationSolveFailed { message })?;
         let x = pseudo_inverse * w;
 
-        // Calculate offsets and scale factors
-        let offset = [x[0] / 2., x[1] / (2. * x[3]), x[2] / (2. * x[4])];
-        let temp = x[5] + (offset[0] * offset[0]) + x[3] * (offset[1] * offset[1]) + x[4] * (offset[2] * offset[2]);
-        let scale = [temp.sqrt(), (temp / x[3]).sqrt(), (temp / x[4]).sqrt()];
+        // Calculate offsets and scale factors in pre-scaled sample units.
+        let offset = Vector3::new(x[0] / 2., x[1] / (2. * x[3]), x[2] / (2. * x[4]));
+        let temp = x[5] + offset[0] * offset[0] + x[3] * offset[1] * offset[1] + x[4] * offset[2] * offset[2];
+        let scale = Vector3::new(temp.sqrt(), (temp / x[3]).sqrt(), (temp / x[4]).sqrt());
+
+        // Samples are divided by `pre_scaler` before storage, so the fit is in
+        // pre-scaled units. Convert offset and scale back to caller-visible (raw)
+        // units so `(raw - offset) / scale` operates in the same units as the input.
+        let offset = offset * self.pre_scaler;
+        let scale = scale * self.pre_scaler;
 
         // Check that off and scale vectors contain valid values
         for component in offset.iter().chain(scale.iter()) {
             if !component.is_finite() {
-                return Err(BadMagDataCause::NonFiniteCalibration {
-                    offset: Vector3::from(offset),
-                    scale: Vector3::from(scale),
-                });
+                return Err(BadMagDataCause::NonFiniteCalibration { offset, scale });
             }
         }
 
         // TODO Add option for low-pass filtering this result
-        Ok((offset, scale))
+        Ok((offset.into(), scale.into()))
     }
 }

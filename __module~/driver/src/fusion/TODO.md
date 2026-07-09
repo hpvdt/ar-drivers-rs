@@ -1,11 +1,6 @@
 
 ## Tasks
 
-- [ ] Return calibration values in caller-visible units
-    - Samples are divided by `pre_scaler` before storage, but returned offsets and scales are not converted back.
-    - Define the intended unit contract for `pre_scaler` and adjust returned offset/scale values accordingly.
-    - Add a test that changing `pre_scaler` does not silently change physical calibration units.
-
 - [ ] Replace axis-aligned magnetometer error-state estimation with an SPD full soft-iron model
     - Scope this change to the calibration/error-state solve and the representation it returns. Keep sample validation, buffering, KNN diversity scoring, and eviction behavior in `MagCalibrator` intact.
     - Replace the current `(offset: [f32; 3], scale: [f32; 3])` diagonal model with `(offset: Vector3<f32>, correction: Matrix3<f32>)`, where the correction is derived from a symmetric positive definite ellipsoid shape.
