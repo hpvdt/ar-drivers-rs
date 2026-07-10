@@ -4,7 +4,7 @@ The dummy AR glasses fixture should be a deterministic, public, configurable sim
 
 ## Public API
 
-- Expose the fixture through `pub mod dummy` and re-export `Dummy`, `DummyConfig`, and `DummySnapshot`.
+- Expose the fixture through `pub mod sim` and re-export `Dummy`, `DummyConfig`, and `DummySnapshot`.
 - Provide `Dummy::new()`, `Dummy::with_seed(u64)`, `Dummy::with_config(DummyConfig)`, `Default`, and `snapshot()`.
 - Keep default operation deterministic, immediate, and virtual-time based, with the first emitted event being `AccGyro`.
 

@@ -126,8 +126,7 @@ pub struct Dummy {
     acceleration: Vector3<f32>,
     jerk: Vector3<f32>,
     angular_rate_rub: Vector3<f32>,
-    soft_iron_eigenvectors: Matrix3<f32>,
-    soft_iron_base_eigenvalues: Vector3<f32>,
+    soft_iron: Matrix3<f32>,
     timestamp_us: u64,
     next_event_is_acc_gyro: bool,
     display_mode: DisplayMode,
@@ -152,8 +151,13 @@ impl Dummy {
         let config = normalize_config(config);
         let mut rng = StdRng::seed_from_u64(config.seed);
         let angular_rate_rub = sample_angular_rate(&mut rng, config.max_body_rate_rpm);
-        let soft_iron_eigenvectors = sample_rotation_matrix(&mut rng);
-        let soft_iron_base_eigenvalues = sample_soft_iron_eigenvalues(&mut rng, &config);
+        let soft_iron_min_vector_norm = config.soft_iron_min_eigenvalue.sqrt();
+        let soft_iron_max_vector_norm = config.soft_iron_max_eigenvalue.sqrt();
+        let soft_iron = sample_soft_iron(
+            &mut rng,
+            soft_iron_min_vector_norm,
+            soft_iron_max_vector_norm,
+        );
 
         Self {
             config,
@@ -164,8 +168,7 @@ impl Dummy {
             acceleration: ZERO,
             jerk: ZERO,
             angular_rate_rub,
-            soft_iron_eigenvectors,
-            soft_iron_base_eigenvalues,
+            soft_iron,
             timestamp_us: 0,
             next_event_is_acc_gyro: true,
             display_mode: DisplayMode::SameOnBoth,
@@ -249,14 +252,7 @@ impl Dummy {
     }
 
     fn current_soft_iron(&self) -> Matrix3<f32> {
-        let eigenvalues = self.soft_iron_base_eigenvalues;
-        if eigenvalues.x == eigenvalues.y && eigenvalues.y == eigenvalues.z {
-            return Matrix3::identity() * eigenvalues.x;
-        }
-
-        self.soft_iron_eigenvectors
-            * Matrix3::from_diagonal(&eigenvalues)
-            * self.soft_iron_eigenvectors.transpose()
+        self.soft_iron
     }
 
     fn drift_phase(&self) -> f32 {
@@ -360,33 +356,40 @@ fn normalize_config(mut config: DummyConfig) -> DummyConfig {
     config
 }
 
-fn sample_rotation_matrix(rng: &mut StdRng) -> Matrix3<f32> {
-    UnitQuaternion::from_euler_angles(
-        rng.gen_range(-PI..=PI),
-        rng.gen_range(-PI..=PI),
-        rng.gen_range(-PI..=PI),
-    )
-    .to_rotation_matrix()
-    .into_inner()
-}
+fn sample_soft_iron(
+    rng: &mut StdRng,
+    minimum_vector_norm: f32,
+    maximum_vector_norm: f32,
+) -> Matrix3<f32> {
+    let mut vectors = [ZERO; 3];
 
-fn sample_soft_iron_eigenvalues(rng: &mut StdRng, config: &DummyConfig) -> Vector3<f32> {
-    let minimum = config.soft_iron_min_eigenvalue;
-    let maximum = config.soft_iron_max_eigenvalue;
+    for index in 0..vectors.len() {
+        loop {
+            let mut vector = Vector3::new(
+                rng.gen_range(-1.0..=1.0),
+                rng.gen_range(-1.0..=1.0),
+                rng.gen_range(-1.0..=1.0),
+            );
 
-    Vector3::new(
-        sample_range(rng, minimum, maximum),
-        sample_range(rng, minimum, maximum),
-        sample_range(rng, minimum, maximum),
-    )
-}
+            for previous in &vectors[..index] {
+                vector -= previous * (vector.dot(previous) / previous.norm_squared());
+            }
 
-fn sample_range(rng: &mut StdRng, minimum: f32, maximum: f32) -> f32 {
-    if minimum == maximum {
-        minimum
-    } else {
-        rng.gen_range(minimum..=maximum)
+            if vector.norm_squared() > f32::EPSILON {
+                vectors[index] =
+                    clamp_vector_norm(vector, minimum_vector_norm, maximum_vector_norm);
+                break;
+            }
+        }
     }
+
+    let scaled_eigenvectors = Matrix3::from_columns(&vectors);
+    scaled_eigenvectors * scaled_eigenvectors.transpose()
+}
+
+fn clamp_vector_norm(vector: Vector3<f32>, minimum_norm: f32, maximum_norm: f32) -> Vector3<f32> {
+    let norm = vector.norm();
+    vector * (norm.clamp(minimum_norm, maximum_norm) / norm)
 }
 
 fn sample_angular_rate(rng: &mut StdRng, max_body_rate_rpm: f32) -> Vector3<f32> {
@@ -431,5 +434,5 @@ fn clamp_norm(v: Vector3<f32>, max_norm: f32) -> Vector3<f32> {
 }
 
 #[cfg(test)]
-#[path = "dummy_tests.rs"]
+#[path = "../dummy_tests.rs"]
 mod dummy_tests;

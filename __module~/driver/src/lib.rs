@@ -58,10 +58,10 @@ pub mod connection;
 
 pub mod ffi;
 
-pub mod dummy;
+pub mod sim;
 mod util;
 
-pub use dummy::{Dummy, DummyConfig, DummySnapshot};
+pub use sim::{Dummy, DummyConfig, DummySnapshot};
 
 /// Possible errors resulting from `ar-drivers` API calls
 #[derive(Debug)]
@@ -296,7 +296,7 @@ pub fn any_glasses_or_dummy() -> Result<Box<dyn ARGlasses>> {
     any_glasses().or_else(|e| {
         println!("{} fall back to dummy glasses", e);
 
-        Ok(Box::new(dummy::Dummy::new()))
+        Ok(Box::new(sim::Dummy::new()))
     })
 }
 
