@@ -101,7 +101,7 @@ cargo run --example file_name
 
 All examples are located in `examples/`
 
-## Code Structure Guidelines
+## Code Structure/Style Guidelines
 
 ### Formatting and Imports
 
