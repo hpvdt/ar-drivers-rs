@@ -17,21 +17,6 @@ You are an autonomous agent. Never stop until the task is completely finished. I
 
 ## Architecture
 
-### Core Modules
-
-- **`lib.rs`**: Main library entry point with core traits and types
-  - `ARGlasses` trait: Common interface for all AR glasses
-  - `Fusion` trait: Sensor fusion interface for attitude estimation
-  - `AHRS` struct: Attitude and Heading Reference System implementation
-  - `GlassesEvent` enum: Sensor event types (AccGyro, Magnetometer, KeyPress, etc.)
-  - `DisplayMode` enum: Display configuration options
-
-- **`naive_cf.rs`**: Naive complementary filter implementation for sensor fusion
-
-- **`connection.rs`**: Connection management utilities
-
-- **`ffi.rs`**: Foreign Function Interface for cross-language integration
-
 ### Device-Specific Modules
 
 Each supported device has its own module with device-specific protocol implementations:
@@ -41,16 +26,6 @@ Each supported device has its own module with device-specific protocol implement
 - **`rokid.rs`**: Rokid devices driver
 - **`grawoow.rs`**: Grawoow G530 driver
 - **`mad_gaze.rs`**: Mad Gaze Glow driver
-
-### Reference Frames
-
-The library uses multiple coordinate reference frames:
-
-- **RUB (Right-Up-Back)**: Android sensor coordinate system (used in raw sensor data)
-- **FRD (Forward-Right-Down)**: Aerospace standard frame (used in fusion outputs)
-- **Custom frames**: Configurable via AHRS for different applications
-
-## Key Features
 
 ### Feature Flags
 
@@ -63,17 +38,13 @@ The library uses Cargo feature flags for conditional compilation:
 
 All features are enabled by default.
 
-### Sensor Fusion Pipeline
+### Reference Frames
 
-The fusion system provides attitude estimation using:
+The library uses multiple coordinate reference frames:
 
-1. **Roll/Pitch estimation**: Accelerometer + Gyroscope (complementary filter)
-   - Assumes gravitational acceleration is always "down"
-   - Future: ESKF for better accuracy
-
-2. **Yaw estimation**: Magnetometer + Gyroscope fusion
-   - Magnetometer yaw derived from roll/pitch compensated arctan
-   - Future: EKF implementation
+- **RUB (Right-Up-Back)**: Android sensor coordinate system (used in raw sensor data)
+- **FRD (Forward-Right-Down)**: Aerospace standard frame (used in fusion outputs)
+- **Custom frames**: Configurable via AHRS for different applications
 
 ### Display Modes
 
@@ -84,56 +55,6 @@ Supported display configurations:
 - `HalfSBS`: Half-resolution side-by-side (1920x1080 → upscaled to 3840x1080)
 - `HighRefreshRate`: 120Hz mirrored mode
 - `HighRefreshRateSBS`: 120Hz side-by-side mode
-
-## API Usage
-
-### Basic Sensor Reading
-
-```rust
-use ar_drivers::{any_glasses, GlassesEvent};
-
-let mut glasses = any_glasses()?;
-loop {
-    match glasses.read_event()? {
-        GlassesEvent::AccGyro { accelerometer, gyroscope, timestamp } => {
-            // Handle IMU data
-        }
-        GlassesEvent::Magnetometer { magnetometer, timestamp } => {
-            // Handle magnetometer data
-        }
-        GlassesEvent::KeyPress(key) => {
-            // Handle button press
-        }
-        _ => {}
-    }
-}
-```
-
-### Sensor Fusion
-
-```rust
-use ar_drivers::{Fusion, AHRS};
-
-// Create fusion with complementary filter
-let fusion = <dyn Fusion>::any_cf()?;
-
-// Wrap in AHRS for coordinate frame conversion
-let mut ahrs = AHRS::frd(fusion);
-
-// Update and get attitude
-ahrs.update();
-let euler_deg = ahrs.attitude_euler_deg();
-let quaternion = ahrs.attitude_quaternion();
-```
-
-### Display Mode Control
-
-```rust
-use ar_drivers::{any_glasses, DisplayMode};
-
-let mut glasses = any_glasses()?;
-glasses.set_display_mode(DisplayMode::Stereo)?;
-```
 
 ## Build & Development
 
@@ -167,21 +88,138 @@ cargo build --release
 
 ### Examples
 
-Located in `examples/`:
-
-- `read_sensors.rs`: Basic sensor reading
-- `sensor_fusion.rs`: Attitude estimation demo
-- `set_to_3d.rs`: Set display to 3D SBS mode
-- `average_acc_gyro.rs`: Average IMU readings
-- `connection_sync.rs`: Connection synchronization
-- `bluetooth_touchpad.rs`: Bluetooth touchpad input handling
-- `ms_precision_touchpad.rs`: Microsoft Precision Touchpad protocol
-
 Run examples:
 ```bash
-cargo run --example read_sensors
-cargo run --example set_to_3d
+cargo run --example file_name
 ```
+
+All examples are located in `examples/`
+
+## Rust Code Style
+
+### Formatting and Imports
+
+- Let `rustfmt` define layout. Follow the repository's `rustfmt.toml` when one is
+  present; do not align fields, arguments, or comments by hand.
+- Use the line-ending style configured by the repository.
+- Group imports consistently: standard library, external crates, then
+  `crate`/`super`/`self`. Let rustfmt sort names within each group.
+- Import the concrete types and traits used by the module. Avoid glob imports.
+- Prefer one module-level import over repeated fully qualified paths when that
+  makes the code easier to read, but retain qualification when it clarifies an
+  uncommon error or platform type.
+
+### Naming and API Shape
+
+- Use standard Rust naming: `snake_case` for functions, methods, modules, fields,
+  and locals; `UpperCamelCase` for types and traits; `SCREAMING_SNAKE_CASE` for
+  constants.
+- Preserve established public or ABI names when changing them would break a
+  caller, but do not copy legacy naming inconsistencies into new APIs.
+- Use `Self` in constructors and inherent implementations. Implement `Default`
+  when there is one unsurprising baseline configuration, and make `new()`
+  delegate to it where appropriate.
+- Builder-style configuration methods take and return `self`; state-changing
+  operations take `&mut self`; read-only operations take `&self`.
+
+### Documentation and Comments
+
+- Give public items useful `///` doc comments. Use `//!` for module-level behavior
+  or constraints.
+- Document observable behavior: units, blocking behavior, feature or platform
+  availability, error conditions, panics, and safety requirements when relevant.
+- Explain non-obvious constraints, magic values, numerical thresholds, and
+  invariants. Do not add comments that merely restate the code.
+- Keep existing copyright, attribution, and source notes intact when editing a
+  file.
+
+### Errors and Control Flow
+
+- Return `Result` from fallible APIs. Use a shared error type when callers need a
+  stable error surface, add `From` conversions for reusable lower-level errors,
+  and use `?` to preserve the original cause.
+- Use specific typed error variants when callers need to distinguish recovery
+  paths. Preserve error meaning and message wording during refactors when callers
+  may depend on them.
+- Do not use `unwrap()` or `expect()` for ordinary runtime failures in library
+  code. They are acceptable in tests and small examples, or for a locally proven
+  invariant whose reason is clear.
+- Prefer early returns for invalid inputs and guard conditions. Use `match` when
+  every enum case matters or when it expresses branching more clearly.
+- Do not silently discard errors. If best-effort processing intentionally
+  continues, keep enough context to diagnose the failure.
+
+### Modules and Conditional Compilation
+
+- Keep modules cohesive and give each one a clear responsibility. Split a module
+  when its responsibilities or private implementation details stop being related.
+- Keep helpers private by default. Expose `pub(crate)` for genuine cross-module
+  internals and `pub` only for public API needed by downstream users.
+- Keep `#[cfg(...)]` gates next to the module, import, implementation, or function
+  they control. Optional functionality and its dependencies should be guarded by
+  the same feature.
+- Keep behavior consistent across platform-specific implementations when the
+  public API is shared.
+
+### Types and Data Handling
+
+- Prefer domain types and newtypes when they prevent invalid combinations of
+  primitive values. Use exact-width integers for binary formats and external
+  interfaces whose widths are fixed.
+- Give repeated constants and thresholds descriptive names. Include units in a
+  name or doc comment when the type alone cannot express them.
+- Make byte order explicit when reading or writing binary data. Validate lengths,
+  tags, ranges, and conversions before indexing, slicing, or casting bytes.
+- Preserve numerical precision deliberately. Reject non-finite or degenerate data
+  before normalization, division, decomposition, or other sensitive operations.
+- Prefer iterators when they make the transformation clearer; use loops when
+  control flow, mutation, or early exit is easier to understand that way.
+
+### Concurrency, FFI, and Unsafe Code
+
+- Keep lock acquisition and thread lifecycle logic centralized. Propagate poison
+  and join failures rather than introducing new panics.
+- Use atomics with an explicitly chosen ordering; keep the ordering decision in
+  one named constant when multiple operations share it.
+- Avoid `unsafe` when a safe abstraction is practical. Keep unavoidable unsafe
+  blocks and unsafe impls as small as possible, and add a `SAFETY:` comment that
+  states the invariant being upheld.
+- Treat exported symbol names, signatures, layouts, ownership, and lifetimes as
+  ABI. Do not change them without coordinating and testing all callers.
+- Never allow a panic to unwind across an `extern "C"` boundary. Validate raw
+  pointers and lengths before dereferencing, and document caller obligations.
+- Use an explicit representation such as `#[repr(C)]` when a type's layout is
+  shared across an FFI or binary boundary.
+
+### Tests and Examples
+
+- Put focused unit tests near the implementation under `#[cfg(test)]`; use
+  integration tests for behavior exercised through the public API.
+- Name tests after observable behavior and cover success, malformed input,
+  boundary values, and error variants.
+- Prefer deterministic tests and local fixtures. Keep tests that require external
+  resources, timing, or environment state clearly separate and document their
+  prerequisites.
+- Compare floating-point results with a tolerance derived from the algorithm;
+  use exact equality only for values that are constructed exactly.
+- Examples may use `unwrap()` to stay concise, but should demonstrate the public
+  API and avoid becoming alternate implementations of library logic.
+
+### Validation
+
+For Rust changes, run the narrowest relevant checks first, then broaden them:
+
+```bash
+cargo fmt --all -- --check
+cargo check --all-targets --all-features
+cargo test --all-targets --all-features
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+Adapt feature flags and targets when a project does not support building every
+combination together. Run narrower package, module, or test checks first for fast
+feedback, but complete the broad checks applicable to the repository before
+submitting a change.
 
 ## Code Structure Guidelines
 
@@ -193,19 +231,6 @@ cargo run --example set_to_3d
 4. Add module import in `lib.rs` with `#[cfg(feature = "new_device")]`
 5. Add device factory to `any_glasses()` function
 6. Document protocol specifics and dependencies
-
-### Error Handling
-
-Use the `Error` enum from `lib.rs`:
-
-- `IoError`: Standard I/O errors
-- `UsbError`: USB communication errors (rusb)
-- `HidError`: HID device errors (hidapi)
-- `SerialPortError`: Serial communication errors
-- `NotFound`: Device not found
-- `NotImplemented`: Feature not available for device
-- `PacketTimeout`: Communication timeout
-- `Other`: Generic errors
 
 ### Coordinate Transformations
 
@@ -231,34 +256,16 @@ use ar_drivers::any_glasses_or_dummy;
 let glasses = any_glasses_or_dummy()?; // Falls back to dummy device
 ```
 
-## Documentation
+## Protocol Blog Posts
 
-- API documentation: https://docs.rs/ar-drivers
-- Blog posts on protocols: https://voidcomputing.hu/blog/good-bad-ugly/
-- Repository: https://github.com/badicsalex/ar-drivers-rs
-
-## License
-
-MIT License - See LICENSE file for details.
-
-## Legal Notes
-
-- Some protocols were obtained through reverse engineering
-- Reverse engineering is explicitly allowed in EU for interoperability
-- Project is not affiliated with any device manufacturers
+https://voidcomputing.hu/blog/good-bad-ugly/
+https://voidcomputing.hu/blog/worse-better-prettier/
 
 ## Common Issues
 
 ### Permission Denied
 
 Install udev rules or run with appropriate permissions.
-
-### Device Not Found
-
-1. Check device is connected
-2. Verify device is supported
-3. Check feature flags are enabled
-4. Review console output for detection attempts
 
 ### Compilation Errors
 
