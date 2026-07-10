@@ -39,7 +39,6 @@ use std::sync::{Arc, Mutex, PoisonError};
 use nalgebra::{Isometry3, Matrix3, UnitQuaternion, Vector2, Vector3};
 
 /// Sensor fusion implementations and AHRS reference-frame helpers.
-#[path = "fusion/lib.rs"]
 pub mod fusion;
 // pub use fusion::{Fusion, AHRS};
 
