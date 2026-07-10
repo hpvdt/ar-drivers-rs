@@ -56,10 +56,12 @@ pub struct DummyConfig {
     pub hard_iron_base: Vector3<f32>,
     /// Slow hard-iron drift amplitude, in microtesla.
     pub hard_iron_drift: Vector3<f32>,
-    /// Base soft-iron magnetometer distortion matrix.
-    pub soft_iron_base: Matrix3<f32>,
-    /// Slow soft-iron distortion drift amplitude.
-    pub soft_iron_drift: Matrix3<f32>,
+    /// Lower bound for every soft-iron matrix eigenvalue.
+    pub soft_iron_min_eigenvalue: f32,
+    /// Upper bound for every soft-iron matrix eigenvalue.
+    pub soft_iron_max_eigenvalue: f32,
+    /// Slow per-axis soft-iron eigenvalue drift amplitude.
+    pub soft_iron_eigenvalue_drift: Vector3<f32>,
     /// Period for one full hard/soft iron drift cycle, in microseconds.
     pub distortion_drift_period_us: u64,
 }
@@ -82,10 +84,9 @@ impl Default for DummyConfig {
             magnetic_dip_rad: 20.0f32.to_radians(),
             hard_iron_base: Vector3::new(24.0, -18.0, 12.0),
             hard_iron_drift: Vector3::new(2.0, 1.5, 2.5),
-            soft_iron_base: Matrix3::new(1.30, 0.18, -0.08, 0.06, 0.75, 0.12, -0.10, 0.16, 1.18),
-            soft_iron_drift: Matrix3::new(
-                0.030, -0.012, 0.010, -0.008, 0.020, -0.009, 0.011, -0.010, 0.025,
-            ),
+            soft_iron_min_eigenvalue: 0.70,
+            soft_iron_max_eigenvalue: 1.40,
+            soft_iron_eigenvalue_drift: Vector3::new(0.010, 0.008, 0.009),
             distortion_drift_period_us: 5 * 60 * 1_000_000,
         }
     }
@@ -128,6 +129,8 @@ pub struct Dummy {
     acceleration: Vector3<f32>,
     jerk: Vector3<f32>,
     angular_rate_rub: Vector3<f32>,
+    soft_iron_eigenvectors: Matrix3<f32>,
+    soft_iron_base_eigenvalues: Vector3<f32>,
     timestamp_us: u64,
     next_event_is_acc_gyro: bool,
     display_mode: DisplayMode,
@@ -152,6 +155,8 @@ impl Dummy {
         let config = normalize_config(config);
         let mut rng = StdRng::seed_from_u64(config.seed);
         let angular_rate_rub = sample_angular_rate(&mut rng, config.max_body_rate_rpm);
+        let soft_iron_eigenvectors = sample_rotation_matrix(&mut rng);
+        let soft_iron_base_eigenvalues = sample_soft_iron_eigenvalues(&mut rng, &config);
 
         Self {
             config,
@@ -162,6 +167,8 @@ impl Dummy {
             acceleration: ZERO,
             jerk: ZERO,
             angular_rate_rub,
+            soft_iron_eigenvectors,
+            soft_iron_base_eigenvalues,
             timestamp_us: 0,
             next_event_is_acc_gyro: true,
             display_mode: DisplayMode::SameOnBoth,
@@ -245,7 +252,29 @@ impl Dummy {
     }
 
     fn current_soft_iron(&self) -> Matrix3<f32> {
-        self.config.soft_iron_base + self.config.soft_iron_drift * self.drift_phase().sin()
+        let eigenvalues = self.current_soft_iron_eigenvalues();
+        if eigenvalues.x == eigenvalues.y && eigenvalues.y == eigenvalues.z {
+            return Matrix3::identity() * eigenvalues.x;
+        }
+
+        self.soft_iron_eigenvectors
+            * Matrix3::from_diagonal(&eigenvalues)
+            * self.soft_iron_eigenvectors.transpose()
+    }
+
+    fn current_soft_iron_eigenvalues(&self) -> Vector3<f32> {
+        let phase = self.drift_phase();
+        let drift_shape = Vector3::new(
+            phase.sin(),
+            (phase * 0.73 + 1.1).sin(),
+            (phase * 0.37 + 2.3).sin(),
+        );
+
+        self.soft_iron_base_eigenvalues
+            + self
+                .config
+                .soft_iron_eigenvalue_drift
+                .component_mul(&drift_shape)
     }
 
     fn drift_phase(&self) -> f32 {
@@ -336,9 +365,55 @@ fn normalize_config(mut config: DummyConfig) -> DummyConfig {
     config.magnetic_dip_rad = config
         .magnetic_dip_rad
         .clamp(-MAX_MAGNETIC_DIP_RAD, MAX_MAGNETIC_DIP_RAD);
+    if !config.soft_iron_min_eigenvalue.is_finite() || config.soft_iron_min_eigenvalue <= 0.0 {
+        config.soft_iron_min_eigenvalue = DummyConfig::default().soft_iron_min_eigenvalue;
+    }
+    if !config.soft_iron_max_eigenvalue.is_finite()
+        || config.soft_iron_max_eigenvalue < config.soft_iron_min_eigenvalue
+    {
+        config.soft_iron_max_eigenvalue = config.soft_iron_min_eigenvalue;
+    }
+    let max_drift = (config.soft_iron_max_eigenvalue - config.soft_iron_min_eigenvalue) * 0.5;
+    config.soft_iron_eigenvalue_drift = config.soft_iron_eigenvalue_drift.map(|value| {
+        if value.is_finite() {
+            value.abs().min(max_drift)
+        } else {
+            0.0
+        }
+    });
     config.distortion_drift_period_us = config.distortion_drift_period_us.max(1);
 
     config
+}
+
+fn sample_rotation_matrix(rng: &mut StdRng) -> Matrix3<f32> {
+    UnitQuaternion::from_euler_angles(
+        rng.gen_range(-PI..=PI),
+        rng.gen_range(-PI..=PI),
+        rng.gen_range(-PI..=PI),
+    )
+    .to_rotation_matrix()
+    .into_inner()
+}
+
+fn sample_soft_iron_eigenvalues(rng: &mut StdRng, config: &DummyConfig) -> Vector3<f32> {
+    let minimum = config.soft_iron_min_eigenvalue;
+    let maximum = config.soft_iron_max_eigenvalue;
+    let drift = config.soft_iron_eigenvalue_drift;
+
+    Vector3::new(
+        sample_range(rng, minimum + drift.x, maximum - drift.x),
+        sample_range(rng, minimum + drift.y, maximum - drift.y),
+        sample_range(rng, minimum + drift.z, maximum - drift.z),
+    )
+}
+
+fn sample_range(rng: &mut StdRng, minimum: f32, maximum: f32) -> f32 {
+    if minimum == maximum {
+        minimum
+    } else {
+        rng.gen_range(minimum..=maximum)
+    }
 }
 
 fn sample_angular_rate(rng: &mut StdRng, max_body_rate_rpm: f32) -> Vector3<f32> {
@@ -383,97 +458,5 @@ fn clamp_norm(v: Vector3<f32>, max_norm: f32) -> Vector3<f32> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::fusion::rub_to_frd;
-
-    fn quiet_config() -> DummyConfig {
-        DummyConfig {
-            max_body_rate_rpm: 0.0,
-            linear_jerk_std_dev: 0.0,
-            gyro_noise_std_dev: 0.0,
-            acc_noise_std_dev: 0.0,
-            mag_noise_std_dev: 0.0,
-            magnetic_dip_rad: 0.0,
-            hard_iron_base: ZERO,
-            hard_iron_drift: ZERO,
-            soft_iron_base: Matrix3::identity(),
-            soft_iron_drift: Matrix3::zeros(),
-            ..DummyConfig::default()
-        }
-    }
-
-    #[test]
-    fn starts_level_with_felt_gravity_up_frd() {
-        let mut dummy = Dummy::with_config(quiet_config());
-
-        match dummy.read_event().unwrap() {
-            GlassesEvent::AccGyro {
-                accelerometer,
-                timestamp,
-                ..
-            } => {
-                assert_eq!(timestamp, 0);
-                let acc_frd = rub_to_frd(&accelerometer);
-                let expected = Vector3::new(0.0, 0.0, -9.81);
-
-                assert!(
-                    (acc_frd - expected).norm() < 1.0e-5,
-                    "acc_frd={:?}",
-                    acc_frd
-                );
-            }
-            event => panic!("expected AccGyro, got {:?}", event),
-        }
-    }
-
-    #[test]
-    fn starts_with_magnetic_north_forward_frd() {
-        let mut dummy = Dummy::with_config(quiet_config());
-        let _ = dummy.read_event().unwrap();
-
-        match dummy.read_event().unwrap() {
-            GlassesEvent::Magnetometer {
-                magnetometer,
-                timestamp,
-            } => {
-                assert_eq!(timestamp, 10_000);
-                let mag_frd = rub_to_frd(&magnetometer);
-                let expected = Vector3::new(50.0, 0.0, 0.0);
-
-                assert!(
-                    (mag_frd - expected).norm() < 1.0e-5,
-                    "mag_frd={:?}",
-                    mag_frd
-                );
-            }
-            event => panic!("expected Magnetometer, got {:?}", event),
-        }
-    }
-
-    #[test]
-    fn default_hard_iron_bias_is_under_50_microtesla() {
-        let hard_iron = Dummy::new().snapshot().hard_iron;
-
-        assert!(
-            hard_iron.norm() < 50.0,
-            "hard_iron={:?}, norm={}",
-            hard_iron,
-            hard_iron.norm()
-        );
-    }
-
-    #[test]
-    fn default_gyro_body_rates_are_nonnegative() {
-        let angular_rate = Dummy::new().snapshot().angular_rate_rub;
-        let max_rad_per_sec = 6.0 * 2.0 * PI / SECONDS_PER_MINUTE;
-
-        for component in angular_rate.iter() {
-            assert!(
-                *component >= 0.0 && *component <= max_rad_per_sec,
-                "angular_rate={:?}",
-                angular_rate
-            );
-        }
-    }
-}
+#[path = "dummy_tests.rs"]
+mod dummy_tests;
