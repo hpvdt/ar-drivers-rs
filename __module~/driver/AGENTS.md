@@ -1,22 +1,15 @@
 # AGENTS.md - ar-drivers-rs Project Guide
 
-## Project Overview
+## Project Information
 
-This is a Rust SDK for AR glasses, providing a unified driver interface for multiple AR headset brands. The library
-enables reading sensor data (IMU, magnetometer, etc.) and controlling display modes for various AR glasses.
+Refer to [README.md](README.md) for the project overview, supported devices, Linux dependencies and udev setup,
+build/run quickstart, protocol blog posts, contribution information, licensing, and legal notes.
+
+## Agent Role
 
 You are an autonomous agent. Never stop until the task is completely finished. If you reach your output limit or finish
 one logical step, immediately continue in the next response without saying "continued" or asking permission. Do not
 output any TODO lists or "next steps" unless the user explicitly asks for a plan — just do the work.
-
-## Supported Devices
-
-- **XREAL Air, Air 2, and Air 2 Pro** (via `nreal` feature)
-- **XREAL Light** (via `nreal` feature)
-- **Rokid Air** (via `rokid` feature)
-- **Rokid Max** (via `rokid` feature)
-- **Grawoow G530 / Metavision M53** (via `grawoow` feature)
-- **Mad Gaze Glow** (via `mad_gaze` feature)
 
 ## Architecture
 
@@ -50,38 +43,6 @@ Supported display configurations:
 - `HalfSBS`: Half-resolution side-by-side (1920x1080 → upscaled to 3840x1080)
 - `HighRefreshRate`: 120Hz mirrored mode
 - `HighRefreshRateSBS`: 120Hz side-by-side mode
-
-## Build & Development
-
-### Dependencies
-
-Platform-specific dependencies:
-
-**Linux**:
-
-```bash
-sudo apt install cargo libudev-dev libstdc++-12-dev
-```
-
-**udev rules** (optional, for non-root access):
-
-```bash
-sudo cp udev/* /etc/udev/rules.d/
-sudo udevadm control --reload
-```
-
-### Building
-
-```bash
-# Build library
-cargo build
-
-# Build with specific features
-cargo build --no-default-features --features rokid
-
-# Build release
-cargo build --release
-```
 
 ## Code Structure/Style Guidelines
 
@@ -226,18 +187,3 @@ use ar_drivers::any_glasses_or_dummy;
 
 let glasses = any_glasses_or_dummy() ?; // Falls back to dummy device
 ```
-
-## Protocol Blog Posts
-
-https://voidcomputing.hu/blog/good-bad-ugly/
-https://voidcomputing.hu/blog/worse-better-prettier/
-
-## Common Issues
-
-### Permission Denied
-
-Install udev rules or run with appropriate permissions.
-
-### Compilation Errors
-
-Ensure all required system dependencies are installed (libudev, libstdc++, etc.)
