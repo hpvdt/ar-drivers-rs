@@ -1,4 +1,4 @@
-distorted + self.sample_noise_vec(seldistorted + self.sample_noise_vec(sel Magnetometer calibration and simulation issues
+# Magnetometer calibration issues
 
 ## Reproduction evidence
 
@@ -6,55 +6,41 @@ With the default deterministic `Dummy` seed, a bounded run of 1,000 magnetometer
 `FusionState::getCalibratedMag` path used by `read_sensors.rs` produced 5 insufficient-sample results, 1
 condition-number rejection, 938 `Calibration_DegenerateScale` results, 2 weak calibrated readings, and only 54
 successful calibrations. All 54 successes occurred within the first 255 magnetometer events; events 256 through 1,000
-all returned `Calibration_DegenerateScale`. The generated fixed angular-rate vector had norm `0.0997171 rad/s`, and the
-generated soft-iron matrix contained nonzero off-diagonal terms. The example itself was not changed and is not an
-affected module in the findings below.
+all returned `Calibration_DegenerateScale`. The example only exposes these failures; it is not an affected module in
+the findings below. Simulator-specific findings are tracked in [`../sim/TODO.md`](../sim/TODO.md).
 
 ## High severity
 
-- [ ] Reject non-ellipsoid solutions before computing scale
+- [ ] Fit the full soft-iron model emitted by the simulator
 
-  - **Summary:** `perform_calibration` can pass the design-matrix condition check even when the fitted coefficients do
-    not describe a real ellipsoid. `Calibration_DegenerateScale` is then a late symptom of an invalid conic fit.
+  - **Summary:** The calibrator fits only an axis-aligned ellipsoid even though the dummy deliberately emits
+    cross-axis soft-iron coupling.
   - **Affected module:** `src/fusion/mag_calibration.rs`
   - **Severity:** High
-  - **Description:** `x[3]`, `x[4]`, or `temp` can be non-positive. The current code takes square roots first and only
-    notices the resulting `NaN` or infinity afterward:
+  - **Description:** The current design has no `xy`, `xz`, or `yz` terms and returns three component-wise scales:
 
     ```rust
-    let temp = x[5]
-        + offset[0] * offset[0]
-        + x[3] * offset[1] * offset[1]
-        + x[4] * offset[2] * offset[2];
+    mag[3] = -mag[1] * mag[1];
+    mag[4] = -mag[2] * mag[2];
+
     let scale = Vector3::new(temp.sqrt(), (temp / x[3]).sqrt(), (temp / x[4]).sqrt());
-
-    for component in offset.iter().chain(scale.iter()) {
-        if !component.is_finite() {
-            return Err(BadMagDataCause::Calibration_DegenerateScale { offset, scale });
-        }
-    }
     ```
 
-    Validate the quadratic before the square roots, return a specific non-ellipsoid-fit error, and reject fits with
-    excessive residual error even when the design matrix is well-conditioned. The minimum diagonal-model guard is:
+    By contrast, `sample_soft_iron` constructs a generally rotated symmetric positive-definite matrix:
 
     ```rust
-    if !x[3].is_finite()
-        || !x[4].is_finite()
-        || !temp.is_finite()
-        || x[3] <= MIN_POSITIVE_SHAPE
-        || x[4] <= MIN_POSITIVE_SHAPE
-        || temp <= MIN_POSITIVE_SHAPE
-    {
-        return Err(/* invalid physical fit, including the coefficients */);
-    }
+    let scaled_eigenvectors = Matrix3::from_columns(&vectors);
+    scaled_eigenvectors * scaled_eigenvectors.transpose()
     ```
 
-    This guard should complement, not replace, the SVD rank and condition checks.
+    A diagonal correction cannot undo the resulting cross-axis coupling, so even otherwise good simulated samples do
+    not lie on the axis-aligned ellipsoid assumed by `perform_calibration`.
+  - **Recommended fix:** Replace the diagonal `(offset, scale)` fit with a hard-iron offset plus an SPD 3x3 correction matrix parameterized by a positive-diagonal Cholesky factor and solved with a robust nonlinear fit.
+
 - [ ] Require redundant samples and three-dimensional coverage before solving
 
-  - **Summary:** Six samples make the six-parameter algebraic system square, but do not provide a noise-tolerant fit or
-    prove that the samples cover a three-dimensional ellipsoid.
+  - **Summary:** Six accepted samples make the six-parameter algebraic system square, but do not make it
+    noise-tolerant or prove that the samples cover a three-dimensional ellipsoid.
   - **Affected module:** `src/fusion/mag_calibration.rs`
   - **Severity:** High
   - **Description:** Readiness is currently only a row-count check, and the first `N` finite samples are inserted
@@ -76,68 +62,47 @@ affected module in the findings below.
     }
     ```
 
-    In the default dummy stream, the sixth magnetometer sample arrives after only about 0.1 seconds of motion, while
-    the first 255 samples span about 5.1 virtual seconds. Add a separate readiness check requiring more samples than
-    parameters and a geometric coverage measure, such as per-axis span plus a lower bound on the smallest eigenvalue
-    of the centered sample covariance. Report insufficient coverage instead of attempting a fit that later becomes
-    `Calibration_DegenerateScale`.
-- [ ] Fit a full SPD soft-iron correction instead of a diagonal scale
+    In the default dummy stream, the sixth magnetometer sample arrives after only about 0.1 seconds of virtual motion,
+    far too early for the current trajectory to provide useful spatial coverage. The SVD condition number tests the
+    algebraic design matrix, not whether the measurements adequately constrain a physical three-dimensional model.
+  - **Recommended fix:** Gate calibration on an overdetermined sample count and a geometric coverage test such as per-axis span plus a lower bound on the smallest eigenvalue of the centered sample covariance.
 
-  - **Summary:** The calibrator cannot represent cross-axis soft-iron coupling because it fits only an axis-aligned
-    ellipsoid and returns three component-wise scales.
+- [ ] Reject non-ellipsoid solutions before computing scale
+
+  - **Summary:** A fit can pass the design-matrix condition check even when its coefficients do not describe a real
+    ellipsoid, making `Calibration_DegenerateScale` a late and imprecise symptom.
   - **Affected module:** `src/fusion/mag_calibration.rs`
   - **Severity:** High
-  - **Description:** The design contains no `xy`, `xz`, or `yz` terms:
+  - **Description:** `x[3]`, `x[4]`, or `temp` can be non-positive, but the current code takes square roots and divides
+    first, then notices only the resulting `NaN` or infinity:
 
     ```rust
-    mag[3] = -mag[1] * mag[1];
-    mag[4] = -mag[2] * mag[2];
-
+    let offset = Vector3::new(x[0] / 2., x[1] / (2. * x[3]), x[2] / (2. * x[4]));
+    let temp = x[5]
+        + offset[0] * offset[0]
+        + x[3] * offset[1] * offset[1]
+        + x[4] * offset[2] * offset[2];
     let scale = Vector3::new(temp.sqrt(), (temp / x[3]).sqrt(), (temp / x[4]).sqrt());
+
+    for component in offset.iter().chain(scale.iter()) {
+        if !component.is_finite() {
+            return Err(BadMagDataCause::Calibration_DegenerateScale { offset, scale });
+        }
+    }
     ```
 
-    Replace `(offset: [f32; 3], scale: [f32; 3])` with
-    `(offset: Vector3<f32>, correction: Matrix3<f32>)`. Estimate nine parameters: hard-iron offset `b` plus a
-    lower-triangular Cholesky factor `L` with positive diagonal, so `A = L * L.transpose()` is SPD by construction.
-    Minimize the unit-sphere residual
+    A well-conditioned least-squares system can still yield negative shape coefficients or excessive residual error,
+    especially when its input covers only a noisy plane.
+  - **Recommended fix:** Validate finite positive shape coefficients and bounded fit residuals before any division or square root and return a specific non-physical-fit error containing the rejected coefficients.
 
-    ```text
-    ||L.transpose() * (sample - b)||^2 - 1
-    ```
-
-    using Levenberg-Marquardt and an analytic Jacobian. Initialize `b` from the sample midpoint or mean, initialize
-    `L` diagonally from per-axis extents, and initialize off-diagonal terms to zero. Apply calibration as
-    `correction * (raw_mag - offset)`, then normalize it for heading use. Validate finite parameters, positive
-    Cholesky diagonal, condition number, residual loss, and coverage. Preserve sample validation, buffering, KNN
-    scoring, and eviction behavior, and add a deterministic rotated-soft-iron test.s.
-- [ ] Generate a non-planar attitude trajectory
-
-  - **Summary:** Three nonzero components in one constant angular-rate vector still produce rotation about one fixed
-    axis, so the ideal magnetometer trace is a planar circle rather than three-dimensional coverage.
-  - **Affected module:** `src/sim/dummy.rs`
-  - **Severity:** High
-  - **Description:** The dummy samples one angular-rate vector during construction and reuses it forever:
-
-    ```rust
-    let angular_rate_rub = sample_angular_rate(&mut rng, config.max_body_rate_rpm);
-
-    let rotation_increment = UnitQuaternion::from_scaled_axis(self.angular_rate_rub * dt);
-    self.attitude *= rotation_increment;
-    ```
-
-    A fixed affine magnetometer distortion maps that circle to another planar ellipse. Without noise or hard-iron
-    drift, all samples obey one plane equation and the calibration design is rank-deficient. Noise can make the
-    matrix appear full-rank without supplying real orientation coverage. Change the body-rate direction over time
-    using a smooth deterministic maneuver or seeded multi-axis excitation schedule that visits substantially
-    different roll, pitch, and yaw orientations.
 - [ ] Stop treating every isolated calibration sample as useful
 
-  - **Summary:** The buffer has no plausibility or robust-residual gate, so its diversity-only eviction policy
-    preferentially retains sensor outliers.
+  - **Summary:** The diversity-only eviction policy preferentially retains isolated sensor outliers, which can drive
+    the algebraic fit toward negative shape coefficients.
   - **Affected module:** `src/fusion/mag_calibration.rs`
   - **Severity:** High
-  - **Description:** Any finite, nonzero sample is accepted, and an isolated candidate replaces the least-isolated
-    buffered point:
+  - **Description:** Any finite nonzero sample is accepted, and a candidate replaces the least-isolated buffered point
+    whenever its KNN score is larger:
 
     ```rust
     if !x.iter().all(|e| e.is_finite()) || x.norm_squared() <= f32::EPSILON {
@@ -149,75 +114,83 @@ affected module in the findings below.
     }
     ```
 
-    Add robust sample admission before KNN eviction, such as a sensor-range check plus a robust residual or
-    neighborhood-consistency gate. Use a robust fit loss so a small number of retained outliers cannot force negative
-    shape coefficients. The calibrator must remain safe for finite outliers regardless of which device or simulator
-    produced them.
+    This policy cannot distinguish useful orientation coverage from Gaussian noise tails or magnetic interference, so
+    a long-running buffer can become increasingly dominated by extreme points.
+  - **Recommended fix:** Add a physical range check and robust neighborhood or fit-residual admission gate before KNN eviction, and use a robust loss in the calibration solve.
 
 ## Medium severity
 
-- [ ] Balance default angular motion against magnetometer noise
+- [ ] Normalize the calibration design automatically
 
-  - **Summary:** The default dummy changes the noiseless magnetic vector much more slowly than it perturbs each
-    measurement, so early spatial diversity is dominated by noise rather than orientation.
-  - **Affected module:** `src/sim/dummy.rs`
-  - **Severity:** Medium
-  - **Description:** Defaults combine a maximum of 1 RPM per body axis, 20 ms between magnetometer samples, a 50
-    microtesla field, and 1.5 microtesla per-component noise:
-
-    ```rust
-    event_period_us: 10_000,
-    max_body_rate_rpm: 1.0,
-    mag_noise_std_dev: 1.5,
-    magnetic_field_strength: 50.0,
-    ```
-    Even at the maximum combined rate, the ideal field changes by only about 0.18 microtesla between magnetometer
-    samples, while the standard deviation of the difference between two independent noisy samples is about 2.1
-    microtesla per component. For the measured default seed, the ideal change is limited to about 0.10 microtesla per
-    sample. Add a calibration-oriented motion profile, reduce noise for that profile, or make slow/noisy behavior an
-    explicitly selected stress profile.
-- [ ] Include the true nearest neighbor when scoring a new sample
-
-  - **Summary:** `mean_distance_from_single` always skips the smallest distance as a presumed zero self-distance, but
-    a new candidate is not yet in the buffer and has no self-distance.
+  - **Summary:** The default `pre_scaler` of `1.0` leaves realistic microtesla inputs poorly scaled across the linear,
+    squared, and constant design columns.
   - **Affected module:** `src/fusion/mag_calibration.rs`
   - **Severity:** Medium
-  - **Description:** The same helper is used for buffered rows and new candidates:
+  - **Description:** Although the API says a value near the magnetic-field magnitude prevents ill-conditioning, the
+    default does no normalization and the production construction path uses that default:
+
+    ```rust
+    Self {
+        matrix: SMatrix::from_element(1.0),
+        pre_scaler: 1.,
+        // ...
+    }
+
+    self.matrix[(index, 0)] = sample[0] / self.pre_scaler;
+    ```
+
+    With readings on the order of 50 microtesla, coordinate columns are on the order of `10^1`, squared columns are
+    on the order of `10^3`, and the constant column is `1`, needlessly worsening the f32 SVD condition and thresholding.
+  - **Recommended fix:** Derive a finite positive normalization scale from the accepted sample set inside `perform_calibration` and undo it only when returning the fitted parameters.
+
+- [ ] Apply configured pre-scaling consistently and validate it
+
+  - **Summary:** A non-default `pre_scaler` puts buffered samples and new KNN candidates in different units, while zero
+    or non-finite values can poison the stored matrix.
+  - **Affected module:** `src/fusion/mag_calibration.rs`
+  - **Severity:** Medium
+  - **Description:** Buffered coordinates are divided by `pre_scaler`, but the full-buffer candidate is scored in raw
+    units, and the builder accepts every `f32` value:
+
+    ```rust
+    pub fn pre_scaler(self, pre_scaler: f32) -> Self {
+        Self { pre_scaler, ..self }
+    }
+
+    self.matrix[(index, 0)] = sample[0] / self.pre_scaler;
+
+    let sample_mean_dist = self.mean_distance_from_single(x.transpose());
+    ```
+
+    Consequently a feature intended to improve conditioning changes eviction behavior, and `0.0`, `NaN`, or infinity
+    can create invalid stored coordinates even though the raw input passed validation.
+  - **Recommended fix:** Require `pre_scaler` to be finite and strictly positive and convert each candidate to stored units before computing its KNN distance.
+
+- [ ] Include the true nearest neighbor when scoring a new sample
+
+  - **Summary:** `mean_distance_from_single` always skips the smallest distance as a presumed self-distance even though
+    a new candidate is not yet in the buffer.
+  - **Affected module:** `src/fusion/mag_calibration.rs`
+  - **Severity:** Medium
+  - **Description:** The same helper is used both for existing rows, which do have one zero self-distance, and new
+    candidates, for which every distance is to a real buffered neighbor:
 
     ```rust
     squared_dists.iter().skip(1).take(k)
 
-    // Buffered row: one distance is the row's zero self-distance.
     mean_dist[i] = self.mean_distance_from_single(row.into());
 
-    // New sample: every distance is to a real buffered neighbor.
     let sample_mean_dist = self.mean_distance_from_single(x.transpose());
     ```
-    For a candidate, `skip(1)` discards its actual nearest neighbor and exaggerates its isolation. Give the helper an
-    explicit `skip_self` argument or use separate helpers, so buffered rows skip the known zero distance and new
-    candidates average their true nearest `k` distances.
-- [ ] Model finite magnetometer range instead of unbounded noise output
 
-  - **Summary:** The simulator draws magnetometer noise from an unbounded Gaussian and never applies sensor saturation,
-    so a long-running immediate stream eventually emits arbitrarily extreme but finite readings.
-  - **Affected module:** `src/sim/dummy.rs`
-  - **Severity:** Medium
-  - **Description:** Noise samples are added directly to the distorted field:
+    Dropping the candidate's actual nearest neighbor exaggerates its isolation and makes noisy candidates more likely
+    to evict legitimate buffered measurements.
+  - **Recommended fix:** Give the helper an explicit self-index or use separate buffered-row and candidate scoring functions so only a known zero self-distance is skipped.
 
-    ```rust
-    distorted + self.sample_noise_vec(self.config.mag_noise_std_dev)
+- [ ] Add sample age or calibration epochs to the buffer
 
-    Normal::new(0.0, std_dev as f64)
-        .map(|normal| normal.sample(rng) as f32)
-        .unwrap_or(0.0)
-    ```
-    Add a configurable magnetometer measurement range and saturate or reject simulated readings outside that range.
-    This makes the dummy match a finite-range sensor and prevents rare Gaussian tails from becoming unlimited
-    calibration inputs. This simulator fix is separate from the calibrator's obligation to reject outliers safely.
-- [ ] Add sample age or forgetting to the calibration buffer
-
-  - **Summary:** The calibrator fits one offset to a timeless buffer, so historical samples remain mixed with current
-    samples when the magnetic environment or hard-iron bias changes.
+  - **Summary:** The calibrator fits one static offset to a timeless buffer, so historical samples remain mixed with
+    current samples when hard-iron bias changes.
   - **Affected module:** `src/fusion/mag_calibration.rs`
   - **Severity:** Medium
   - **Description:** `MagCalibrator` stores coordinates but no timestamp, age, or calibration epoch:
@@ -231,24 +204,7 @@ affected module in the findings below.
         k: usize,
     }
     ```
-    Add an explicit forgetting or reset policy and test the maximum trackable offset-change rate. Eviction must
-    consider sample age or calibration epoch in addition to spatial diversity; otherwise samples from different
-    ellipsoid centers can remain in one static fit indefinitely.
-- [ ] Separate static-calibration and drifting-bias simulator profiles
 
-  - **Summary:** The default simulator continuously changes its hard-iron offset, so one deterministic run does not
-    provide a stationary ellipsoid for validating a static calibration solve.
-  - **Affected module:** `src/sim/dummy.rs`
-  - **Severity:** Medium
-  - **Description:** The default has a five-minute drift cycle:
-
-    ```rust
-    hard_iron_drift: Vector3::new(2.0, 1.5, 2.5),
-    hard_iron_drift_period_us: 5 * 60 * 1_000_000,
-
-    self.config.hard_iron_base
-        + self.config.hard_iron_drift.component_mul(&drift_shape)
-    ```
-    Provide a static calibration-validation profile with `hard_iron_drift: Vector3::zeros()` and retain drifting
-    bias as a separate adaptive-calibration stress profile. This keeps both behaviors testable without making the
-    baseline calibration fixture change its target parameters during the solve.
+    Spatial-diversity eviction can retain old extreme points indefinitely, so measurements generated around different
+    ellipsoid centers can be combined into one non-physical fit.
+  - **Recommended fix:** Add an explicit reset, age-weighting, or calibration-epoch policy so stale samples cannot remain in the fit solely because they are spatially isolated.
