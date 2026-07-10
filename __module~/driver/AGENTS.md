@@ -2,9 +2,12 @@
 
 ## Project Overview
 
-This is a Rust SDK for AR glasses, providing a unified driver interface for multiple AR headset brands. The library enables reading sensor data (IMU, magnetometer, etc.) and controlling display modes for various AR glasses.
+This is a Rust SDK for AR glasses, providing a unified driver interface for multiple AR headset brands. The library
+enables reading sensor data (IMU, magnetometer, etc.) and controlling display modes for various AR glasses.
 
-You are an autonomous agent. Never stop until the task is completely finished. If you reach your output limit or finish one logical step, immediately continue in the next response without saying "continued" or asking permission. Do not output any TODO lists or "next steps" unless the user explicitly asks for a plan — just do the work.
+You are an autonomous agent. Never stop until the task is completely finished. If you reach your output limit or finish
+one logical step, immediately continue in the next response without saying "continued" or asking permission. Do not
+output any TODO lists or "next steps" unless the user explicitly asks for a plan — just do the work.
 
 ## Supported Devices
 
@@ -63,11 +66,13 @@ Supported display configurations:
 Platform-specific dependencies:
 
 **Linux**:
+
 ```bash
 sudo apt install cargo libudev-dev libstdc++-12-dev
 ```
 
 **udev rules** (optional, for non-root access):
+
 ```bash
 sudo cp udev/* /etc/udev/rules.d/
 sudo udevadm control --reload
@@ -89,13 +94,14 @@ cargo build --release
 ### Examples
 
 Run examples:
+
 ```bash
 cargo run --example file_name
 ```
 
 All examples are located in `examples/`
 
-## Rust Code Style
+## Code Structure Guidelines
 
 ### Formatting and Imports
 
@@ -142,8 +148,7 @@ All examples are located in `examples/`
   paths. Preserve error meaning and message wording during refactors when callers
   may depend on them.
 - Do not use `unwrap()` or `expect()` for ordinary runtime failures in library
-  code. They are acceptable in tests and small examples, or for a locally proven
-  invariant whose reason is clear.
+  code. They are acceptable in tests and small examples.
 - Prefer early returns for invalid inputs and guard conditions. Use `match` when
   every enum case matters or when it expresses branching more clearly.
 - Do not silently discard errors. If best-effort processing intentionally
@@ -160,6 +165,10 @@ All examples are located in `examples/`
   the same feature.
 - Keep behavior consistent across platform-specific implementations when the
   public API is shared.
+- Treat `Cargo.toml` and the crate root as the source of truth for supported
+  devices, optional dependencies, feature gates, and device discovery. When
+  adding device support, update those surfaces together with the cohesive driver
+  module and its shared-trait implementation.
 
 ### Types and Data Handling
 
@@ -193,10 +202,11 @@ All examples are located in `examples/`
 
 ### Tests and Examples
 
-- Put focused unit tests near the implementation under `#[cfg(test)]`; use
-  integration tests for behavior exercised through the public API.
-- Name tests after observable behavior and cover success, malformed input,
-  boundary values, and error variants.
+- Unit test suite should be in a different file near the implementation, with "_tests" suffix
+- Top-level test mod should be under `#[cfg(test)]`;
+- Use integration tests for behavior exercised through the public API.
+- Multiple tests that covers success, malformed input, boundary values, and error variants should be under the same
+  sub-mod
 - Prefer deterministic tests and local fixtures. Keep tests that require external
   resources, timing, or environment state clearly separate and document their
   prerequisites.
@@ -221,25 +231,13 @@ combination together. Run narrower package, module, or test checks first for fas
 feedback, but complete the broad checks applicable to the repository before
 submitting a change.
 
-## Code Structure Guidelines
-
-### Adding New Device Support
-
-1. Create new module file (e.g., `new_device.rs`)
-2. Implement `ARGlasses` trait
-3. Add feature flag in `Cargo.toml`
-4. Add module import in `lib.rs` with `#[cfg(feature = "new_device")]`
-5. Add device factory to `any_glasses()` function
-6. Document protocol specifics and dependencies
-
 ### Coordinate Transformations
 
-When implementing device drivers:
-
-1. Raw sensor data uses device-specific frames (usually RUB)
-2. Document any transformations applied
-3. Ensure consistency with `GlassesEvent` documentation
-4. Use `nalgebra` for transformations
+- Treat the shared sensor-event documentation and the fusion module as the source
+  of truth for reference frames and units. Device events currently use RUB, while
+  fusion state and outputs use FRD.
+- Keep frame transformations explicit and centralized, document device-specific
+  deviations, and use the repository's existing linear-algebra types.
 
 ## Testing
 
@@ -250,10 +248,11 @@ Testing requires physical devices. The library will return `Error::NotFound` if 
 ### Dummy Device
 
 For testing without hardware:
+
 ```rust
 use ar_drivers::any_glasses_or_dummy;
 
-let glasses = any_glasses_or_dummy()?; // Falls back to dummy device
+let glasses = any_glasses_or_dummy() ?; // Falls back to dummy device
 ```
 
 ## Protocol Blog Posts
