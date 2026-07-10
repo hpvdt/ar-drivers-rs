@@ -41,14 +41,6 @@ The library uses Cargo feature flags for conditional compilation:
 
 All features are enabled by default.
 
-### Reference Frames
-
-The library uses multiple coordinate reference frames:
-
-- **RUB (Right-Up-Back)**: Android sensor coordinate system (used in raw sensor data)
-- **FRD (Forward-Right-Down)**: Aerospace standard frame (used in fusion outputs)
-- **Custom frames**: Configurable via AHRS for different applications
-
 ### Display Modes
 
 Supported display configurations:
@@ -90,16 +82,6 @@ cargo build --no-default-features --features rokid
 # Build release
 cargo build --release
 ```
-
-### Examples
-
-Run examples:
-
-```bash
-cargo run --example file_name
-```
-
-All examples are located in `examples/`
 
 ## Code Structure/Style Guidelines
 
@@ -148,7 +130,7 @@ All examples are located in `examples/`
   paths. Preserve error meaning and message wording during refactors when callers
   may depend on them.
 - Do not use `unwrap()` or `expect()` for ordinary runtime failures in library
-  code. They are acceptable in tests and small examples.
+  code. They are acceptable in tests.
 - Prefer early returns for invalid inputs and guard conditions. Use `match` when
   every enum case matters or when it expresses branching more clearly.
 - Do not silently discard errors. If best-effort processing intentionally
@@ -200,7 +182,7 @@ All examples are located in `examples/`
 - Use an explicit representation such as `#[repr(C)]` when a type's layout is
   shared across an FFI or binary boundary.
 
-### Tests and Examples
+### Tests
 
 - Unit test suite should be in a different file near the implementation, with "_tests" suffix
 - Top-level test mod should be under `#[cfg(test)]`;
@@ -212,8 +194,6 @@ All examples are located in `examples/`
   prerequisites.
 - Compare floating-point results with a tolerance derived from the algorithm;
   use exact equality only for values that are constructed exactly.
-- Examples may use `unwrap()` to stay concise, but should demonstrate the public
-  API and avoid becoming alternate implementations of library logic.
 
 ### Validation
 
@@ -230,14 +210,6 @@ Adapt feature flags and targets when a project does not support building every
 combination together. Run narrower package, module, or test checks first for fast
 feedback, but complete the broad checks applicable to the repository before
 submitting a change.
-
-### Coordinate Transformations
-
-- Treat the shared sensor-event documentation and the fusion module as the source
-  of truth for reference frames and units. Device events currently use RUB, while
-  fusion state and outputs use FRD.
-- Keep frame transformations explicit and centralized, document device-specific
-  deviations, and use the repository's existing linear-algebra types.
 
 ## Testing
 
