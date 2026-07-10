@@ -13,7 +13,6 @@ fn quiet_config() -> DummyConfig {
         hard_iron_drift: ZERO,
         soft_iron_min_eigenvalue: 1.0,
         soft_iron_max_eigenvalue: 1.0,
-        soft_iron_eigenvalue_drift: ZERO,
         ..DummyConfig::default()
     }
 }
@@ -79,18 +78,19 @@ fn default_hard_iron_bias_is_under_50_microtesla() {
 }
 
 #[test]
-fn soft_iron_is_positive_definite_and_bounded_over_a_drift_cycle() {
+fn soft_iron_is_fixed_positive_definite_and_bounded() {
     let mut dummy = Dummy::new();
     let config = dummy.config.clone();
     let lower_eigenvalue = config.soft_iron_min_eigenvalue;
     let upper_eigenvalue = config.soft_iron_max_eigenvalue;
-    let samples = 360;
+    let initial_soft_iron = dummy.snapshot().soft_iron;
 
-    for sample in 0..=samples {
-        dummy.timestamp_us = config.distortion_drift_period_us * sample / samples;
+    for sample in 0..=360 {
+        dummy.timestamp_us = config.distortion_drift_period_us * sample / 360;
         let soft_iron = dummy.snapshot().soft_iron;
         let asymmetry = soft_iron - soft_iron.transpose();
 
+        assert_eq!(soft_iron, initial_soft_iron);
         assert!(asymmetry.norm() <= 1.0e-5, "soft_iron={:?}", soft_iron);
         assert!(soft_iron.cholesky().is_some(), "soft_iron={:?}", soft_iron);
 

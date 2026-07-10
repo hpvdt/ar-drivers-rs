@@ -22,12 +22,12 @@ The dummy AR glasses fixture should be a deterministic, public, configurable sim
 - Gyro emits RUB angular body rates in rad/s with small Gaussian noise.
 - Acc emits physical gravity plus linear acceleration in RUB with medium Gaussian noise.
 - Mag emits magnetic north in RUB with magnetic dip clamped to +/-30 degrees.
-- Inject hard-iron and soft-iron distortion into magnetometer readings with very slow drift.
+- Inject hard-iron and soft-iron distortion into magnetometer readings. Let the hard-iron offset drift slowly, while keeping the randomly generated soft-iron matrix fixed for the lifetime of the fixture.
 - Keep the default hard-iron bias below 50 microtesla while still giving integration tests a realistic calibration challenge.
 - Generate a seeded random orthogonal eigenbasis `Q` and three positive eigenvalues `lambda_i`. Apply `S = Q diag(lambda_i) Q^T`, which is symmetric positive definite and maps the ideal magnetic sphere to a well-formed ellipsoid.
 - Expose lower and upper bounds for each `lambda_i` through `DummyConfig` as `soft_iron_min_eigenvalue` and `soft_iron_max_eigenvalue`.
-- Sample each initial `lambda_i` directly from its valid range after reserving space for its configured drift amplitude. This requires neither SVD validation nor rejection sampling.
-- Apply soft-iron drift only to the three `lambda_i` values and keep them within their configured bounds for the entire drift cycle. The eigenbasis remains orthogonal, so `S` stays positive definite.
+- Sample each `lambda_i` directly from its valid range. This requires neither SVD validation nor rejection sampling.
+- Generate the soft-iron matrix once during fixture initialization and reuse it for every magnetometer reading. The eigenbasis remains orthogonal and the eigenvalues remain positive, so `S` stays positive definite.
 
 ## Non-Sensor Behavior
 

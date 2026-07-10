@@ -60,9 +60,7 @@ pub struct DummyConfig {
     pub soft_iron_min_eigenvalue: f32,
     /// Upper bound for every soft-iron matrix eigenvalue.
     pub soft_iron_max_eigenvalue: f32,
-    /// Slow per-axis soft-iron eigenvalue drift amplitude.
-    pub soft_iron_eigenvalue_drift: Vector3<f32>,
-    /// Period for one full hard/soft iron drift cycle, in microseconds.
+    /// Period for one full hard-iron drift cycle, in microseconds.
     pub distortion_drift_period_us: u64,
 }
 
@@ -86,7 +84,6 @@ impl Default for DummyConfig {
             hard_iron_drift: Vector3::new(2.0, 1.5, 2.5),
             soft_iron_min_eigenvalue: 0.70,
             soft_iron_max_eigenvalue: 1.40,
-            soft_iron_eigenvalue_drift: Vector3::new(0.010, 0.008, 0.009),
             distortion_drift_period_us: 5 * 60 * 1_000_000,
         }
     }
@@ -252,7 +249,7 @@ impl Dummy {
     }
 
     fn current_soft_iron(&self) -> Matrix3<f32> {
-        let eigenvalues = self.current_soft_iron_eigenvalues();
+        let eigenvalues = self.soft_iron_base_eigenvalues;
         if eigenvalues.x == eigenvalues.y && eigenvalues.y == eigenvalues.z {
             return Matrix3::identity() * eigenvalues.x;
         }
@@ -260,21 +257,6 @@ impl Dummy {
         self.soft_iron_eigenvectors
             * Matrix3::from_diagonal(&eigenvalues)
             * self.soft_iron_eigenvectors.transpose()
-    }
-
-    fn current_soft_iron_eigenvalues(&self) -> Vector3<f32> {
-        let phase = self.drift_phase();
-        let drift_shape = Vector3::new(
-            phase.sin(),
-            (phase * 0.73 + 1.1).sin(),
-            (phase * 0.37 + 2.3).sin(),
-        );
-
-        self.soft_iron_base_eigenvalues
-            + self
-                .config
-                .soft_iron_eigenvalue_drift
-                .component_mul(&drift_shape)
     }
 
     fn drift_phase(&self) -> f32 {
@@ -373,14 +355,6 @@ fn normalize_config(mut config: DummyConfig) -> DummyConfig {
     {
         config.soft_iron_max_eigenvalue = config.soft_iron_min_eigenvalue;
     }
-    let max_drift = (config.soft_iron_max_eigenvalue - config.soft_iron_min_eigenvalue) * 0.5;
-    config.soft_iron_eigenvalue_drift = config.soft_iron_eigenvalue_drift.map(|value| {
-        if value.is_finite() {
-            value.abs().min(max_drift)
-        } else {
-            0.0
-        }
-    });
     config.distortion_drift_period_us = config.distortion_drift_period_us.max(1);
 
     config
@@ -399,12 +373,11 @@ fn sample_rotation_matrix(rng: &mut StdRng) -> Matrix3<f32> {
 fn sample_soft_iron_eigenvalues(rng: &mut StdRng, config: &DummyConfig) -> Vector3<f32> {
     let minimum = config.soft_iron_min_eigenvalue;
     let maximum = config.soft_iron_max_eigenvalue;
-    let drift = config.soft_iron_eigenvalue_drift;
 
     Vector3::new(
-        sample_range(rng, minimum + drift.x, maximum - drift.x),
-        sample_range(rng, minimum + drift.y, maximum - drift.y),
-        sample_range(rng, minimum + drift.z, maximum - drift.z),
+        sample_range(rng, minimum, maximum),
+        sample_range(rng, minimum, maximum),
+        sample_range(rng, minimum, maximum),
     )
 }
 
