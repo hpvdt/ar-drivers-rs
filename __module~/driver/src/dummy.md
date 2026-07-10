@@ -24,10 +24,11 @@ The dummy AR glasses fixture should be a deterministic, public, configurable sim
 - Mag emits magnetic north in RUB with magnetic dip clamped to +/-30 degrees.
 - Inject hard-iron and soft-iron distortion into magnetometer readings. Let the hard-iron offset drift slowly, while keeping the randomly generated soft-iron matrix fixed for the lifetime of the fixture.
 - Keep the default hard-iron bias below 50 microtesla while still giving integration tests a realistic calibration challenge.
-- Generate a seeded random orthogonal eigenbasis `Q` and three positive eigenvalues `lambda_i`. Apply `S = Q diag(lambda_i) Q^T`, which is symmetric positive definite and maps the ideal magnetic sphere to a well-formed ellipsoid.
-- Expose lower and upper bounds for each `lambda_i` through `DummyConfig` as `soft_iron_min_eigenvalue` and `soft_iron_max_eigenvalue`.
-- Sample each `lambda_i` directly from its valid range. This requires neither SVD validation nor rejection sampling.
-- Generate the soft-iron matrix once during fixture initialization and reuse it for every magnetometer reading. The eigenbasis remains orthogonal and the eigenvalues remain positive, so `S` stays positive definite.
+- Expose lower and upper bounds for each soft-iron eigenvalue through `DummyConfig` as `soft_iron_min_eigenvalue` and `soft_iron_max_eigenvalue`.
+- Compute the permanent vector-norm bounds `sqrt(soft_iron_min_eigenvalue)` and `sqrt(soft_iron_max_eigenvalue)` once during fixture initialization.
+- Generate three seeded random vectors and apply Gram-Schmidt orthogonalization without normalizing them. After orthogonalization, clamp each vector's L2 norm to the permanent vector-norm bounds so the scale remains baked into the vector. Resample a vector if it is degenerate or too close to the span of the preceding vectors.
+- Form a matrix `V` from the three mutually orthogonal, scaled vectors and construct the soft-iron matrix as `S = V V^T`. The normalized directions of the vectors are the eigenvectors of `S`, and its eigenvalues are their squared L2 norms, so `S` is symmetric positive definite and every eigenvalue remains within the configured bounds without SVD validation.
+- Generate `S` once during fixture initialization and reuse it for every magnetometer reading.
 
 ## Non-Sensor Behavior
 

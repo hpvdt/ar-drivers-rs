@@ -61,7 +61,7 @@ pub struct DummyConfig {
     /// Upper bound for every soft-iron matrix eigenvalue.
     pub soft_iron_max_eigenvalue: f32,
     /// Period for one full hard-iron drift cycle, in microseconds.
-    pub distortion_drift_period_us: u64,
+    pub hard_iron_drift_period_us: u64,
 }
 
 impl Default for DummyConfig {
@@ -84,7 +84,7 @@ impl Default for DummyConfig {
             hard_iron_drift: Vector3::new(2.0, 1.5, 2.5),
             soft_iron_min_eigenvalue: 0.70,
             soft_iron_max_eigenvalue: 1.40,
-            distortion_drift_period_us: 5 * 60 * 1_000_000,
+            hard_iron_drift_period_us: 5 * 60 * 1_000_000,
         }
     }
 }
@@ -260,7 +260,7 @@ impl Dummy {
     }
 
     fn drift_phase(&self) -> f32 {
-        let period = self.config.distortion_drift_period_us as f32;
+        let period = self.config.hard_iron_drift_period_us as f32;
         2.0 * PI * self.timestamp_us as f32 / period
     }
 
@@ -355,7 +355,7 @@ fn normalize_config(mut config: DummyConfig) -> DummyConfig {
     {
         config.soft_iron_max_eigenvalue = config.soft_iron_min_eigenvalue;
     }
-    config.distortion_drift_period_us = config.distortion_drift_period_us.max(1);
+    config.hard_iron_drift_period_us = config.hard_iron_drift_period_us.max(1);
 
     config
 }

@@ -86,7 +86,7 @@ fn soft_iron_is_fixed_positive_definite_and_bounded() {
     let initial_soft_iron = dummy.snapshot().soft_iron;
 
     for sample in 0..=360 {
-        dummy.timestamp_us = config.distortion_drift_period_us * sample / 360;
+        dummy.timestamp_us = config.hard_iron_drift_period_us * sample / 360;
         let soft_iron = dummy.snapshot().soft_iron;
         let asymmetry = soft_iron - soft_iron.transpose();
 
