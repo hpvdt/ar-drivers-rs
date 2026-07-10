@@ -161,7 +161,7 @@ impl<const N: usize> MagCalibrator<N> {
     ) -> std::result::Result<([f32; 3], [f32; 3]), BadMagDataCause> {
         let sample_count = self.matrix_filled.min(N);
         if sample_count < DESIGN_MATRIX_COLUMNS {
-            return Err(BadMagDataCause::InsufficientCalibrationSamples {
+            return Err(BadMagDataCause::Calibration_InsufficientSamples {
                 samples: sample_count,
                 required: DESIGN_MATRIX_COLUMNS,
             });
@@ -189,20 +189,9 @@ impl<const N: usize> MagCalibrator<N> {
         let min_singular_value = singular_values[DESIGN_MATRIX_COLUMNS - 1];
         let epsilon = max_singular_value * SVD_EPSILON_RATIO;
 
-        let rank = svd.rank(epsilon);
-        if !max_singular_value.is_finite()
-            || max_singular_value <= 0.0
-            || rank < DESIGN_MATRIX_COLUMNS
-        {
-            return Err(BadMagDataCause::DegenerateCalibrationSamples {
-                rank,
-                required_rank: DESIGN_MATRIX_COLUMNS,
-            });
-        }
-
         let condition = max_singular_value / min_singular_value;
         if !condition.is_finite() || condition > MAX_SVD_CONDITION {
-            return Err(BadMagDataCause::IllConditionedCalibrationSamples {
+            return Err(BadMagDataCause::Calibration_DegenerateSoftIronMatrix {
                 condition,
                 max_condition: MAX_SVD_CONDITION,
             });
@@ -211,12 +200,15 @@ impl<const N: usize> MagCalibrator<N> {
         // Solve the least-squares system with a Moore-Penrose pseudo-inverse.
         let pseudo_inverse = svd
             .pseudo_inverse(epsilon)
-            .map_err(|message| BadMagDataCause::CalibrationSolveFailed { message })?;
+            .map_err(|message| BadMagDataCause::Calibration_Unsolveable { message })?;
         let x = pseudo_inverse * w;
 
         // Calculate offsets and scale factors in pre-scaled sample units.
         let offset = Vector3::new(x[0] / 2., x[1] / (2. * x[3]), x[2] / (2. * x[4]));
-        let temp = x[5] + offset[0] * offset[0] + x[3] * offset[1] * offset[1] + x[4] * offset[2] * offset[2];
+        let temp = x[5]
+            + offset[0] * offset[0]
+            + x[3] * offset[1] * offset[1]
+            + x[4] * offset[2] * offset[2];
         let scale = Vector3::new(temp.sqrt(), (temp / x[3]).sqrt(), (temp / x[4]).sqrt());
 
         // Samples are divided by `pre_scaler` before storage, so the fit is in
@@ -228,7 +220,7 @@ impl<const N: usize> MagCalibrator<N> {
         // Check that off and scale vectors contain valid values
         for component in offset.iter().chain(scale.iter()) {
             if !component.is_finite() {
-                return Err(BadMagDataCause::NonFiniteCalibration { offset, scale });
+                return Err(BadMagDataCause::Calibration_DegenerateScale { offset, scale });
             }
         }
 

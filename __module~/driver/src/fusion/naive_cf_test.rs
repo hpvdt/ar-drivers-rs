@@ -42,7 +42,7 @@ fn get_calibrated_mag_discards_underconstrained_calibration() {
 
     assert!(matches!(
         state.getCalibratedMag(raw_mag),
-        Err(BadMagDataCause::InsufficientCalibrationSamples {
+        Err(BadMagDataCause::Calibration_InsufficientSamples {
             samples: 1,
             required: 6
         })

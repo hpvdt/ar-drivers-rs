@@ -40,7 +40,7 @@ fn mag_calibrator_rejects_insufficient_samples() {
 
     assert!(matches!(
         calibrator.perform_calibration(),
-        Err(BadMagDataCause::InsufficientCalibrationSamples {
+        Err(BadMagDataCause::Calibration_InsufficientSamples {
             samples: 5,
             required: 6
         })
@@ -58,7 +58,7 @@ fn mag_calibrator_rejects_nearly_collinear_samples() {
     assert!(matches!(
         calibrator.perform_calibration(),
         Err(BadMagDataCause::DegenerateCalibrationSamples { .. }
-            | BadMagDataCause::IllConditionedCalibrationSamples { .. })
+            | BadMagDataCause::Calibration_DegenerateSoftIronMatrix { .. })
     ));
 }
 
@@ -82,7 +82,7 @@ fn mag_calibrator_accepts_zero_components_and_rejects_bad_vectors() {
 
     assert!(matches!(
         calibrator.perform_calibration(),
-        Err(BadMagDataCause::InsufficientCalibrationSamples {
+        Err(BadMagDataCause::Calibration_InsufficientSamples {
             samples: 1,
             required: 6
         })
