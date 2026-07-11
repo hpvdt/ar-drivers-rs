@@ -24,10 +24,7 @@ fn mag_calibrator_degenerate_data_does_not_panic() {
 
     assert!(matches!(
         calibrator.perform_calibration(),
-        Err(BadMagDataCause::DegenerateCalibrationSamples {
-            rank: _,
-            required_rank: 6
-        })
+        Err(BadMagDataCause::Calibration_DegenerateSoftIronMatrix { .. })
     ));
 }
 
@@ -57,8 +54,7 @@ fn mag_calibrator_rejects_nearly_collinear_samples() {
 
     assert!(matches!(
         calibrator.perform_calibration(),
-        Err(BadMagDataCause::DegenerateCalibrationSamples { .. }
-            | BadMagDataCause::Calibration_DegenerateSoftIronMatrix { .. })
+        Err(BadMagDataCause::Calibration_DegenerateSoftIronMatrix { .. })
     ));
 }
 

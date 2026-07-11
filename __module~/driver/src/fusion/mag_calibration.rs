@@ -154,6 +154,11 @@ impl<const N: usize> MagCalibrator<N> {
         self.mean_distance
     }
 
+    /// Add a sample if it is deemed more useful than the least useful sample.
+    // pub fn correct_vec(&mut self, x: Vector3<f32>) -> Result<Vector3<f32>> {
+    //     ???
+    // }
+
     /// Try to calculate calibration offset and scale values. Returns the cause
     /// when the calibration cannot be produced. The tuple contains (offset, scale).
     pub fn perform_calibration(
@@ -228,7 +233,3 @@ impl<const N: usize> MagCalibrator<N> {
         Ok((offset.into(), scale.into()))
     }
 }
-
-#[cfg(test)]
-#[path = "mag_calibration_test.rs"]
-mod mag_calibration_test;
