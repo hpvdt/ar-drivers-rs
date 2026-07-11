@@ -155,28 +155,42 @@ const MIN_MAG_SCALE_DIVISOR: f32 = 1.0e-6;
 
 /// Reason a magnetometer vector could not produce a calibrated FRD reading.
 #[derive(Clone, Copy, derive_more::Debug, PartialEq)]
-pub enum BadMagDataCause {
-    /// The raw magnetometer vector is too small to be useful. TODO: this is actually not a problem as hard-iron zero can be very far
-    // WeakRawReading {
-    //     /// Actual raw vector norm.
-    //     norm: f32,
-    //     /// Minimum accepted vector norm.
-    //     min_norm: f32,
-    // },
+pub enum BadMagCause {
+    /// The magnetometer calibration is not usable.
+    BadCalibration(BadCalibration),
+    /// The magnetometer reading is not usable.
+    BadReading(BadReading),
+}
+
+impl From<BadCalibration> for BadMagCause {
+    fn from(cause: BadCalibration) -> Self {
+        Self::BadCalibration(cause)
+    }
+}
+
+impl From<BadReading> for BadMagCause {
+    fn from(cause: BadReading) -> Self {
+        Self::BadReading(cause)
+    }
+}
+
+/// Reason a magnetometer calibration is not usable.
+#[derive(Clone, Copy, derive_more::Debug, PartialEq)]
+pub enum BadCalibration {
     /// Not enough accepted samples have been collected for the calibration model.
-    Calibration_InsufficientSamples {
+    InsufficientSamples {
         /// Number of accepted samples currently available.
         samples: usize,
         /// Minimum number of samples required by the calibration model.
         required: usize,
     },
     /// The SVD-based calibration solve failed after the sample checks passed.
-    Calibration_Unsolveable {
+    Unsolveable {
         /// Original rejection message.
         message: &'static str,
     },
     /// The accepted samples produce a numerically unstable calibration solve.
-    Calibration_DegenerateSoftIronMatrix {
+    DegenerateSoftIronMatrix {
         /// Estimated condition number of the calibration design matrix.
         #[debug("{:+10.4}", condition)]
         condition: f32,
@@ -185,7 +199,7 @@ pub enum BadMagDataCause {
         max_condition: f32,
     },
     /// The calibration solve produced a non-finite offset or scale.
-    Calibration_DegenerateScale {
+    DegenerateScale {
         /// Calibration offset.
         #[debug(
             "[x={:+10.4}, y={:+10.4}, z={:+10.4}]",
@@ -204,7 +218,7 @@ pub enum BadMagDataCause {
         scale: Vector3<f32>,
     },
     /// The accepted calibration cannot be safely applied.
-    NumericallyUnstableCalibration {
+    NumericallyUnstable {
         /// Calibration offset.
         #[debug(
             "[x={:+10.4}, y={:+10.4}, z={:+10.4}]",
@@ -222,6 +236,18 @@ pub enum BadMagDataCause {
         )]
         scale: Vector3<f32>,
     },
+}
+
+/// Reason a magnetometer reading is not usable.
+#[derive(Clone, Copy, derive_more::Debug, PartialEq)]
+pub enum BadReading {
+    /// The raw magnetometer vector is too small to be useful. TODO: this is actually not a problem as hard-iron zero can be very far
+    // WeakRawReading {
+    //     /// Actual raw vector norm.
+    //     norm: f32,
+    //     /// Minimum accepted vector norm.
+    //     min_norm: f32,
+    // },
     /// The calibrated vector is too small to be useful.
     WeakCalibratedReading {
         /// Actual calibrated vector norm.
@@ -250,13 +276,13 @@ impl FusionState {
     pub fn getCalibratedMag(
         &mut self,
         raw_mag: Vector3<f32>,
-    ) -> std::result::Result<Vector3<f32>, BadMagDataCause> {
+    ) -> std::result::Result<Vector3<f32>, BadMagCause> {
         // let raw_norm = raw_mag.norm();
         // if raw_norm < Self::MIN_MAG_NORM {
-        //     return Err(BadMagDataCause::WeakRawReading {
+        //     return Err(BadMagCause::BadReading(BadReading::WeakRawReading {
         //         norm: raw_norm,
         //         min_norm: Self::MIN_MAG_NORM,
-        //     });
+        //     }));
         // }
 
         self.mag.evaluate_sample_vec(raw_mag);
@@ -264,16 +290,18 @@ impl FusionState {
         let offset: Vector3<f32> = Vector3::from(offset);
         let scale: Vector3<f32> = Vector3::from(scale);
         if !mag_calibration_can_divide(&offset, &scale) {
-            return Err(BadMagDataCause::NumericallyUnstableCalibration { offset, scale });
+            return Err(BadMagCause::BadCalibration(
+                BadCalibration::NumericallyUnstable { offset, scale },
+            ));
         }
         let mag = (raw_mag - offset).component_div(&scale);
 
         let mag_norm = mag.norm();
         if mag_norm < Self::MIN_MAG_NORM {
-            Err(BadMagDataCause::WeakCalibratedReading {
+            Err(BadMagCause::BadReading(BadReading::WeakCalibratedReading {
                 norm: mag_norm,
                 min_norm: Self::MIN_MAG_NORM,
-            })
+            }))
         } else {
             Ok(mag.normalize())
         }

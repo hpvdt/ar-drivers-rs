@@ -1,7 +1,7 @@
 // use core::cmp::Ordering;
 use nalgebra::{DMatrix, DVector, SMatrix, SMatrixView, Vector3, SVD};
 
-use super::BadMagDataCause;
+use super::BadCalibration;
 
 const DESIGN_MATRIX_COLUMNS: usize = 6;
 const SVD_EPSILON_RATIO: f32 = 1.0e-6;
@@ -163,10 +163,10 @@ impl<const N: usize> MagCalibrator<N> {
     /// when the calibration cannot be produced. The tuple contains (offset, scale).
     pub fn perform_calibration(
         &mut self,
-    ) -> std::result::Result<([f32; 3], [f32; 3]), BadMagDataCause> {
+    ) -> std::result::Result<([f32; 3], [f32; 3]), BadCalibration> {
         let sample_count = self.matrix_filled.min(N);
         if sample_count < DESIGN_MATRIX_COLUMNS {
-            return Err(BadMagDataCause::Calibration_InsufficientSamples {
+            return Err(BadCalibration::InsufficientSamples {
                 samples: sample_count,
                 required: DESIGN_MATRIX_COLUMNS,
             });
@@ -196,7 +196,7 @@ impl<const N: usize> MagCalibrator<N> {
 
         let condition = max_singular_value / min_singular_value;
         if !condition.is_finite() || condition > MAX_SVD_CONDITION {
-            return Err(BadMagDataCause::Calibration_DegenerateSoftIronMatrix {
+            return Err(BadCalibration::DegenerateSoftIronMatrix {
                 condition,
                 max_condition: MAX_SVD_CONDITION,
             });
@@ -205,7 +205,7 @@ impl<const N: usize> MagCalibrator<N> {
         // Solve the least-squares system with a Moore-Penrose pseudo-inverse.
         let pseudo_inverse = svd
             .pseudo_inverse(epsilon)
-            .map_err(|message| BadMagDataCause::Calibration_Unsolveable { message })?;
+            .map_err(|message| BadCalibration::Unsolveable { message })?;
         let x = pseudo_inverse * w;
 
         // Calculate offsets and scale factors in pre-scaled sample units.
@@ -225,7 +225,7 @@ impl<const N: usize> MagCalibrator<N> {
         // Check that off and scale vectors contain valid values
         for component in offset.iter().chain(scale.iter()) {
             if !component.is_finite() {
-                return Err(BadMagDataCause::Calibration_DegenerateScale { offset, scale });
+                return Err(BadCalibration::DegenerateScale { offset, scale });
             }
         }
 

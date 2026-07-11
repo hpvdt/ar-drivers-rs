@@ -2,7 +2,9 @@ use nalgebra::{UnitQuaternion, Vector3};
 
 use super::mag_calibration::MagCalibrator;
 use super::naive_cf::NaiveCF;
-use super::{mag_calibration_can_divide, BadMagDataCause, FusionState, MIN_MAG_SCALE_DIVISOR};
+use super::{
+    mag_calibration_can_divide, BadCalibration, BadMagCause, FusionState, MIN_MAG_SCALE_DIVISOR,
+};
 
 fn frd_to_rub(v: Vector3<f32>) -> Vector3<f32> {
     Vector3::new(v.y, -v.z, -v.x)
@@ -42,10 +44,12 @@ fn get_calibrated_mag_discards_underconstrained_calibration() {
 
     assert!(matches!(
         state.getCalibratedMag(raw_mag),
-        Err(BadMagDataCause::Calibration_InsufficientSamples {
-            samples: 1,
-            required: 6
-        })
+        Err(BadMagCause::BadCalibration(
+            BadCalibration::InsufficientSamples {
+                samples: 1,
+                required: 6
+            }
+        ))
     ));
 }
 
@@ -73,7 +77,7 @@ fn update_mag_discards_ill_conditioned_calibration() {
 //
 //     assert!(matches!(
 //         state.getCalibratedMag(raw_mag),
-//         Err(super::BadMagDataCause::WeakRawReading { .. })
+//         Err(super::BadMagCause::BadReading(super::BadReading::WeakRawReading { .. }))
 //     ));
 // }
 

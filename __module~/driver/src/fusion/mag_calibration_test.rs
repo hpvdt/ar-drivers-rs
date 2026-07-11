@@ -1,7 +1,7 @@
 use nalgebra::Vector3;
 
 use super::mag_calibration::MagCalibrator;
-use super::BadMagDataCause;
+use super::BadCalibration;
 
 #[test]
 fn mag_calibrator_solves_synthetic_offset_and_scale() {
@@ -24,7 +24,7 @@ fn mag_calibrator_degenerate_data_does_not_panic() {
 
     assert!(matches!(
         calibrator.perform_calibration(),
-        Err(BadMagDataCause::Calibration_DegenerateSoftIronMatrix { .. })
+        Err(BadCalibration::DegenerateSoftIronMatrix { .. })
     ));
 }
 
@@ -37,7 +37,7 @@ fn mag_calibrator_rejects_insufficient_samples() {
 
     assert!(matches!(
         calibrator.perform_calibration(),
-        Err(BadMagDataCause::Calibration_InsufficientSamples {
+        Err(BadCalibration::InsufficientSamples {
             samples: 5,
             required: 6
         })
@@ -54,7 +54,7 @@ fn mag_calibrator_rejects_nearly_collinear_samples() {
 
     assert!(matches!(
         calibrator.perform_calibration(),
-        Err(BadMagDataCause::Calibration_DegenerateSoftIronMatrix { .. })
+        Err(BadCalibration::DegenerateSoftIronMatrix { .. })
     ));
 }
 
@@ -78,7 +78,7 @@ fn mag_calibrator_accepts_zero_components_and_rejects_bad_vectors() {
 
     assert!(matches!(
         calibrator.perform_calibration(),
-        Err(BadMagDataCause::Calibration_InsufficientSamples {
+        Err(BadCalibration::InsufficientSamples {
             samples: 1,
             required: 6
         })
