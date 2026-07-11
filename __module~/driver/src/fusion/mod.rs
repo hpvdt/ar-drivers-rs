@@ -154,11 +154,7 @@ pub struct FusionState {
     pub mag: MagCalibrator<255>,
 }
 
-const MIN_MAG_SCALE_DIVISOR: f32 = 1.0e-6;
-
 impl FusionState {
-    const MIN_MAG_NORM: f32 = 0.4;
-
     /// Creates a shared fusion state with identity attitude and empty calibration state.
     pub fn new(glasses: Box<dyn ARGlasses>) -> Self {
         Self {
@@ -168,51 +164,6 @@ impl FusionState {
             mag: MagCalibrator::new(),
         }
     }
-
-    /// Calibrates a magnetometer vector that has already been converted to FRD.
-    pub fn getCalibratedMag(
-        &mut self,
-        raw_mag: Vector3<f32>,
-    ) -> std::result::Result<Vector3<f32>, BadMagCause> {
-        // let raw_norm = raw_mag.norm();
-        // if raw_norm < Self::MIN_MAG_NORM {
-        //     return Err(BadMagCause::BadReading(BadReading::WeakRawReading {
-        //         norm: raw_norm,
-        //         min_norm: Self::MIN_MAG_NORM,
-        //     }));
-        // }
-
-        self.mag.evaluate_sample_vec(raw_mag);
-        let (offset, scale) = self.mag.perform_calibration()?;
-        let offset: Vector3<f32> = Vector3::from(offset);
-        let scale: Vector3<f32> = Vector3::from(scale);
-        if !mag_calibration_can_divide(&offset, &scale) {
-            return Err(BadMagCause::BadCalibration(
-                BadCalibration::NumericallyUnstable { offset, scale },
-            ));
-        }
-        let mag = (raw_mag - offset).component_div(&scale);
-
-        let mag_norm = mag.norm();
-        if mag_norm < Self::MIN_MAG_NORM {
-            Err(BadMagCause::BadReading(BadReading::WeakCalibratedReading {
-                norm: mag_norm,
-                min_norm: Self::MIN_MAG_NORM,
-            }))
-        } else {
-            Ok(mag.normalize())
-        }
-    }
-}
-
-fn mag_calibration_can_divide(offset: &Vector3<f32>, scale: &Vector3<f32>) -> bool {
-    offset
-        .iter()
-        .chain(scale.iter())
-        .all(|component| component.is_finite())
-        && scale
-            .iter()
-            .all(|component| component.abs() >= MIN_MAG_SCALE_DIVISOR)
 }
 
 pub struct AhrsCorrection {

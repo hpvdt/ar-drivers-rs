@@ -1,11 +1,13 @@
 // use core::cmp::Ordering;
 use nalgebra::{DMatrix, DVector, SMatrix, SMatrixView, Vector3, SVD};
 
-use super::bad_mag_cause::BadCalibration;
+use super::bad_mag_cause::{BadCalibration, BadMagCause, BadReading};
 
 const DESIGN_MATRIX_COLUMNS: usize = 6;
 const SVD_EPSILON_RATIO: f32 = 1.0e-6;
 const MAX_SVD_CONDITION: f32 = 1.0e6;
+pub(crate) const MIN_MAG_SCALE_DIVISOR: f32 = 1.0e-6;
+const MIN_MAG_NORM: f32 = 0.4;
 
 /// Lightweight least squares approach to
 /// determining the offset and scaling
@@ -154,10 +156,30 @@ impl<const N: usize> MagCalibrator<N> {
         self.mean_distance
     }
 
-    /// Add a sample if it is deemed more useful than the least useful sample.
-    // pub fn correct_vec(&mut self, x: Vector3<f32>) -> Result<Vector3<f32>> {
-    //     ???
-    // }
+    /// Calibrates a magnetometer vector that has already been converted to FRD.
+    pub fn evaluate_correct(
+        &mut self,
+        raw_mag: Vector3<f32>,
+    ) -> std::result::Result<Vector3<f32>, BadMagCause> {
+        self.evaluate_sample_vec(raw_mag);
+        let (offset, scale) = self.perform_calibration()?;
+        let offset: Vector3<f32> = Vector3::from(offset);
+        let scale: Vector3<f32> = Vector3::from(scale);
+        if !mag_calibration_can_divide(&offset, &scale) {
+            return Err(BadCalibration::NumericallyUnstable { offset, scale }.into());
+        }
+        let mag = (raw_mag - offset).component_div(&scale);
+
+        let mag_norm = mag.norm();
+        if mag_norm < MIN_MAG_NORM {
+            Err(BadMagCause::BadReading(BadReading::WeakCalibratedReading {
+                norm: mag_norm,
+                min_norm: MIN_MAG_NORM,
+            }))
+        } else {
+            Ok(mag.normalize())
+        }
+    }
 
     /// Try to calculate calibration offset and scale values. Returns the cause
     /// when the calibration cannot be produced. The tuple contains (offset, scale).
@@ -232,4 +254,14 @@ impl<const N: usize> MagCalibrator<N> {
         // TODO Add option for low-pass filtering this result
         Ok((offset.into(), scale.into()))
     }
+}
+
+pub(crate) fn mag_calibration_can_divide(offset: &Vector3<f32>, scale: &Vector3<f32>) -> bool {
+    offset
+        .iter()
+        .chain(scale.iter())
+        .all(|component| component.is_finite())
+        && scale
+            .iter()
+            .all(|component| component.abs() >= MIN_MAG_SCALE_DIVISOR)
 }

@@ -46,7 +46,7 @@ fn main() {
                     mag_frd.x, mag_frd.y, mag_frd.z, timestamp
                 );
                 println!("  - converted from raw {:?}", event);
-                match fusion.getCalibratedMag(mag_frd) {
+                match fusion.mag.evaluate_correct(mag_frd) {
                     Ok(calibrated) => println!(
                         "Magnetometer FRD (Calibrated): [x={:+10.4}, y={:+10.4}, z={:+10.4}]",
                         calibrated.x, calibrated.y, calibrated.z

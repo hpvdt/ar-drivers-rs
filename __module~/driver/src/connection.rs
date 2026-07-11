@@ -1,5 +1,5 @@
+use crate::fusion::{AhrsCorrection, Fusion};
 use crate::{rw, rw_write, Rw};
-use crate::fusion::{Fusion, AhrsCorrection};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;

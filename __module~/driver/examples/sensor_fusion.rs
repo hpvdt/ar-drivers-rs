@@ -2,7 +2,7 @@
 // This file is part of ar-drivers-rs
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
-use ar_drivers::fusion::{Fusion, AhrsCorrection};
+use ar_drivers::fusion::{AhrsCorrection, Fusion};
 
 fn main() {
     let mut fusion = <dyn Fusion>::any_cf().unwrap(); // Declare conn as mutable
