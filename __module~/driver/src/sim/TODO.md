@@ -56,7 +56,7 @@ findings are tracked in [`../fusion/TODO.md`](../fusion/TODO.md).
       magnetometer sample.
     - **Recommended fix:** Set the default maximum body rate to be 10 ~ 20 RPM per body axis.
 
-- [ ] Separate static-calibration and drifting-bias simulator profiles
+- [x] Separate static-calibration and drifting-bias simulator profiles
 
     - **Summary:** The default simulator continuously changes its hard-iron offset, so it does not provide a stationary
       ellipsoid for validating a static calibration solve.

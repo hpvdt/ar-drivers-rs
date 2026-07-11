@@ -24,6 +24,8 @@ const SECONDS_PER_MINUTE: f32 = 60.0;
 const MICROS_PER_SECOND: f32 = 1_000_000.0;
 const ANGULAR_RATE_SEGMENT_US: u64 = 10_000_000;
 const ANGULAR_RATE_SEGMENT_COUNT: usize = 3;
+const ADAPTIVE_CALIBRATION_HARD_IRON_DRIFT: Vector3<f32> = Vector3::new(2.0, 1.5, 2.5);
+const ADAPTIVE_CALIBRATION_DRIFT_PERIOD_US: u64 = 5 * 60 * 1_000_000;
 
 /// Configuration for [`Dummy`].
 #[derive(Clone, Debug)]
@@ -56,13 +58,15 @@ pub struct DummyConfig {
     pub magnetic_dip_rad: f32,
     /// Base hard-iron magnetometer offset, in microtesla.
     pub hard_iron_base: Vector3<f32>,
-    /// Slow hard-iron drift amplitude, in microtesla.
+    /// Slow hard-iron drift amplitude, in microtesla. Defaults to zero.
     pub hard_iron_drift: Vector3<f32>,
     /// Lower bound for every soft-iron matrix eigenvalue.
     pub soft_iron_min_eigenvalue: f32,
     /// Upper bound for every soft-iron matrix eigenvalue.
     pub soft_iron_max_eigenvalue: f32,
     /// Period for one full hard-iron drift cycle, in microseconds.
+    ///
+    /// This has no observable effect when [`Self::hard_iron_drift`] is zero.
     pub hard_iron_drift_period_us: u64,
 }
 
@@ -83,10 +87,26 @@ impl Default for DummyConfig {
             magnetic_field_strength: 50.0,
             magnetic_dip_rad: 20.0f32.to_radians(),
             hard_iron_base: Vector3::new(24.0, -18.0, 12.0),
-            hard_iron_drift: Vector3::new(2.0, 1.5, 2.5),
+            hard_iron_drift: ZERO,
             soft_iron_min_eigenvalue: 0.70,
             soft_iron_max_eigenvalue: 1.40,
-            hard_iron_drift_period_us: 5 * 60 * 1_000_000,
+            hard_iron_drift_period_us: ADAPTIVE_CALIBRATION_DRIFT_PERIOD_US,
+        }
+    }
+}
+
+impl DummyConfig {
+    /// Returns the deterministic adaptive-calibration stress profile.
+    ///
+    /// Unlike the stationary default profile, this varies the hard-iron bias
+    /// continuously with per-axis amplitudes of `(2.0, 1.5, 2.5)` microtesla
+    /// over a five-minute cycle. All other settings, including the seed, are
+    /// inherited from [`Self::default`].
+    pub fn adaptive_calibration_stress() -> Self {
+        Self {
+            hard_iron_drift: ADAPTIVE_CALIBRATION_HARD_IRON_DRIFT,
+            hard_iron_drift_period_us: ADAPTIVE_CALIBRATION_DRIFT_PERIOD_US,
+            ..Self::default()
         }
     }
 }
