@@ -1,7 +1,7 @@
 // use core::cmp::Ordering;
 use nalgebra::{DMatrix, DVector, SMatrix, SMatrixView, Vector3, SVD};
 
-use super::BadCalibration;
+use super::bad_mag_cause::BadCalibration;
 
 const DESIGN_MATRIX_COLUMNS: usize = 6;
 const SVD_EPSILON_RATIO: f32 = 1.0e-6;

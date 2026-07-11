@@ -1,7 +1,7 @@
 use nalgebra::Vector3;
 
 use super::mag_calibration::MagCalibrator;
-use super::BadCalibration;
+use super::bad_mag_cause::BadCalibration;
 
 #[test]
 fn mag_calibrator_solves_synthetic_offset_and_scale() {

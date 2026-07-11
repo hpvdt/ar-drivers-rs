@@ -2,8 +2,9 @@ use nalgebra::{UnitQuaternion, Vector3};
 
 use super::mag_calibration::MagCalibrator;
 use super::naive_cf::NaiveCF;
+use super::bad_mag_cause::{BadCalibration, BadMagCause};
 use super::{
-    mag_calibration_can_divide, BadCalibration, BadMagCause, FusionState, MIN_MAG_SCALE_DIVISOR,
+    mag_calibration_can_divide, FusionState, MIN_MAG_SCALE_DIVISOR,
 };
 
 fn frd_to_rub(v: Vector3<f32>) -> Vector3<f32> {
