@@ -71,7 +71,7 @@ impl Default for DummyConfig {
         Self {
             seed: DEFAULT_SEED,
             event_period_us: 10_000,
-            max_body_rate_rpm: 1.0,
+            max_body_rate_rpm: 20.0,
             linear_jerk_std_dev: 1.2,
             linear_accel_damping: 0.8,
             linear_velocity_damping: 0.25,

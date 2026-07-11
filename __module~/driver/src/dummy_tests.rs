@@ -86,6 +86,48 @@ fn default_hard_iron_bias_is_under_50_microtesla() {
 }
 
 #[test]
+fn default_body_rate_is_bounded_at_twenty_rpm_per_axis() {
+    let config = DummyConfig::default();
+    let max_rad_per_sec = config.max_body_rate_rpm * 2.0 * PI / SECONDS_PER_MINUTE;
+    let angular_rate = Dummy::new().snapshot().angular_rate_rub;
+
+    assert_eq!(config.max_body_rate_rpm, 20.0);
+    for component in angular_rate.iter() {
+        assert!(*component > 0.0 && *component <= max_rad_per_sec);
+    }
+}
+
+#[test]
+fn default_motion_changes_ideal_magnetic_signal_more_than_configured_noise() {
+    let default_config = DummyConfig::default();
+    let configured_noise = default_config.mag_noise_std_dev;
+    let mut dummy = Dummy::with_config(DummyConfig {
+        linear_jerk_std_dev: 0.0,
+        mag_noise_std_dev: 0.0,
+        hard_iron_base: ZERO,
+        hard_iron_drift: ZERO,
+        soft_iron_min_eigenvalue: 1.0,
+        soft_iron_max_eigenvalue: 1.0,
+        ..default_config
+    });
+    let mut magnetometers = Vec::new();
+
+    while magnetometers.len() < 2 {
+        if let GlassesEvent::Magnetometer { magnetometer, .. } = dummy.read_event().unwrap() {
+            magnetometers.push(magnetometer);
+        }
+    }
+
+    let ideal_signal_change = (magnetometers[1] - magnetometers[0]).norm();
+    assert!(
+        ideal_signal_change > configured_noise,
+        "ideal_signal_change={}, configured_noise={}",
+        ideal_signal_change,
+        configured_noise
+    );
+}
+
+#[test]
 fn soft_iron_is_fixed_positive_definite_and_bounded() {
     let mut dummy = Dummy::new();
     let config = dummy.config.clone();

@@ -15,7 +15,8 @@ The dummy AR glasses fixture is a deterministic, public, configurable simulator 
 - Keep all emitted sensor vectors in the native `GlassesEvent` RUB body frame.
 - Start level with magnetic north as forward, which is negative Z in RUB.
 - Keep the glasses rotating on all three angular axes with deterministic random nonnegative body rates, each nonzero and
-  no faster than 2 RPM.
+  no faster than the configurable per-axis bound, which defaults to 20 RPM so ideal magnetometer changes are not
+  dominated by the default sample noise.
 - Track full linear kinematics internally: position, velocity, acceleration, jerk, and attitude.
 - Update smooth linear movement by sampling Gaussian jerk, integrating it into acceleration, velocity, and position, and
   applying damping/clamps to keep the simulation bounded.

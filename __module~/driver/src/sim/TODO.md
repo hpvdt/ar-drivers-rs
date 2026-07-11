@@ -34,7 +34,7 @@ findings are tracked in [`../fusion/TODO.md`](../fusion/TODO.md).
 
 ## Medium severity
 
-- [ ] Balance default angular motion against magnetometer noise
+- [x] Balance default angular motion against magnetometer noise
 
     - **Summary:** The default dummy changes the noiseless magnetic vector much more slowly than it perturbs each
       measurement, so early apparent diversity is dominated by noise rather than orientation.
