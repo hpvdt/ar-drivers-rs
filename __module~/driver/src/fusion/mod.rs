@@ -154,24 +154,12 @@ pub struct FusionState {
 const MIN_MAG_SCALE_DIVISOR: f32 = 1.0e-6;
 
 /// Reason a magnetometer vector could not produce a calibrated FRD reading.
-#[derive(Clone, Copy, derive_more::Debug, PartialEq)]
+#[derive(Clone, Copy, derive_more::Debug, derive_more::From, PartialEq)]
 pub enum BadMagCause {
     /// The magnetometer calibration is not usable.
     BadCalibration(BadCalibration),
     /// The magnetometer reading is not usable.
     BadReading(BadReading),
-}
-
-impl From<BadCalibration> for BadMagCause {
-    fn from(cause: BadCalibration) -> Self {
-        Self::BadCalibration(cause)
-    }
-}
-
-impl From<BadReading> for BadMagCause {
-    fn from(cause: BadReading) -> Self {
-        Self::BadReading(cause)
-    }
 }
 
 /// Reason a magnetometer calibration is not usable.
