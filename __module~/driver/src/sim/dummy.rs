@@ -22,6 +22,8 @@ const DEFAULT_SEED: u64 = 0xA15E_D00D_5EED_0001;
 const MAX_MAGNETIC_DIP_RAD: f32 = PI / 6.0;
 const SECONDS_PER_MINUTE: f32 = 60.0;
 const MICROS_PER_SECOND: f32 = 1_000_000.0;
+const ANGULAR_RATE_SEGMENT_US: u64 = 10_000_000;
+const ANGULAR_RATE_SEGMENT_COUNT: usize = 3;
 
 /// Configuration for [`Dummy`].
 #[derive(Clone, Debug)]
@@ -106,7 +108,7 @@ pub struct DummySnapshot {
     pub acceleration: Vector3<f32>,
     /// Most recent world-frame jerk sample in RUB coordinates, in m/s^3.
     pub jerk: Vector3<f32>,
-    /// Fixed RUB angular body rate used by the simulator, in rad/s.
+    /// Current RUB angular body rate used by the simulator, in rad/s.
     pub angular_rate_rub: Vector3<f32>,
     /// Current display mode stored by the fixture.
     pub display_mode: DisplayMode,
@@ -126,6 +128,7 @@ pub struct Dummy {
     acceleration: Vector3<f32>,
     jerk: Vector3<f32>,
     angular_rate_rub: Vector3<f32>,
+    angular_rate_schedule: [Vector3<f32>; ANGULAR_RATE_SEGMENT_COUNT],
     soft_iron: Matrix3<f32>,
     timestamp_us: u64,
     next_event_is_acc_gyro: bool,
@@ -150,7 +153,9 @@ impl Dummy {
     pub fn with_config(config: DummyConfig) -> Self {
         let config = normalize_config(config);
         let mut rng = StdRng::seed_from_u64(config.seed);
-        let angular_rate_rub = sample_angular_rate(&mut rng, config.max_body_rate_rpm);
+        let angular_rate_schedule =
+            sample_angular_rate_schedule(&mut rng, config.max_body_rate_rpm);
+        let angular_rate_rub = angular_rate_schedule[0];
         let soft_iron_min_vector_norm = config.soft_iron_min_eigenvalue.sqrt();
         let soft_iron_max_vector_norm = config.soft_iron_max_eigenvalue.sqrt();
         let soft_iron = sample_soft_iron(
@@ -168,6 +173,7 @@ impl Dummy {
             acceleration: ZERO,
             jerk: ZERO,
             angular_rate_rub,
+            angular_rate_schedule,
             soft_iron,
             timestamp_us: 0,
             next_event_is_acc_gyro: true,
@@ -201,6 +207,10 @@ impl Dummy {
         let rotation_increment = UnitQuaternion::from_scaled_axis(self.angular_rate_rub * dt);
         self.attitude *= rotation_increment;
         self.attitude.renormalize();
+
+        let segment =
+            (self.timestamp_us / ANGULAR_RATE_SEGMENT_US) as usize % ANGULAR_RATE_SEGMENT_COUNT;
+        self.angular_rate_rub = self.angular_rate_schedule[segment];
 
         self.jerk = self.sample_noise_vec(self.config.linear_jerk_std_dev);
         self.acceleration += self.jerk * dt;
@@ -392,22 +402,25 @@ fn clamp_vector_norm(vector: Vector3<f32>, minimum_norm: f32, maximum_norm: f32)
     vector * (norm.clamp(minimum_norm, maximum_norm) / norm)
 }
 
-fn sample_angular_rate(rng: &mut StdRng, max_body_rate_rpm: f32) -> Vector3<f32> {
+fn sample_angular_rate_schedule(
+    rng: &mut StdRng,
+    max_body_rate_rpm: f32,
+) -> [Vector3<f32>; ANGULAR_RATE_SEGMENT_COUNT] {
     let max_rad_per_sec = max_body_rate_rpm * 2.0 * PI / SECONDS_PER_MINUTE;
 
     if max_rad_per_sec <= 0.0 {
-        return ZERO;
+        return [ZERO; ANGULAR_RATE_SEGMENT_COUNT];
     }
 
-    Vector3::new(
-        sample_axis_rate(rng, max_rad_per_sec),
-        sample_axis_rate(rng, max_rad_per_sec),
-        sample_axis_rate(rng, max_rad_per_sec),
-    )
-}
-
-fn sample_axis_rate(rng: &mut StdRng, max_rad_per_sec: f32) -> f32 {
-    rng.gen_range(f32::EPSILON..=max_rad_per_sec)
+    std::array::from_fn(|dominant_axis| {
+        let mut rate = Vector3::new(
+            rng.gen_range(0.10..=0.30) * max_rad_per_sec,
+            rng.gen_range(0.10..=0.30) * max_rad_per_sec,
+            rng.gen_range(0.10..=0.30) * max_rad_per_sec,
+        );
+        rate[dominant_axis] = rng.gen_range(0.70..=1.0) * max_rad_per_sec;
+        rate
+    })
 }
 
 fn sample_noise(rng: &mut StdRng, std_dev: f32) -> f32 {

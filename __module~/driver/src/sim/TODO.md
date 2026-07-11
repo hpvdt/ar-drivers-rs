@@ -11,7 +11,7 @@ findings are tracked in [`../fusion/TODO.md`](../fusion/TODO.md).
 
 ## High severity
 
-- [ ] Generate a non-planar attitude trajectory
+- [x] Generate a non-planar attitude trajectory
 
     - **Summary:** A constant three-component angular-rate vector still rotates about one fixed axis, so the simulated
       magnetometer samples do not cover a three-dimensional ellipsoid.

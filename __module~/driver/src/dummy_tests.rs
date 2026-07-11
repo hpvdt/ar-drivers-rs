@@ -17,6 +17,14 @@ fn quiet_config() -> DummyConfig {
     }
 }
 
+fn moving_config() -> DummyConfig {
+    DummyConfig {
+        event_period_us: 100_000,
+        max_body_rate_rpm: 1.0,
+        ..quiet_config()
+    }
+}
+
 #[test]
 fn starts_level_with_felt_gravity_up_frd() {
     let mut dummy = Dummy::with_config(quiet_config());
@@ -107,15 +115,82 @@ fn soft_iron_is_fixed_positive_definite_and_bounded() {
 }
 
 #[test]
-fn default_gyro_body_rates_are_nonnegative() {
-    let angular_rate = Dummy::new().snapshot().angular_rate_rub;
-    let max_rad_per_sec = 6.0 * 2.0 * PI / SECONDS_PER_MINUTE;
+fn gyro_matches_each_integrated_angular_rate() {
+    let config = moving_config();
+    let dt = config.event_period_us as f32 / MICROS_PER_SECOND;
+    let max_rad_per_sec = config.max_body_rate_rpm * 2.0 * PI / SECONDS_PER_MINUTE;
+    let mut dummy = Dummy::with_config(config);
+    let mut observed_rates = Vec::new();
 
-    for component in angular_rate.iter() {
+    for _ in 0..350 {
+        let before = dummy.snapshot();
+        let event = dummy.read_event().unwrap();
+        let after = dummy.snapshot();
+        let expected_attitude =
+            before.attitude * UnitQuaternion::from_scaled_axis(before.angular_rate_rub * dt);
+
         assert!(
-            *component >= 0.0 && *component <= max_rad_per_sec,
-            "angular_rate={:?}",
-            angular_rate
+            expected_attitude.angle_to(&after.attitude) < 1.0e-5,
+            "before={:?}, rate={:?}, after={:?}",
+            before.attitude,
+            before.angular_rate_rub,
+            after.attitude
         );
+
+        if let GlassesEvent::AccGyro { gyroscope, .. } = event {
+            assert!((gyroscope - before.angular_rate_rub).norm() < 1.0e-7);
+            observed_rates.push(gyroscope);
+        }
+
+        for component in before.angular_rate_rub.iter() {
+            assert!(*component > 0.0 && *component <= max_rad_per_sec);
+        }
     }
+
+    assert!(
+        observed_rates
+            .windows(2)
+            .any(|rates| rates[0].cross(&rates[1]).norm() > 1.0e-4),
+        "observed_rates={:?}",
+        observed_rates
+    );
+}
+
+#[test]
+fn trajectory_covers_roll_pitch_yaw_and_non_planar_magnetometer_space() {
+    let mut dummy = Dummy::with_config(moving_config());
+    let mut angle_min = Vector3::repeat(f32::INFINITY);
+    let mut angle_max = Vector3::repeat(f32::NEG_INFINITY);
+    let mut magnetometers = Vec::new();
+
+    for _ in 0..3_600 {
+        if let GlassesEvent::Magnetometer { magnetometer, .. } = dummy.read_event().unwrap() {
+            magnetometers.push(magnetometer);
+            let (roll, pitch, yaw) = dummy.snapshot().attitude.euler_angles();
+            let angles = Vector3::new(roll, pitch, yaw);
+            angle_min = angle_min.zip_map(&angles, f32::min);
+            angle_max = angle_max.zip_map(&angles, f32::max);
+        }
+    }
+
+    let angle_range = angle_max - angle_min;
+    for range in angle_range.iter() {
+        assert!(*range > 1.0, "angle_range={:?}", angle_range);
+    }
+
+    let mean = magnetometers.iter().copied().sum::<Vector3<f32>>() / magnetometers.len() as f32;
+    let covariance = magnetometers.iter().fold(Matrix3::zeros(), |sum, sample| {
+        let centered = sample - mean;
+        sum + centered * centered.transpose()
+    }) / magnetometers.len() as f32;
+    let eigenvalues = covariance.symmetric_eigen().eigenvalues;
+    let minimum = eigenvalues.min();
+    let maximum = eigenvalues.max();
+
+    assert!(
+        minimum / maximum > 0.03,
+        "eigenvalues={:?}, covariance={:?}",
+        eigenvalues,
+        covariance
+    );
 }
