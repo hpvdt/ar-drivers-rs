@@ -172,6 +172,31 @@ combination together. Run narrower package, module, or test checks first for fas
 feedback, but complete the broad checks applicable to the repository before
 submitting a change.
 
+## TODO.md Format
+
+Every `TODO.md` file must contain only a flat checklist of open issues grouped by severity.
+
+Required structure:
+
+- Start directly with a severity heading (e.g. `## High severity`).
+- Each item is a `- [ ]` or `- [x]` checkbox followed by a short name, indented metadata (`Summary`,
+  `Affected module`, `Severity`, `Description`, `Recommended fix`), and a fenced code block when quoting source.
+- Keep items that are checked (`[x]`) only when the fix has already been merged; remove them on cleanup passes.
+
+Example:
+
+```markdown
+## High severity
+
+- [ ] Short name of the issue
+
+    - **Summary:** One-sentence description.
+    - **Affected module:** `src/path/to/file.rs`
+    - **Severity:** High
+    - **Description:** Detailed explanation with a fenced code quote.
+    - **Recommended fix:** Proposed solution.
+```
+
 ## Testing
 
 ### Hardware Testing
