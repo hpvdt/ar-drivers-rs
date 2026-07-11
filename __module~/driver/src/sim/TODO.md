@@ -1,14 +1,3 @@
-# Magnetometer simulation issues
-
-## Reproduction evidence
-
-With the default deterministic `Dummy` seed, a bounded run of 1,000 magnetometer events through the same
-`FusionState::getCalibratedMag` path used by `read_sensors.rs` produced 938 `Calibration_DegenerateScale` results and
-only 54 successful calibrations. All 54 successes occurred within the first 255 magnetometer events; events 256
-through 1,000 all returned `Calibration_DegenerateScale`. The generated fixed angular-rate vector had norm
-`0.0997171 rad/s`, and the generated soft-iron matrix contained nonzero off-diagonal terms. Calibration-specific
-findings are tracked in [`../fusion/TODO.md`](../fusion/TODO.md).
-
 ## High severity
 
 - [x] Generate a non-planar attitude trajectory

@@ -1,14 +1,3 @@
-# Magnetometer calibration issues
-
-## Reproduction evidence
-
-With the default deterministic `Dummy` seed, a bounded run of 1,000 magnetometer events through the same
-`FusionState::getCalibratedMag` path used by `read_sensors.rs` produced 5 insufficient-sample results, 1
-condition-number rejection, 938 `Calibration_DegenerateScale` results, 2 weak calibrated readings, and only 54
-successful calibrations. All 54 successes occurred within the first 255 magnetometer events; events 256 through 1,000
-all returned `Calibration_DegenerateScale`. The example only exposes these failures; it is not an affected module in
-the findings below. Simulator-specific findings are tracked in [`../sim/TODO.md`](../sim/TODO.md).
-
 ## High severity
 
 - [ ] Fit the full soft-iron model emitted by the simulator
