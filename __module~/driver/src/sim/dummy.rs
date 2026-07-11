@@ -26,6 +26,7 @@ const ANGULAR_RATE_SEGMENT_US: u64 = 10_000_000;
 const ANGULAR_RATE_SEGMENT_COUNT: usize = 3;
 const ADAPTIVE_CALIBRATION_HARD_IRON_DRIFT: Vector3<f32> = Vector3::new(2.0, 1.5, 2.5);
 const ADAPTIVE_CALIBRATION_DRIFT_PERIOD_US: u64 = 5 * 60 * 1_000_000;
+const DEFAULT_MAGNETOMETER_RANGE: f32 = 2_000.0;
 
 /// Configuration for [`Dummy`].
 #[derive(Clone, Debug)]
@@ -52,6 +53,8 @@ pub struct DummyConfig {
     pub acc_noise_std_dev: f32,
     /// Magnetometer Gaussian noise standard deviation, in microtesla.
     pub mag_noise_std_dev: f32,
+    /// Symmetric per-axis magnetometer range, in microtesla.
+    pub magnetometer_range: f32,
     /// Magnetic field magnitude, in microtesla.
     pub magnetic_field_strength: f32,
     /// Magnetic field vertical dip from the horizon, clamped to +/-30 degrees.
@@ -84,6 +87,7 @@ impl Default for DummyConfig {
             gyro_noise_std_dev: 0.002,
             acc_noise_std_dev: 0.12,
             mag_noise_std_dev: 1.5,
+            magnetometer_range: DEFAULT_MAGNETOMETER_RANGE,
             magnetic_field_strength: 50.0,
             magnetic_dip_rad: 20.0f32.to_radians(),
             hard_iron_base: Vector3::new(24.0, -18.0, 12.0),
@@ -258,8 +262,14 @@ impl Dummy {
         let magnetic_world = self.magnetic_north_world_rub();
         let ideal_body = self.attitude.inverse() * magnetic_world;
         let distorted = self.current_soft_iron() * ideal_body + self.current_hard_iron();
+        let noisy = distorted + self.sample_noise_vec(self.config.mag_noise_std_dev);
 
-        distorted + self.sample_noise_vec(self.config.mag_noise_std_dev)
+        noisy.map(|component| {
+            component.clamp(
+                -self.config.magnetometer_range,
+                self.config.magnetometer_range,
+            )
+        })
     }
 
     fn magnetic_north_world_rub(&self) -> Vector3<f32> {
@@ -369,6 +379,9 @@ fn normalize_config(mut config: DummyConfig) -> DummyConfig {
     config.gyro_noise_std_dev = config.gyro_noise_std_dev.max(0.0);
     config.acc_noise_std_dev = config.acc_noise_std_dev.max(0.0);
     config.mag_noise_std_dev = config.mag_noise_std_dev.max(0.0);
+    if !config.magnetometer_range.is_finite() || config.magnetometer_range <= 0.0 {
+        config.magnetometer_range = DEFAULT_MAGNETOMETER_RANGE;
+    }
     config.magnetic_field_strength = config.magnetic_field_strength.abs();
     config.magnetic_dip_rad = config
         .magnetic_dip_rad

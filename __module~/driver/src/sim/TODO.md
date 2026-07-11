@@ -78,7 +78,7 @@ findings are tracked in [`../fusion/TODO.md`](../fusion/TODO.md).
     - **Recommended fix:** Make the baseline default use zero hard-iron drift and retain the current drift
       as a separately selected adaptive-calibration stress profile.
 
-- [ ] Model finite magnetometer range instead of unbounded output
+- [x] Model finite magnetometer range instead of unbounded output
 
     - **Summary:** The simulator adds unbounded Gaussian noise without applying a sensor range, so a sufficiently long
       immediate stream can emit arbitrarily extreme but finite readings.

@@ -26,6 +26,7 @@ The dummy AR glasses fixture is a deterministic, public, configurable simulator 
 - Gyro emits RUB angular body rates in rad/s with small Gaussian noise.
 - Acc emits physical gravity plus linear acceleration in RUB with medium Gaussian noise.
 - Mag emits magnetic north in RUB with magnetic dip clamped to +/-30 degrees.
+- Clamp each distorted and noisy magnetometer component to a configurable symmetric physical range in microtesla.
 - Inject hard-iron and soft-iron distortion into magnetometer readings. Keep the default hard-iron offset stationary for
   static calibration, and provide `DummyConfig::adaptive_calibration_stress()` as the explicit deterministic profile
   with `(2.0, 1.5, 2.5)` microtesla drift amplitudes over a five-minute cycle.
