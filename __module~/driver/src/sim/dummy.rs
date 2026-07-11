@@ -480,5 +480,5 @@ fn clamp_norm(v: Vector3<f32>, max_norm: f32) -> Vector3<f32> {
 }
 
 #[cfg(test)]
-#[path = "../dummy_tests.rs"]
+#[path = "dummy_tests.rs"]
 mod dummy_tests;

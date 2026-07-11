@@ -228,3 +228,7 @@ impl<const N: usize> MagCalibrator<N> {
         Ok((offset.into(), scale.into()))
     }
 }
+
+#[cfg(test)]
+#[path = "mag_calibration_test.rs"]
+mod mag_calibration_test;

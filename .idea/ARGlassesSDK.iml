@@ -4,6 +4,7 @@
     <content url="file://$MODULE_DIR$">
       <sourceFolder url="file://$MODULE_DIR$/__module~/driver/examples" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/__module~/driver/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/__module~/driver/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/__module~/driver/.idea" />
       <excludeFolder url="file://$MODULE_DIR$/__module~/driver/target" />
     </content>
