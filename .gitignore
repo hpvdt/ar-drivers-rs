@@ -2,9 +2,9 @@
 #/Cargo.lock
 
 # IntelliJ-IDEA
-*.iml
-.idea/
-.idea_modules/
+**.iml
+**/.idea/
+**/.idea_modules/
 
 # VSCode
 config.json
