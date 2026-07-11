@@ -44,7 +44,7 @@ Supported display configurations:
 - `HighRefreshRate`: 120Hz mirrored mode
 - `HighRefreshRateSBS`: 120Hz side-by-side mode
 
-## Code Structure/Style Guidelines
+## Code Structure/Style
 
 ### Formatting and Imports
 
@@ -172,7 +172,28 @@ combination together. Run narrower package, module, or test checks first for fas
 feedback, but complete the broad checks applicable to the repository before
 submitting a change.
 
-## TODO.md Format
+## Testing
+
+### Hardware Testing
+
+Testing requires physical devices. The library will return `Error::NotFound` if no supported glasses are connected.
+
+### Dummy Device
+
+For testing without hardware:
+
+```rust
+use ar_drivers::any_glasses_or_dummy;
+
+let glasses = any_glasses_or_dummy() ?; // Falls back to dummy device
+```
+
+## Documentation/Markdown Files
+
+All `*.md` files should hard wrap at approximately 120 characters. The only exceptions are Table and markup sections
+which can be longer.
+
+### TODO.md Format
 
 Every `TODO.md` file must contain only a flat checklist of open issues grouped by severity.
 
@@ -195,20 +216,4 @@ Example:
     - **Severity:** High
     - **Description:** Detailed explanation with a fenced code quote.
     - **Recommended fix:** Proposed solution.
-```
-
-## Testing
-
-### Hardware Testing
-
-Testing requires physical devices. The library will return `Error::NotFound` if no supported glasses are connected.
-
-### Dummy Device
-
-For testing without hardware:
-
-```rust
-use ar_drivers::any_glasses_or_dummy;
-
-let glasses = any_glasses_or_dummy() ?; // Falls back to dummy device
 ```
