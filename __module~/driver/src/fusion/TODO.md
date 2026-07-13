@@ -1,199 +1,208 @@
 ## High severity
 
-- [ ] Fit the full soft-iron model emitted by the simulator
+- [ ]  Fit the full soft-iron model emitted by the simulator
 
-  - **Summary:** The calibrator fits only an axis-aligned ellipsoid even though the dummy deliberately emits
-    cross-axis soft-iron coupling.
-  - **Affected module:** `src/fusion/mag_calibration.rs`
-  - **Severity:** High
-  - **Description:** The current design has no `xy`, `xz`, or `yz` terms and returns three component-wise scales:
+    - **Summary:** The calibrator fits only an axis-aligned ellipsoid even though the dummy deliberately emits
+      cross-axis soft-iron coupling.
+    - **Affected module:** `src/fusion/mag_calibration.rs`
+    - **Severity:** High
+    - **Description:** The current design has no `xy`, `xz`, or `yz` terms and returns three component-wise scales:
 
-    ```rust
-    mag[3] = -mag[1] * mag[1];
-    mag[4] = -mag[2] * mag[2];
+      ```rust
+      mag[3] = -mag[1] * mag[1];  
+      mag[4] = -mag[2] * mag[2];  
 
-    let scale = Vector3::new(temp.sqrt(), (temp / x[3]).sqrt(), (temp / x[4]).sqrt());
-    ```
+      let scale = Vector3::new(temp.sqrt(), (temp / x[3]).sqrt(), (temp / x[4]).sqrt());
+      ```
 
-    By contrast, `sample_soft_iron` constructs a generally rotated symmetric positive-definite matrix:
+      By contrast, `sample_soft_iron` constructs a generally rotated symmetric positive-definite matrix:
 
-    ```rust
-    let scaled_eigenvectors = Matrix3::from_columns(&vectors);
-    scaled_eigenvectors * scaled_eigenvectors.transpose()
-    ```
+      ```rust
+      let scaled_eigenvectors = Matrix3::from_columns(&vectors);
+      scaled_eigenvectors * scaled_eigenvectors.transpose()
+      ```
 
-    A diagonal correction cannot undo the resulting cross-axis coupling, so even otherwise good simulated samples do
-    not lie on the axis-aligned ellipsoid assumed by `perform_calibration`.
-  - **Recommended fix:** Replace the diagonal `(offset, scale)` fit with a hard-iron offset plus an SPD 3x3 correction matrix parameterized by a positive-diagonal Cholesky factor and solved with a robust nonlinear fit.
+      A diagonal correction cannot undo the resulting cross-axis coupling, so even otherwise good simulated samples do
+      not lie on the axis-aligned ellipsoid assumed by `perform_calibration`.
+    - **Recommended fix:** Replace the diagonal `(offset, scale)` fit with a hard-iron offset plus an SPD 3x3 correction
+      matrix parameterized by a positive-diagonal Cholesky factor (REVIEW: what about eigenfactor) and solved with a
+      robust nonlinear fit.
+- [ ]  Require redundant samples and three-dimensional coverage before solving
 
-- [ ] Require redundant samples and three-dimensional coverage before solving
+    - **Summary:** Six accepted samples make the six-parameter algebraic system square, but do not make it
+      noise-tolerant or prove that the samples cover a three-dimensional ellipsoid.
+    - **Affected module:** `src/fusion/mag_calibration.rs`
+    - **Severity:** High
+    - **Description:** Readiness is currently only a row-count check, and the first `N` finite samples are inserted
+      unconditionally:
 
-  - **Summary:** Six accepted samples make the six-parameter algebraic system square, but do not make it
-    noise-tolerant or prove that the samples cover a three-dimensional ellipsoid.
-  - **Affected module:** `src/fusion/mag_calibration.rs`
-  - **Severity:** High
-  - **Description:** Readiness is currently only a row-count check, and the first `N` finite samples are inserted
-    unconditionally:
+      ```rust
+      const DESIGN_MATRIX_COLUMNS: usize = 6;
 
-    ```rust
-    const DESIGN_MATRIX_COLUMNS: usize = 6;
+      if sample_count < DESIGN_MATRIX_COLUMNS {
+          return Err(BadMagDataCause::Calibration_InsufficientSamples {
+              samples: sample_count,
+              required: DESIGN_MATRIX_COLUMNS,
+          });
+      }
 
-    if sample_count < DESIGN_MATRIX_COLUMNS {
-        return Err(BadMagDataCause::Calibration_InsufficientSamples {
-            samples: sample_count,
-            required: DESIGN_MATRIX_COLUMNS,
-        });
-    }
+      if self.matrix_filled < N {
+          self.add_sample_at(self.matrix_filled, x);
+          self.matrix_filled += 1;
+      }
+      ```
 
-    if self.matrix_filled < N {
-        self.add_sample_at(self.matrix_filled, x);
-        self.matrix_filled += 1;
-    }
-    ```
+      In the default dummy stream, the sixth magnetometer sample arrives after only about 0.1 seconds of virtual motion,
+      far too early for the current trajectory to provide useful spatial coverage. The SVD condition number tests the
+      algebraic design matrix, not whether the measurements adequately constrain a physical three-dimensional model.
+    - **Recommended fix:** Gate calibration on an overdetermined sample count and a geometric coverage test such as
+      per-axis span plus a lower bound on the smallest eigenvalue of the centered sample covariance.
+- [ ]  Reject non-ellipsoid solutions before computing scale
 
-    In the default dummy stream, the sixth magnetometer sample arrives after only about 0.1 seconds of virtual motion,
-    far too early for the current trajectory to provide useful spatial coverage. The SVD condition number tests the
-    algebraic design matrix, not whether the measurements adequately constrain a physical three-dimensional model.
-  - **Recommended fix:** Gate calibration on an overdetermined sample count and a geometric coverage test such as per-axis span plus a lower bound on the smallest eigenvalue of the centered sample covariance.
+    - **Summary:** A fit can pass the design-matrix condition check even when its coefficients do not describe a real
+      ellipsoid, making `Calibration_DegenerateScale` a late and imprecise symptom.
+    - **Affected module:** `src/fusion/mag_calibration.rs`
+    - **Severity:** High
+    - **Description:** `x[3]`, `x[4]`, or `temp` can be non-positive, but the current code takes square roots and
+      divides
+      first, then notices only the resulting `NaN` or infinity:
 
-- [ ] Reject non-ellipsoid solutions before computing scale
+      ```rust
+      let offset = Vector3::new(x[0] / 2., x[1] / (2. * x[3]), x[2] / (2. * x[4]));
+      let temp = x[5]
+          + offset[0] * offset[0]
+          + x[3] * offset[1] * offset[1]
+          + x[4] * offset[2] * offset[2];
+      let scale = Vector3::new(temp.sqrt(), (temp / x[3]).sqrt(), (temp / x[4]).sqrt());
 
-  - **Summary:** A fit can pass the design-matrix condition check even when its coefficients do not describe a real
-    ellipsoid, making `Calibration_DegenerateScale` a late and imprecise symptom.
-  - **Affected module:** `src/fusion/mag_calibration.rs`
-  - **Severity:** High
-  - **Description:** `x[3]`, `x[4]`, or `temp` can be non-positive, but the current code takes square roots and divides
-    first, then notices only the resulting `NaN` or infinity:
+      for component in offset.iter().chain(scale.iter()) {
+          if !component.is_finite() {
+              return Err(BadMagDataCause::Calibration_DegenerateScale { offset, scale });
+          }
+      }
+      ```
 
-    ```rust
-    let offset = Vector3::new(x[0] / 2., x[1] / (2. * x[3]), x[2] / (2. * x[4]));
-    let temp = x[5]
-        + offset[0] * offset[0]
-        + x[3] * offset[1] * offset[1]
-        + x[4] * offset[2] * offset[2];
-    let scale = Vector3::new(temp.sqrt(), (temp / x[3]).sqrt(), (temp / x[4]).sqrt());
+      A well-conditioned least-squares system can still yield negative shape coefficients or excessive residual error,
+      especially when its input covers only a noisy plane.
+    - **Recommended fix:** Validate finite positive shape coefficients and bounded fit residuals before any division or
+      square root and return a specific non-physical-fit error containing the rejected coefficients.
+- [ ]  Stop treating every isolated calibration sample as useful
 
-    for component in offset.iter().chain(scale.iter()) {
-        if !component.is_finite() {
-            return Err(BadMagDataCause::Calibration_DegenerateScale { offset, scale });
-        }
-    }
-    ```
-
-    A well-conditioned least-squares system can still yield negative shape coefficients or excessive residual error,
-    especially when its input covers only a noisy plane.
-  - **Recommended fix:** Validate finite positive shape coefficients and bounded fit residuals before any division or square root and return a specific non-physical-fit error containing the rejected coefficients.
-
-- [ ] Stop treating every isolated calibration sample as useful
-
-  - **Summary:** The diversity-only eviction policy preferentially retains isolated sensor outliers, which can drive
-    the algebraic fit toward negative shape coefficients.
-  - **Affected module:** `src/fusion/mag_calibration.rs`
-  - **Severity:** High
-  - **Description:** Any finite nonzero sample is accepted, and a candidate replaces the least-isolated buffered point
-    whenever its KNN score is larger:
-
-    ```rust
-    if !x.iter().all(|e| e.is_finite()) || x.norm_squared() <= f32::EPSILON {
-        return;
-    }
-
-    if low_mean_dist < sample_mean_dist {
-        self.add_sample_at(low_index, x);
-    }
-    ```
-
-    This policy cannot distinguish useful orientation coverage from Gaussian noise tails or magnetic interference, so
-    a long-running buffer can become increasingly dominated by extreme points.
-  - **Recommended fix:** Add a physical range check and robust neighborhood or fit-residual admission gate before KNN eviction, and use a robust loss in the calibration solve.
+    - **Summary:** The diversity-only eviction policy preferentially retains isolated sensor outliers, which can drive
+      the algebraic fit toward negative shape coefficients.
+    - **Affected module:** `src/fusion/mag_calibration.rs`
+    - **Severity:** High
+    - **Description:** Any finite nonzero sample is accepted, and a candidate replaces the least-isolated buffered point
+      whenever its KNN score is larger:
+    
+      ```rust
+      if !x.iter().all(|e| e.is_finite()) || x.norm_squared() <= f32::EPSILON {
+          return;
+      }
+    
+      if low_mean_dist < sample_mean_dist {
+          self.add_sample_at(low_index, x);
+      }
+      ```
+    
+      This policy cannot distinguish useful orientation coverage from Gaussian noise tails or magnetic interference, so
+      a long-running buffer can become increasingly dominated by extreme points.
+    - **Recommended fix:** Add a physical range check and robust neighborhood or fit-residual admission gate before KNN
+      eviction, and use a robust loss in the calibration solve.
 
 ## Medium severity
 
-- [ ] Normalize the calibration design automatically
+- [ ]  Normalize the calibration design automatically
 
-  - **Summary:** The default `pre_scaler` of `1.0` leaves realistic microtesla inputs poorly scaled across the linear,
-    squared, and constant design columns.
-  - **Affected module:** `src/fusion/mag_calibration.rs`
-  - **Severity:** Medium
-  - **Description:** Although the API says a value near the magnetic-field magnitude prevents ill-conditioning, the
-    default does no normalization and the production construction path uses that default:
+    - **Summary:** The default `pre_scaler` of `1.0` leaves realistic microtesla inputs poorly scaled across the linear,
+      squared, and constant design columns.
+    - **Affected module:** `src/fusion/mag_calibration.rs`
+    - **Severity:** Medium
+    - **Description:** Although the API says a value near the magnetic-field magnitude prevents ill-conditioning, the
+      default does no normalization and the production construction path uses that default:
+    
+      ```rust
+      Self {
+          matrix: SMatrix::from_element(1.0),
+          pre_scaler: 1.,
+          // ...
+      }
+    
+      self.matrix[(index, 0)] = sample[0] / self.pre_scaler;
+      ```
+      With readings on the order of 50 microtesla, coordinate columns are on the order of `10^1`, squared columns are
+      on the order of `10^3`, and the constant column is `1`, needlessly worsening the f32 SVD condition and
+      thresholding.
+    - **Recommended fix:** Derive a finite positive normalization scale from the accepted sample set inside
+      `perform_calibration` and undo it only when returning the fitted parameters. (REVIEW: not needed, pre_scaler is only
+      for f32 rounding error, if we completed "Fit the full soft-iron model emitted by the simulator", the design matrix
+      scale will be dictated by the estimated soft-iron matrix, not pre-scaler)
+    - [ ]  Apply configured pre-scaling consistently and validate it
+    
+    - **Summary:** A non-default `pre_scaler` puts buffered samples and new KNN candidates in different units, while
+      zero
+      or non-finite values can poison the stored matrix.
+    - **Affected module:** `src/fusion/mag_calibration.rs`
+    - **Severity:** Medium
+    - **Description:** Buffered coordinates are divided by `pre_scaler`, but the full-buffer candidate is scored in raw
+      units, and the builder accepts every `f32` value:
+    
+      ```rust
+      pub fn pre_scaler(self, pre_scaler: f32) -> Self {
+          Self { pre_scaler, ..self }
+      }
+    
+      self.matrix[(index, 0)] = sample[0] / self.pre_scaler;
+    
+      let sample_mean_dist = self.mean_distance_from_single(x.transpose());
+      ```
+      Consequently a feature intended to improve conditioning changes eviction behavior, and `0.0`, `NaN`, or infinity
+      can create invalid stored coordinates even though the raw input passed validation.
+    - **Recommended fix:** Require `pre_scaler` to be finite and strictly positive and convert each candidate to stored
+      units before computing its KNN distance. (REVIEW: not necessary, ditto)
+- [ ]  Include the true nearest neighbor when scoring a new sample
 
-    ```rust
-    Self {
-        matrix: SMatrix::from_element(1.0),
-        pre_scaler: 1.,
-        // ...
-    }
-
-    self.matrix[(index, 0)] = sample[0] / self.pre_scaler;
-    ```
-
-    With readings on the order of 50 microtesla, coordinate columns are on the order of `10^1`, squared columns are
-    on the order of `10^3`, and the constant column is `1`, needlessly worsening the f32 SVD condition and thresholding.
-  - **Recommended fix:** Derive a finite positive normalization scale from the accepted sample set inside `perform_calibration` and undo it only when returning the fitted parameters.
-
-- [ ] Apply configured pre-scaling consistently and validate it
-
-  - **Summary:** A non-default `pre_scaler` puts buffered samples and new KNN candidates in different units, while zero
-    or non-finite values can poison the stored matrix.
-  - **Affected module:** `src/fusion/mag_calibration.rs`
-  - **Severity:** Medium
-  - **Description:** Buffered coordinates are divided by `pre_scaler`, but the full-buffer candidate is scored in raw
-    units, and the builder accepts every `f32` value:
-
-    ```rust
-    pub fn pre_scaler(self, pre_scaler: f32) -> Self {
-        Self { pre_scaler, ..self }
-    }
-
-    self.matrix[(index, 0)] = sample[0] / self.pre_scaler;
-
-    let sample_mean_dist = self.mean_distance_from_single(x.transpose());
-    ```
-
-    Consequently a feature intended to improve conditioning changes eviction behavior, and `0.0`, `NaN`, or infinity
-    can create invalid stored coordinates even though the raw input passed validation.
-  - **Recommended fix:** Require `pre_scaler` to be finite and strictly positive and convert each candidate to stored units before computing its KNN distance.
-
-- [ ] Include the true nearest neighbor when scoring a new sample
-
-  - **Summary:** `mean_distance_from_single` always skips the smallest distance as a presumed self-distance even though
-    a new candidate is not yet in the buffer.
-  - **Affected module:** `src/fusion/mag_calibration.rs`
-  - **Severity:** Medium
-  - **Description:** The same helper is used both for existing rows, which do have one zero self-distance, and new
-    candidates, for which every distance is to a real buffered neighbor:
-
-    ```rust
-    squared_dists.iter().skip(1).take(k)
-
-    mean_dist[i] = self.mean_distance_from_single(row.into());
-
-    let sample_mean_dist = self.mean_distance_from_single(x.transpose());
-    ```
-
-    Dropping the candidate's actual nearest neighbor exaggerates its isolation and makes noisy candidates more likely
-    to evict legitimate buffered measurements.
-  - **Recommended fix:** Give the helper an explicit self-index or use separate buffered-row and candidate scoring functions so only a known zero self-distance is skipped.
-
-- [ ] Add sample age or calibration epochs to the buffer
-
-  - **Summary:** The calibrator fits one static offset to a timeless buffer, so historical samples remain mixed with
-    current samples when hard-iron bias changes.
-  - **Affected module:** `src/fusion/mag_calibration.rs`
-  - **Severity:** Medium
-  - **Description:** `MagCalibrator` stores coordinates but no timestamp, age, or calibration epoch:
-
-    ```rust
-    pub struct MagCalibrator<const N: usize> {
-        matrix: SMatrix<f32, N, 6>,
-        matrix_filled: usize,
-        mean_distance: f32,
-        pre_scaler: f32,
-        k: usize,
-    }
-    ```
-
-    Spatial-diversity eviction can retain old extreme points indefinitely, so measurements generated around different
-    ellipsoid centers can be combined into one non-physical fit.
-  - **Recommended fix:** Add an explicit reset, age-weighting, or calibration-epoch policy so stale samples cannot remain in the fit solely because they are spatially isolated.
+    - **Summary:** `mean_distance_from_single` always skips the smallest distance as a presumed self-distance even
+      though
+      a new candidate is not yet in the buffer.
+    - **Affected module:** `src/fusion/mag_calibration.rs`
+    - **Severity:** Medium
+    - **Description:** The same helper is used both for existing rows, which do have one zero self-distance, and new
+      candidates, for which every distance is to a real buffered neighbor:
+    
+      ```rust
+      squared_dists.iter().skip(1).take(k)
+    
+      mean_dist[i] = self.mean_distance_from_single(row.into());
+    
+      let sample_mean_dist = self.mean_distance_from_single(x.transpose());
+      ```
+      Dropping the candidate's actual nearest neighbor exaggerates its isolation and makes noisy candidates more likely
+      to evict legitimate buffered measurements.
+    - **Recommended fix:** Give the helper an explicit self-index or use separate buffered-row and candidate scoring
+      functions so only a known zero self-distance is skipped. (REVIEW: not needed, "mean_distance_from_single" should
+      always be called AFTER the sample is added to the buffer, so it is never empty)
+    - [ ]  Add sample age or calibration epochs to the buffer
+    
+    - **Summary:** The calibrator fits one static offset to a timeless buffer, so historical samples remain mixed with
+      current samples when hard-iron bias changes.
+    - **Affected module:** `src/fusion/mag_calibration.rs`
+    - **Severity:** Medium
+    - **Description:** `MagCalibrator` stores coordinates but no timestamp, age, or calibration epoch:
+    
+      ```rust
+      pub struct MagCalibrator<const N: usize> {
+          matrix: SMatrix<f32, N, 6>,
+          matrix_filled: usize,
+          mean_distance: f32,
+          pre_scaler: f32,
+          k: usize,
+      }
+      ```
+      Spatial-diversity eviction can retain old extreme points indefinitely, so measurements generated around different
+      ellipsoid centers can be combined into one non-physical fit.
+    - **Recommended fix:** Add an explicit reset, age-weighting, or calibration-epoch policy so stale samples cannot
+      remain in the fit solely because they are spatially isolated. (REVIEW: the purpose of eviction is to keep samples
+      evenly distributed if they are discounted by staleness, stale samples are weighted less. As a result, eviction should
+      only happens to samples that contributes least in its vicinity. If a sample is very stale but is the sole contributor,
+      it should not be evicted. We need a faster & more accurate algorithm for this)

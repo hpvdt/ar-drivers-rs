@@ -190,8 +190,9 @@ let glasses = any_glasses_or_dummy() ?; // Falls back to dummy device
 
 ## Documentation/Markdown Files
 
-All `*.md` files should hard wrap at approximately 120 characters. The only exceptions are Table and markup sections
-which can be longer.
+- Indentation is 4 spaces, continuation indentation is 6 spaces
+- Hard wrap is 120 characters. The only exceptions are Table and markup sections
+  which can be longer.
 
 ### TODO.md Format
 
