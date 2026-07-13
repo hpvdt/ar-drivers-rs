@@ -2,7 +2,7 @@
 #/Cargo.lock
 
 # IntelliJ-IDEA
-**.iml
+**.iml/
 **/.idea/
 **/.idea_modules/
 
@@ -11,3 +11,6 @@ config.json
 
 # MacOS
 .DS_Store
+
+# AI
+**/.opencode
