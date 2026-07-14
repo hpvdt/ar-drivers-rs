@@ -25,8 +25,11 @@
       A diagonal correction cannot undo the resulting cross-axis coupling, so even otherwise good simulated samples do
       not lie on the axis-aligned ellipsoid assumed by `perform_calibration`.
     - **Recommended fix:** Replace the diagonal `(offset, scale)` fit with a hard-iron offset plus an SPD 3x3 correction
-      matrix parameterized by a positive-diagonal Cholesky factor and solved with a robust nonlinear fit.
-    - **Resolution:** Accepted
+      matrix parameterized by a positive-diagonal Cholesky factor and solved with a robust nonlinear fit. (REVIEW: I'd
+      like to implement an alternating optimisation algorithm: the first step lock soft-iron Cholesky factor matrix and
+      only optimise hard-iron bias, the second step lock the hard-iron bias and only optimise the soft-iron Cholesky
+      factor matrix. Do you think it is possible?)
+
 - [ ]  Require redundant samples and three-dimensional coverage before solving
 
     - **Summary:** Six accepted samples make the six-parameter algebraic system square, but do not make it
@@ -110,9 +113,9 @@
 
       This policy cannot distinguish useful orientation coverage from Gaussian noise tails or magnetic interference, so
       a long-running buffer can become increasingly dominated by extreme points.
-    - **Recommended fix:** Add a physical range check and robust neighborhood or fit-residual admission gate before KNN
-      eviction, and use a robust loss in the calibration solve. (REVIEW: incorrect, without knowing the neutral
-      reading/center, the concept of "physical range" doesn't exist)
+    - **Recommended fix:** Use a robust loss for the initial full-buffer fit. Once a provisional fit exists, reject
+      samples by a robust radial-residual threshold before applying KNN diversity eviction. Do not impose a fixed raw
+      magnitude range while the hard-iron center is unknown; use explicit sensor saturation limits only when available.
 
 ## Medium severity
 
@@ -138,8 +141,8 @@
       on the order of `10^3`, and the constant column is `1`, needlessly worsening the f32 SVD condition and
       thresholding.
     - **Recommended fix:** Derive a finite positive normalization scale from the accepted sample set inside
-      `perform_calibration` and undo it only when returning the fitted parameters. (REVIEW: good, what's the recommended
-      default pre-scaler?)
+      `perform_calibration` and undo it only when returning the fitted parameters. (REVIEW: good, given that the input is always earth magnetic field, what's the recommended
+      default pre-scaler? This number should only be set once on construction.)
 - [ ]  Apply configured pre-scaling consistently and validate it
 
     - **Summary:** A non-default `pre_scaler` puts buffered samples and new KNN candidates in different units, while
@@ -161,9 +164,9 @@
       ```
       Consequently a feature intended to improve conditioning changes eviction behavior, and `0.0`, `NaN`, or infinity
       can create invalid stored coordinates even though the raw input passed validation.
-    - **Recommended fix:** Require `pre_scaler` to be finite and strictly positive and convert each candidate to stored
-      units before computing its KNN distance. (REVIEW: good, write this check in constructor, it should only be
-      executed once)
+    - **Recommended fix:** Validate `pre_scaler` once at the construction or configuration boundary, require it to be
+      finite and strictly positive, and store only the validated value. Convert each candidate to stored units before
+      computing its KNN distance.
 
 - [ ]  Score replacement candidates in their post-replacement buffer
 
@@ -187,7 +190,6 @@
       score the inserted candidate while skipping its zero self-distance. Commit the replacement only when that score
       exceeds the saved row's score; otherwise restore the complete row. Recompute cached aggregate distance after a
       committed replacement.
-    - **Resolution:** Postpone. Do not implement.
 - [ ]  Add sample age or calibration epochs to the buffer
 
     - **Summary:** The calibrator fits one static offset to a timeless buffer, so historical samples remain mixed with
