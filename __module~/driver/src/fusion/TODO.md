@@ -24,11 +24,11 @@
 
       A diagonal correction cannot undo the resulting cross-axis coupling, so even otherwise good simulated samples do
       not lie on the axis-aligned ellipsoid assumed by `perform_calibration`.
-    - **Recommended fix:** Replace the diagonal `(offset, scale)` fit with a hard-iron offset plus an SPD 3x3 correction
-      matrix parameterized by a positive-diagonal Cholesky factor and solved with a robust nonlinear fit. (REVIEW: I'd
-      like to implement an alternating optimisation algorithm: the first step lock soft-iron Cholesky factor matrix and
-      only optimise hard-iron bias, the second step lock the hard-iron bias and only optimise the soft-iron Cholesky
-      factor matrix. Do you think it is possible?)
+    - **Recommended fix:** Replace the diagonal `(offset, scale)` fit with a hard-iron offset `b` and an SPD 3x3
+      correction `C = L L^T`, with a positive-diagonal parameterization for `L`. Minimize robust radial residuals
+      `||C (m_i - b)|| - 1` by alternating block-coordinate descent: optimize `b` with `L` fixed, then optimize `L`
+      with `b` fixed. Initialize from a valid full-ellipsoid fit, fix the unit-radius scale gauge, accept only
+      objective-decreasing updates, and reject ill-conditioned, non-converged, or high-residual results.
 
 - [ ]  Require redundant samples and three-dimensional coverage before solving
 
@@ -89,9 +89,10 @@
       A well-conditioned least-squares system can still yield negative shape coefficients or excessive residual error,
       especially when its input covers only a noisy plane.
     - **Recommended fix:** Validate finite positive shape coefficients and bounded fit residuals before any division or
-      square root and return a specific non-physical-fit error containing the rejected coefficients. (REVIEW: Not
-      needed, SVD already return an error in case of non-positive shape, Cholesky factor won't return non-positive
-      shape)
+      square root and return a specific non-physical-fit error containing the rejected coefficients. (Review: I prefer
+      soft-boundary regularisation instead of hard-boundary rejection, propose a regularisation term to ward against
+      degenerate soft-iron matrix)
+
 - [ ]  Stop treating every isolated calibration sample as useful
 
     - **Summary:** The diversity-only eviction policy preferentially retains isolated sensor outliers, which can drive
@@ -141,8 +142,8 @@
       on the order of `10^3`, and the constant column is `1`, needlessly worsening the f32 SVD condition and
       thresholding.
     - **Recommended fix:** Derive a finite positive normalization scale from the accepted sample set inside
-      `perform_calibration` and undo it only when returning the fitted parameters. (REVIEW: good, given that the input is always earth magnetic field, what's the recommended
-      default pre-scaler? This number should only be set once on construction.)
+      `perform_calibration` and undo it only when returning the fitted parameters. (REVIEW: the pre-scaler has no place
+      in any algorithm and should be removed all together)
 - [ ]  Apply configured pre-scaling consistently and validate it
 
     - **Summary:** A non-default `pre_scaler` puts buffered samples and new KNN candidates in different units, while
