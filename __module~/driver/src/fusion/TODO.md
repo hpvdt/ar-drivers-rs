@@ -88,10 +88,11 @@
 
       A well-conditioned least-squares system can still yield negative shape coefficients or excessive residual error,
       especially when its input covers only a noisy plane.
-    - **Recommended fix:** Validate finite positive shape coefficients and bounded fit residuals before any division or
-      square root and return a specific non-physical-fit error containing the rejected coefficients. (Review: I prefer
-      soft-boundary regularisation instead of hard-boundary rejection, propose a regularisation term to ward against
-      degenerate soft-iron matrix)
+    - **Recommended fix:** Replace hard-boundary rejection with soft-boundary regularisation in the least-squares
+      objective. Add a penalty term (e.g. log-barrier or Tikhonov-style ridge on the shape coefficients) that
+      discourages negative or near-zero eigenvalues of the soft-iron matrix, so the solver naturally favours
+      physically valid ellipsoid parameters. Reject only when the regularised residual still exceeds a bound, returning
+      the specific coefficients that were rejected.
 
 - [ ]  Stop treating every isolated calibration sample as useful
 
@@ -143,7 +144,8 @@
       thresholding.
     - **Recommended fix:** Derive a finite positive normalization scale from the accepted sample set inside
       `perform_calibration` and undo it only when returning the fitted parameters. (REVIEW: the pre-scaler has no place
-      in any algorithm and should be removed all together)
+      in the algorithm/error-state and should be removed all together, all errors should be from hard-iron and
+      soft-iron)
 - [ ]  Apply configured pre-scaling consistently and validate it
 
     - **Summary:** A non-default `pre_scaler` puts buffered samples and new KNN candidates in different units, while
