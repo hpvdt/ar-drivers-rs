@@ -352,8 +352,7 @@ impl<const N: usize> MagCalibrator<N> {
             let cholesky_updated = self.update_cholesky(&samples, &offset, &mut cholesky);
             let next_objective = robust_objective(&offset, &cholesky);
             let improvement = objective - next_objective;
-            if (!offset_updated && !cholesky_updated)
-                || improvement <= 1.0e-5 * objective.max(f32::EPSILON)
+            if (!offset_updated && !cholesky_updated) || improvement <= 1.0e-5 * objective.max(1.0)
             {
                 converged = true;
                 objective = next_objective;
