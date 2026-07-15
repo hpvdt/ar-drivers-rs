@@ -18,20 +18,24 @@ const MIN_MAG_NORM: f32 = 0.4;
 /// source: https://github.com/peterkrull/mag-calibrator-rs/blob/main/src/lib.rs
 pub struct MagCalibrator<const N: usize> {
     matrix: SMatrix<f32, N, 6>,
+    sample_timestamps_us: [u64; N],
     matrix_filled: usize,
     mean_distance: f32,
     pre_scaler: f32,
     k: usize,
+    max_sample_lifespan_us: u64,
 }
 
 impl<const N: usize> Default for MagCalibrator<N> {
     fn default() -> Self {
         Self {
             matrix: SMatrix::from_element(1.0),
+            sample_timestamps_us: [0; N],
             matrix_filled: Default::default(),
             mean_distance: Default::default(),
             pre_scaler: 1.,
             k: 2, // Works well in testing
+            max_sample_lifespan_us: 60 * 60 * 1_000_000,
         }
     }
 }
@@ -58,6 +62,15 @@ impl<const N: usize> MagCalibrator<N> {
     /// and are unaffected by this value.
     pub fn pre_scaler(self, pre_scaler: f32) -> Self {
         Self { pre_scaler, ..self }
+    }
+
+    /// Configure the maximum time a sample remains in the calibration buffer,
+    /// in microseconds. The default is one hour.
+    pub fn max_sample_lifespan_us(self, max_sample_lifespan_us: u64) -> Self {
+        Self {
+            max_sample_lifespan_us,
+            ..self
+        }
     }
 
     /// Calculates mean distance to the `k` nearest neighbors.
@@ -117,18 +130,37 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     /// Evaluates whether the new sample should replace one already in the buffer.
-    pub fn evaluate_sample(&mut self, x: [f32; 3]) {
-        self.evaluate_sample_vec(Vector3::from(x))
+    pub fn evaluate_sample(&mut self, x: [f32; 3], timestamp_us: u64) {
+        self.evaluate_sample_vec(Vector3::from(x), timestamp_us)
     }
 
     /// Add a sample if it is deemed more useful than the least useful sample.
-    pub fn evaluate_sample_vec(&mut self, x: Vector3<f32>) {
+    pub fn evaluate_sample_vec(&mut self, x: Vector3<f32>, timestamp_us: u64) {
+        let mut retained = 0;
+        for index in 0..self.matrix_filled {
+            if timestamp_us.saturating_sub(self.sample_timestamps_us[index])
+                <= self.max_sample_lifespan_us
+            {
+                if retained != index {
+                    for column in 0..3 {
+                        self.matrix[(retained, column)] = self.matrix[(index, column)];
+                    }
+                    self.sample_timestamps_us[retained] = self.sample_timestamps_us[index];
+                }
+                retained += 1;
+            }
+        }
+        if retained != self.matrix_filled {
+            self.matrix_filled = retained;
+            self.mean_distance = 0.0;
+        }
+
         if !x.iter().all(|e| e.is_finite()) || x.norm_squared() <= f32::EPSILON {
             return;
         }
         // Check if buffer is not yet "initialized" with real measurements
         if self.matrix_filled < N {
-            self.add_sample_at(self.matrix_filled, x);
+            self.add_sample_at(self.matrix_filled, x, timestamp_us);
             self.matrix_filled += 1;
         }
         // Otherwise check which sample may be best to replace
@@ -136,17 +168,18 @@ impl<const N: usize> MagCalibrator<N> {
             let (low_index, low_mean_dist) = self.lowest_mean_distance_by_index();
             let sample_mean_dist = self.mean_distance_from_single(x.transpose());
             if low_mean_dist < sample_mean_dist {
-                self.add_sample_at(low_index, x);
+                self.add_sample_at(low_index, x, timestamp_us);
             }
         }
     }
 
     /// Insert a sample vector into `index` row of buffer matrix.
-    fn add_sample_at(&mut self, index: usize, sample: Vector3<f32>) {
+    fn add_sample_at(&mut self, index: usize, sample: Vector3<f32>, timestamp_us: u64) {
         if index < N {
             self.matrix[(index, 0)] = sample[0] / self.pre_scaler;
             self.matrix[(index, 1)] = sample[1] / self.pre_scaler;
             self.matrix[(index, 2)] = sample[2] / self.pre_scaler;
+            self.sample_timestamps_us[index] = timestamp_us;
         }
     }
 
@@ -159,8 +192,9 @@ impl<const N: usize> MagCalibrator<N> {
     pub fn evaluate_correct(
         &mut self,
         raw_mag: Vector3<f32>,
+        timestamp_us: u64,
     ) -> std::result::Result<Vector3<f32>, BadMagCause> {
-        self.evaluate_sample_vec(raw_mag);
+        self.evaluate_sample_vec(raw_mag, timestamp_us);
         let (offset, correction) = self.perform_calibration()?;
         let mag = correction * (raw_mag - offset);
 

@@ -18,8 +18,8 @@ fn mag_calibrator_solves_synthetic_offset_and_full_spd_correction() {
 #[test]
 fn mag_calibrator_degenerate_data_does_not_panic() {
     let mut calibrator = MagCalibrator::<9>::new();
-    for _ in 0..9 {
-        calibrator.evaluate_sample_vec(Vector3::new(5.0, 6.0, 7.0));
+    for timestamp_us in 0..9 {
+        calibrator.evaluate_sample_vec(Vector3::new(5.0, 6.0, 7.0), timestamp_us);
     }
 
     assert!(matches!(
@@ -32,7 +32,7 @@ fn mag_calibrator_degenerate_data_does_not_panic() {
 fn mag_calibrator_waits_for_the_full_buffer_after_reaching_the_model_minimum() {
     let mut calibrator = MagCalibrator::<12>::new();
     for i in 0..9 {
-        calibrator.evaluate_sample_vec(Vector3::new(5.0 + i as f32, 6.0, 7.0));
+        calibrator.evaluate_sample_vec(Vector3::new(5.0 + i as f32, 6.0, 7.0), i as u64);
     }
 
     assert!(matches!(
@@ -49,7 +49,10 @@ fn mag_calibrator_rejects_nearly_collinear_samples() {
     let mut calibrator = MagCalibrator::<12>::new();
     for i in 0..12 {
         let t = i as f32 * 0.0001;
-        calibrator.evaluate_sample_vec(Vector3::new(10.0 + t, -5.0 + 2.0 * t, 3.0 + 0.5 * t));
+        calibrator.evaluate_sample_vec(
+            Vector3::new(10.0 + t, -5.0 + 2.0 * t, 3.0 + 0.5 * t),
+            i as u64,
+        );
     }
 
     assert!(matches!(
@@ -67,14 +70,51 @@ fn mag_calibrator_clamps_k_and_excludes_self_distance() {
 #[test]
 fn mag_calibrator_accepts_zero_components_and_rejects_bad_vectors() {
     let mut calibrator = MagCalibrator::<12>::new();
-    for sample in [
+    for (timestamp_us, sample) in [
         Vector3::new(45.0, 0.0, -12.0),
         Vector3::new(f32::NAN, 1.0, 1.0),
         Vector3::new(f32::INFINITY, 1.0, 1.0),
         Vector3::new(1.0e-8, 0.0, 0.0),
-    ] {
-        calibrator.evaluate_sample_vec(sample);
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        calibrator.evaluate_sample_vec(sample, timestamp_us as u64);
     }
+
+    assert!(matches!(
+        calibrator.perform_calibration(),
+        Err(BadCalibration::InsufficientSamples {
+            samples: 1,
+            required: 12
+        })
+    ));
+}
+
+#[test]
+fn mag_calibrator_defaults_sample_lifespan_to_one_hour() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+    let mut calibrator = seeded_calibrator::<12>(offset, distortion);
+
+    calibrator.evaluate_sample_vec(Vector3::new(20.0, 30.0, 40.0), 60 * 60 * 1_000_000 + 1);
+
+    assert!(matches!(
+        calibrator.perform_calibration(),
+        Err(BadCalibration::InsufficientSamples {
+            samples: 1,
+            required: 12
+        })
+    ));
+}
+
+#[test]
+fn mag_calibrator_uses_configured_sample_lifespan() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+    let mut calibrator = seeded_calibrator::<12>(offset, distortion).max_sample_lifespan_us(10);
+
+    calibrator.evaluate_sample_vec(Vector3::new(20.0, 30.0, 40.0), 11);
 
     assert!(matches!(
         calibrator.perform_calibration(),
@@ -87,10 +127,10 @@ fn mag_calibrator_accepts_zero_components_and_rejects_bad_vectors() {
 
 fn mean_distance_after_replacement(k: usize) -> f32 {
     let mut calibrator = MagCalibrator::<4>::new().num_neighbors(k);
-    for x in [1.0, 11.0, 21.0, 101.0] {
-        calibrator.evaluate_sample_vec(Vector3::new(x, 1.0, 1.0));
+    for (timestamp_us, x) in [1.0, 11.0, 21.0, 101.0].into_iter().enumerate() {
+        calibrator.evaluate_sample_vec(Vector3::new(x, 1.0, 1.0), timestamp_us as u64);
     }
-    calibrator.evaluate_sample_vec(Vector3::new(201.0, 1.0, 1.0));
+    calibrator.evaluate_sample_vec(Vector3::new(201.0, 1.0, 1.0), 4);
     calibrator.get_mean_distance()
 }
 
@@ -101,7 +141,7 @@ fn seeded_calibrator<const N: usize>(
     let mut calibrator = MagCalibrator::new();
     for i in 0..N {
         let direction = sample_direction(i, N);
-        calibrator.evaluate_sample_vec(offset + distortion * direction);
+        calibrator.evaluate_sample_vec(offset + distortion * direction, 0);
     }
     calibrator
 }

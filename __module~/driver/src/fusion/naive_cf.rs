@@ -134,10 +134,10 @@ impl NaiveCF {
         }
     }
 
-    pub(super) fn update_mag(&mut self, mag_rub: &Vector3<f32>, _t: u64) -> () {
+    pub(super) fn update_mag(&mut self, mag_rub: &Vector3<f32>, t: u64) -> () {
         let raw_mag = rub_to_frd(mag_rub); // reading is always muT (microTesla) pointing to north
 
-        let mag_north: Vector3<f32> = match self.state.mag.evaluate_correct(raw_mag) {
+        let mag_north: Vector3<f32> = match self.state.mag.evaluate_correct(raw_mag, t) {
             Ok(mag_north) => mag_north,
             Err(_cause) => {
                 return;
