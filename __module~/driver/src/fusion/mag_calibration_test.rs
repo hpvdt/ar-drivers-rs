@@ -29,17 +29,17 @@ fn mag_calibrator_degenerate_data_does_not_panic() {
 }
 
 #[test]
-fn mag_calibrator_rejects_insufficient_samples() {
+fn mag_calibrator_waits_for_the_full_buffer_after_reaching_the_model_minimum() {
     let mut calibrator = MagCalibrator::<12>::new();
-    for i in 0..8 {
+    for i in 0..9 {
         calibrator.evaluate_sample_vec(Vector3::new(5.0 + i as f32, 6.0, 7.0));
     }
 
     assert!(matches!(
         calibrator.perform_calibration(),
         Err(BadCalibration::InsufficientSamples {
-            samples: 8,
-            required: 9
+            samples: 9,
+            required: 12
         })
     ));
 }
@@ -80,7 +80,7 @@ fn mag_calibrator_accepts_zero_components_and_rejects_bad_vectors() {
         calibrator.perform_calibration(),
         Err(BadCalibration::InsufficientSamples {
             samples: 1,
-            required: 9
+            required: 12
         })
     ));
 }

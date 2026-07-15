@@ -181,10 +181,11 @@ impl<const N: usize> MagCalibrator<N> {
         &mut self,
     ) -> std::result::Result<(Vector3<f32>, Matrix3<f32>), BadCalibration> {
         let sample_count = self.matrix_filled.min(N);
-        if sample_count < DESIGN_MATRIX_COLUMNS {
+        let required_samples = N.max(DESIGN_MATRIX_COLUMNS);
+        if sample_count < required_samples {
             return Err(BadCalibration::InsufficientSamples {
                 samples: sample_count,
-                required: DESIGN_MATRIX_COLUMNS,
+                required: required_samples,
             });
         }
 

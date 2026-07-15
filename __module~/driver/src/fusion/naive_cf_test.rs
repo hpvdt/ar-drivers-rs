@@ -38,7 +38,7 @@ fn get_calibrated_mag_discards_underconstrained_calibration() {
         Err(BadMagCause::BadCalibration(
             BadCalibration::InsufficientSamples {
                 samples: 1,
-                required: 9
+                required: 255
             }
         ))
     ));
