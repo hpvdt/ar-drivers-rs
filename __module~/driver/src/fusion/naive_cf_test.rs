@@ -2,7 +2,6 @@ use nalgebra::{UnitQuaternion, Vector3};
 
 use super::bad_mag_cause::{BadCalibration, BadMagCause};
 use super::mag_calibration::MagCalibrator;
-use super::mag_calibration::{mag_calibration_can_divide, MIN_MAG_SCALE_DIVISOR};
 use super::naive_cf::NaiveCF;
 use super::FusionState;
 
@@ -30,14 +29,6 @@ fn update_mag_uses_shared_mag_calibrator() {
 }
 
 #[test]
-fn get_calibrated_mag_discards_unsafe_scale_divisor() {
-    let offset = Vector3::new(11.0, -7.0, 5.0);
-    let scale = Vector3::new(3.0, MIN_MAG_SCALE_DIVISOR * 0.5, 1.5);
-
-    assert!(!mag_calibration_can_divide(&offset, &scale));
-}
-
-#[test]
 fn get_calibrated_mag_discards_underconstrained_calibration() {
     let mut state = FusionState::new(Box::new(crate::sim::Dummy::new()));
     let raw_mag = Vector3::new(5.0, 6.0, 7.0);
@@ -47,7 +38,7 @@ fn get_calibrated_mag_discards_underconstrained_calibration() {
         Err(BadMagCause::BadCalibration(
             BadCalibration::InsufficientSamples {
                 samples: 1,
-                required: 6
+                required: 9
             }
         ))
     ));

@@ -1,12 +1,11 @@
 // use core::cmp::Ordering;
-use nalgebra::{DMatrix, DVector, SMatrix, SMatrixView, Vector3, SVD};
+use nalgebra::{DMatrix, DVector, Matrix3, SMatrix, SMatrixView, SVector, Vector3, SVD};
 
 use super::bad_mag_cause::{BadCalibration, BadMagCause, BadReading};
 
-const DESIGN_MATRIX_COLUMNS: usize = 6;
+const DESIGN_MATRIX_COLUMNS: usize = 9;
 const SVD_EPSILON_RATIO: f32 = 1.0e-6;
 const MAX_SVD_CONDITION: f32 = 1.0e6;
-pub(crate) const MIN_MAG_SCALE_DIVISOR: f32 = 1.0e-6;
 const MIN_MAG_NORM: f32 = 0.4;
 
 /// Lightweight least squares approach to
@@ -162,13 +161,8 @@ impl<const N: usize> MagCalibrator<N> {
         raw_mag: Vector3<f32>,
     ) -> std::result::Result<Vector3<f32>, BadMagCause> {
         self.evaluate_sample_vec(raw_mag);
-        let (offset, scale) = self.perform_calibration()?;
-        let offset: Vector3<f32> = Vector3::from(offset);
-        let scale: Vector3<f32> = Vector3::from(scale);
-        if !mag_calibration_can_divide(&offset, &scale) {
-            return Err(BadCalibration::NumericallyUnstable { offset, scale }.into());
-        }
-        let mag = (raw_mag - offset).component_div(&scale);
+        let (offset, correction) = self.perform_calibration()?;
+        let mag = correction * (raw_mag - offset);
 
         let mag_norm = mag.norm();
         if mag_norm < MIN_MAG_NORM {
@@ -181,11 +175,11 @@ impl<const N: usize> MagCalibrator<N> {
         }
     }
 
-    /// Try to calculate calibration offset and scale values. Returns the cause
-    /// when the calibration cannot be produced. The tuple contains (offset, scale).
+    /// Try to calculate the hard-iron offset and full SPD soft-iron correction.
+    /// Returns the cause when the calibration cannot be produced.
     pub fn perform_calibration(
         &mut self,
-    ) -> std::result::Result<([f32; 3], [f32; 3]), BadCalibration> {
+    ) -> std::result::Result<(Vector3<f32>, Matrix3<f32>), BadCalibration> {
         let sample_count = self.matrix_filled.min(N);
         if sample_count < DESIGN_MATRIX_COLUMNS {
             return Err(BadCalibration::InsufficientSamples {
@@ -194,21 +188,47 @@ impl<const N: usize> MagCalibrator<N> {
             });
         }
 
-        // Calculate column 4 and 5 of H matrix for the real samples only.
-        self.matrix
-            .row_iter_mut()
-            .take(sample_count)
-            .for_each(|mut mag| {
-                mag[3] = -mag[1] * mag[1];
-                mag[4] = -mag[2] * mag[2];
+        let sample_mean = (0..sample_count).fold(Vector3::zeros(), |sum, row| {
+            sum + Vector3::new(
+                self.matrix[(row, 0)],
+                self.matrix[(row, 1)],
+                self.matrix[(row, 2)],
+            )
+        }) / sample_count as f32;
+        let sample_scale = ((0..sample_count).fold(0.0, |sum, row| {
+            let sample = Vector3::new(
+                self.matrix[(row, 0)],
+                self.matrix[(row, 1)],
+                self.matrix[(row, 2)],
+            );
+            sum + (sample - sample_mean).norm_squared()
+        }) / sample_count as f32)
+            .sqrt();
+        if !sample_scale.is_finite() || sample_scale <= f32::EPSILON {
+            return Err(BadCalibration::DegenerateSoftIronMatrix {
+                condition: f32::INFINITY,
+                max_condition: MAX_SVD_CONDITION,
             });
+        }
 
+        let samples = DMatrix::from_fn(sample_count, 3, |row, col| self.matrix[(row, col)]);
         let design = DMatrix::from_fn(sample_count, DESIGN_MATRIX_COLUMNS, |row, col| {
-            self.matrix[(row, col)]
+            let sample = Vector3::new(samples[(row, 0)], samples[(row, 1)], samples[(row, 2)]);
+            let sample = (sample - sample_mean) / sample_scale;
+            match col {
+                0 => sample.x * sample.x,
+                1 => sample.y * sample.y,
+                2 => sample.z * sample.z,
+                3 => 2.0 * sample.x * sample.y,
+                4 => 2.0 * sample.x * sample.z,
+                5 => 2.0 * sample.y * sample.z,
+                6 => sample.x,
+                7 => sample.y,
+                8 => sample.z,
+                _ => unreachable!(),
+            }
         });
-        let w = DVector::from_fn(sample_count, |row, _| {
-            self.matrix[(row, 0)] * self.matrix[(row, 0)]
-        });
+        let w = DVector::from_element(sample_count, 1.0);
 
         let svd = SVD::new(design, true, true);
         let singular_values = svd.singular_values.as_slice();
@@ -229,39 +249,279 @@ impl<const N: usize> MagCalibrator<N> {
             .pseudo_inverse(epsilon)
             .map_err(|message| BadCalibration::Unsolveable { message })?;
         let x = pseudo_inverse * w;
+        let shape = Matrix3::new(x[0], x[3], x[4], x[3], x[1], x[5], x[4], x[5], x[2]);
+        let linear = Vector3::new(x[6], x[7], x[8]);
+        let shape_inverse =
+            shape
+                .try_inverse()
+                .ok_or(BadCalibration::DegenerateSoftIronMatrix {
+                    condition: f32::INFINITY,
+                    max_condition: MAX_SVD_CONDITION,
+                })?;
+        let normalized_offset = -0.5 * shape_inverse * linear;
+        let radius_squared = 1.0 + normalized_offset.dot(&(shape * normalized_offset));
+        if !radius_squared.is_finite() || radius_squared <= f32::EPSILON {
+            return Err(BadCalibration::DegenerateSoftIronMatrix {
+                condition: f32::INFINITY,
+                max_condition: MAX_SVD_CONDITION,
+            });
+        }
 
-        // Calculate offsets and scale factors in pre-scaled sample units.
-        let offset = Vector3::new(x[0] / 2., x[1] / (2. * x[3]), x[2] / (2. * x[4]));
-        let temp = x[5]
-            + offset[0] * offset[0]
-            + x[3] * offset[1] * offset[1]
-            + x[4] * offset[2] * offset[2];
-        let scale = Vector3::new(temp.sqrt(), (temp / x[3]).sqrt(), (temp / x[4]).sqrt());
+        let normalized_shape = shape / radius_squared;
+        let eigen = normalized_shape.symmetric_eigen();
+        let min_eigenvalue = eigen.eigenvalues.min();
+        let max_eigenvalue = eigen.eigenvalues.max();
+        let shape_condition = max_eigenvalue / min_eigenvalue;
+        if !shape_condition.is_finite()
+            || min_eigenvalue <= f32::EPSILON
+            || shape_condition > MAX_SVD_CONDITION
+        {
+            return Err(BadCalibration::DegenerateSoftIronMatrix {
+                condition: shape_condition,
+                max_condition: MAX_SVD_CONDITION,
+            });
+        }
 
-        // Samples are divided by `pre_scaler` before storage, so the fit is in
-        // pre-scaled units. Convert offset and scale back to caller-visible (raw)
-        // units so `(raw - offset) / scale` operates in the same units as the input.
-        let offset = offset * self.pre_scaler;
-        let scale = scale * self.pre_scaler;
+        let correction_normalized = eigen.eigenvectors
+            * Matrix3::from_diagonal(&eigen.eigenvalues.map(f32::sqrt))
+            * eigen.eigenvectors.transpose();
+        let mut offset = sample_mean + normalized_offset * sample_scale;
+        let correction = correction_normalized / sample_scale;
+        let mut cholesky = correction
+            .cholesky()
+            .ok_or(BadCalibration::DegenerateSoftIronMatrix {
+                condition: shape_condition,
+                max_condition: MAX_SVD_CONDITION,
+            })?
+            .l();
 
-        // Check that off and scale vectors contain valid values
-        for component in offset.iter().chain(scale.iter()) {
-            if !component.is_finite() {
-                return Err(BadCalibration::DegenerateScale { offset, scale });
+        let robust_objective = |candidate_offset: &Vector3<f32>, candidate_l: &Matrix3<f32>| {
+            let candidate_correction = candidate_l * candidate_l.transpose();
+            let mut objective = 0.0;
+            for row in 0..sample_count {
+                let sample = Vector3::new(samples[(row, 0)], samples[(row, 1)], samples[(row, 2)]);
+                let residual = (candidate_correction * (sample - candidate_offset)).norm() - 1.0;
+                let absolute = residual.abs();
+                objective += if absolute <= 0.1 {
+                    0.5 * residual * residual
+                } else {
+                    0.1 * (absolute - 0.05)
+                };
             }
+            objective / sample_count as f32
+        };
+        let mut objective = robust_objective(&offset, &cholesky);
+        let mut converged = false;
+        for _ in 0..50 {
+            let offset_updated = self.update_offset(&samples, &mut offset, &cholesky);
+            let cholesky_updated = self.update_cholesky(&samples, &offset, &mut cholesky);
+            let next_objective = robust_objective(&offset, &cholesky);
+            let improvement = objective - next_objective;
+            if (!offset_updated && !cholesky_updated)
+                || improvement <= 1.0e-5 * objective.max(f32::EPSILON)
+            {
+                converged = true;
+                objective = next_objective;
+                break;
+            }
+            objective = next_objective;
+        }
+        if !converged {
+            return Err(BadCalibration::Unsolveable {
+                message: "full soft-iron calibration did not converge",
+            });
+        }
+
+        let correction = cholesky * cholesky.transpose();
+        let radial_rms = ((0..sample_count).fold(0.0, |sum, row| {
+            let sample = Vector3::new(samples[(row, 0)], samples[(row, 1)], samples[(row, 2)]);
+            let residual = (correction * (sample - offset)).norm() - 1.0;
+            sum + residual * residual
+        }) / sample_count as f32)
+            .sqrt();
+        let eigenvalues = correction.symmetric_eigenvalues();
+        let correction_condition = eigenvalues.max() / eigenvalues.min();
+        if !objective.is_finite()
+            || !radial_rms.is_finite()
+            || radial_rms > 0.15
+            || !correction_condition.is_finite()
+            || eigenvalues.min() <= f32::EPSILON
+            || correction_condition > MAX_SVD_CONDITION
+        {
+            return Err(BadCalibration::DegenerateSoftIronMatrix {
+                condition: correction_condition,
+                max_condition: MAX_SVD_CONDITION,
+            });
+        }
+
+        // Samples are divided by `pre_scaler` before storage, so convert the
+        // fitted offset and correction back to caller-visible raw units.
+        offset *= self.pre_scaler;
+        let correction = correction / self.pre_scaler;
+        if !offset
+            .iter()
+            .chain(correction.iter())
+            .all(|value| value.is_finite())
+        {
+            return Err(BadCalibration::Unsolveable {
+                message: "full soft-iron calibration produced non-finite parameters",
+            });
         }
 
         // TODO Add option for low-pass filtering this result
-        Ok((offset.into(), scale.into()))
+        Ok((offset, correction))
     }
-}
 
-pub(crate) fn mag_calibration_can_divide(offset: &Vector3<f32>, scale: &Vector3<f32>) -> bool {
-    offset
-        .iter()
-        .chain(scale.iter())
-        .all(|component| component.is_finite())
-        && scale
-            .iter()
-            .all(|component| component.abs() >= MIN_MAG_SCALE_DIVISOR)
+    fn update_offset(
+        &self,
+        samples: &DMatrix<f32>,
+        offset: &mut Vector3<f32>,
+        cholesky: &Matrix3<f32>,
+    ) -> bool {
+        let correction = cholesky * cholesky.transpose();
+        let objective = |candidate: &Vector3<f32>| {
+            let mut value = 0.0;
+            for row in 0..samples.nrows() {
+                let sample = Vector3::new(samples[(row, 0)], samples[(row, 1)], samples[(row, 2)]);
+                let residual = (correction * (sample - candidate)).norm() - 1.0;
+                let absolute = residual.abs();
+                value += if absolute <= 0.1 {
+                    0.5 * residual * residual
+                } else {
+                    0.1 * (absolute - 0.05)
+                };
+            }
+            value / samples.nrows() as f32
+        };
+        let current_objective = objective(offset);
+        let mut hessian = Matrix3::zeros();
+        let mut gradient = Vector3::zeros();
+        for row in 0..samples.nrows() {
+            let sample = Vector3::new(samples[(row, 0)], samples[(row, 1)], samples[(row, 2)]);
+            let centered = sample - *offset;
+            let corrected = correction * centered;
+            let norm = corrected.norm();
+            if norm <= f32::EPSILON {
+                return false;
+            }
+            let residual = norm - 1.0;
+            let weight = if residual.abs() <= 0.1 {
+                1.0
+            } else {
+                0.1 / residual.abs()
+            };
+            let jacobian = -(correction.transpose() * corrected) / norm;
+            hessian += weight * jacobian * jacobian.transpose();
+            gradient += weight * jacobian * residual;
+        }
+
+        for attempt in 0..6 {
+            let damping = 1.0e-4 * 10.0f32.powi(attempt);
+            let Some(inverse) = (hessian + Matrix3::identity() * damping).try_inverse() else {
+                continue;
+            };
+            let candidate = *offset - inverse * gradient;
+            let candidate_objective = objective(&candidate);
+            if candidate_objective.is_finite() && candidate_objective < current_objective {
+                *offset = candidate;
+                return true;
+            }
+        }
+        false
+    }
+
+    fn update_cholesky(
+        &self,
+        samples: &DMatrix<f32>,
+        offset: &Vector3<f32>,
+        cholesky: &mut Matrix3<f32>,
+    ) -> bool {
+        let objective = |candidate_l: &Matrix3<f32>| {
+            let candidate_correction = candidate_l * candidate_l.transpose();
+            let mut value = 0.0;
+            for row in 0..samples.nrows() {
+                let sample = Vector3::new(samples[(row, 0)], samples[(row, 1)], samples[(row, 2)]);
+                let residual = (candidate_correction * (sample - offset)).norm() - 1.0;
+                let absolute = residual.abs();
+                value += if absolute <= 0.1 {
+                    0.5 * residual * residual
+                } else {
+                    0.1 * (absolute - 0.05)
+                };
+            }
+            value / samples.nrows() as f32
+        };
+        let current_objective = objective(cholesky);
+        let correction = *cholesky * cholesky.transpose();
+        let mut hessian = SMatrix::<f32, 6, 6>::zeros();
+        let mut gradient = SVector::<f32, 6>::zeros();
+        for row in 0..samples.nrows() {
+            let sample = Vector3::new(samples[(row, 0)], samples[(row, 1)], samples[(row, 2)]);
+            let centered = sample - offset;
+            let corrected = correction * centered;
+            let norm = corrected.norm();
+            if norm <= f32::EPSILON {
+                return false;
+            }
+            let residual = norm - 1.0;
+            let weight = if residual.abs() <= 0.1 {
+                1.0
+            } else {
+                0.1 / residual.abs()
+            };
+            let mut jacobian = SVector::<f32, 6>::zeros();
+            for parameter in 0..6 {
+                let mut derivative_l = Matrix3::zeros();
+                match parameter {
+                    0 => derivative_l[(0, 0)] = cholesky[(0, 0)],
+                    1 => derivative_l[(1, 0)] = 1.0,
+                    2 => derivative_l[(1, 1)] = cholesky[(1, 1)],
+                    3 => derivative_l[(2, 0)] = 1.0,
+                    4 => derivative_l[(2, 1)] = 1.0,
+                    5 => derivative_l[(2, 2)] = cholesky[(2, 2)],
+                    _ => unreachable!(),
+                }
+                let derivative_correction =
+                    derivative_l * cholesky.transpose() + *cholesky * derivative_l.transpose();
+                jacobian[parameter] = corrected.dot(&(derivative_correction * centered)) / norm;
+            }
+            hessian += weight * jacobian * jacobian.transpose();
+            gradient += weight * jacobian * residual;
+        }
+
+        let parameters = SVector::<f32, 6>::new(
+            cholesky[(0, 0)].ln(),
+            cholesky[(1, 0)],
+            cholesky[(1, 1)].ln(),
+            cholesky[(2, 0)],
+            cholesky[(2, 1)],
+            cholesky[(2, 2)].ln(),
+        );
+        for attempt in 0..6 {
+            let damping = 1.0e-4 * 10.0f32.powi(attempt);
+            let Some(inverse) =
+                (hessian + SMatrix::<f32, 6, 6>::identity() * damping).try_inverse()
+            else {
+                continue;
+            };
+            let candidate_parameters = parameters - inverse * gradient;
+            let candidate = Matrix3::new(
+                candidate_parameters[0].exp(),
+                0.0,
+                0.0,
+                candidate_parameters[1],
+                candidate_parameters[2].exp(),
+                0.0,
+                candidate_parameters[3],
+                candidate_parameters[4],
+                candidate_parameters[5].exp(),
+            );
+            let candidate_objective = objective(&candidate);
+            if candidate_objective.is_finite() && candidate_objective < current_objective {
+                *cholesky = candidate;
+                return true;
+            }
+        }
+        false
+    }
 }

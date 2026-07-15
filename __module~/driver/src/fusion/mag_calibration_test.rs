@@ -1,24 +1,24 @@
-use nalgebra::Vector3;
+use nalgebra::{Matrix3, Vector3};
 
 use super::bad_mag_cause::BadCalibration;
 use super::mag_calibration::MagCalibrator;
 
 #[test]
-fn mag_calibrator_solves_synthetic_offset_and_scale() {
+fn mag_calibrator_solves_synthetic_offset_and_full_spd_correction() {
     let offset = Vector3::new(11.0, -7.0, 5.0);
-    let scale = Vector3::new(3.0, 2.0, 1.5);
-    let mut calibrator = seeded_calibrator::<63>(offset, scale);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+    let mut calibrator = seeded_calibrator::<63>(offset, distortion);
 
-    let (actual_offset, actual_scale) = calibrator.perform_calibration().unwrap();
+    let (actual_offset, actual_correction) = calibrator.perform_calibration().unwrap();
 
-    assert_vec_close(Vector3::from(actual_offset), offset, 0.05);
-    assert_vec_close(Vector3::from(actual_scale), scale, 0.1);
+    assert_vec_close(actual_offset, offset, 0.05);
+    assert_matrix_close(actual_correction * distortion, Matrix3::identity(), 0.05);
 }
 
 #[test]
 fn mag_calibrator_degenerate_data_does_not_panic() {
-    let mut calibrator = MagCalibrator::<6>::new();
-    for _ in 0..6 {
+    let mut calibrator = MagCalibrator::<9>::new();
+    for _ in 0..9 {
         calibrator.evaluate_sample_vec(Vector3::new(5.0, 6.0, 7.0));
     }
 
@@ -30,16 +30,16 @@ fn mag_calibrator_degenerate_data_does_not_panic() {
 
 #[test]
 fn mag_calibrator_rejects_insufficient_samples() {
-    let mut calibrator = MagCalibrator::<6>::new();
-    for i in 0..5 {
+    let mut calibrator = MagCalibrator::<12>::new();
+    for i in 0..8 {
         calibrator.evaluate_sample_vec(Vector3::new(5.0 + i as f32, 6.0, 7.0));
     }
 
     assert!(matches!(
         calibrator.perform_calibration(),
         Err(BadCalibration::InsufficientSamples {
-            samples: 5,
-            required: 6
+            samples: 8,
+            required: 9
         })
     ));
 }
@@ -66,7 +66,7 @@ fn mag_calibrator_clamps_k_and_excludes_self_distance() {
 
 #[test]
 fn mag_calibrator_accepts_zero_components_and_rejects_bad_vectors() {
-    let mut calibrator = MagCalibrator::<6>::new();
+    let mut calibrator = MagCalibrator::<12>::new();
     for sample in [
         Vector3::new(45.0, 0.0, -12.0),
         Vector3::new(f32::NAN, 1.0, 1.0),
@@ -80,7 +80,7 @@ fn mag_calibrator_accepts_zero_components_and_rejects_bad_vectors() {
         calibrator.perform_calibration(),
         Err(BadCalibration::InsufficientSamples {
             samples: 1,
-            required: 6
+            required: 9
         })
     ));
 }
@@ -96,12 +96,12 @@ fn mean_distance_after_replacement(k: usize) -> f32 {
 
 fn seeded_calibrator<const N: usize>(
     offset: Vector3<f32>,
-    scale: Vector3<f32>,
+    distortion: Matrix3<f32>,
 ) -> MagCalibrator<N> {
     let mut calibrator = MagCalibrator::new();
     for i in 0..N {
         let direction = sample_direction(i, N);
-        calibrator.evaluate_sample_vec(offset + scale.component_mul(&direction));
+        calibrator.evaluate_sample_vec(offset + distortion * direction);
     }
     calibrator
 }
@@ -120,6 +120,17 @@ fn assert_vec_close(actual: Vector3<f32>, expected: Vector3<f32>, tolerance: f32
         "actual={} expected={} diff={}",
         actual.transpose(),
         expected.transpose(),
+        diff
+    );
+}
+
+fn assert_matrix_close(actual: Matrix3<f32>, expected: Matrix3<f32>, tolerance: f32) {
+    let diff = (actual - expected).norm();
+    assert!(
+        diff < tolerance,
+        "actual={} expected={} diff={}",
+        actual,
+        expected,
         diff
     );
 }
