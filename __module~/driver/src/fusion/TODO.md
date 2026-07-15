@@ -29,6 +29,7 @@
       `||C (m_i - b)|| - 1` by alternating block-coordinate descent: optimize `b` with `L` fixed, then optimize `L`
       with `b` fixed. Initialize from a valid full-ellipsoid fit, fix the unit-radius scale gauge, accept only
       objective-decreasing updates, and reject ill-conditioned, non-converged, or high-residual results.
+    - **Resolution:** Accepted, updating `b` and `L` must be in 2 different private functions.
 
 - [ ]  Require redundant samples and three-dimensional coverage before solving
 
@@ -56,8 +57,7 @@
       ```
 
       In the default dummy stream, the sixth magnetometer sample arrives after only about 0.1 seconds of virtual motion,
-      far too early for the current trajectory to provide useful spatial coverage. The SVD condition number tests the
-      algebraic design matrix, not whether the measurements adequately constrain a physical three-dimensional model.
+      far too early for the current trajectory to provide useful spatial coverage.
     - **Recommended fix:** Gate calibration on an overdetermined sample count and a geometric coverage test such as
       per-axis span plus a lower bound on the smallest eigenvalue of the centered sample covariance.
     - **Resolution:** Accepted, set the calibrator to do no correction until the buffer is fully filled
