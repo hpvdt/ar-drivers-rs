@@ -236,7 +236,7 @@ impl<const N: usize> MagCalibrator<N> {
             .max(sample_coverage_factor[(1, 1)])
             .max(sample_coverage_factor[(2, 2)]);
         let sample_coverage_condition = (max_coverage_diagonal / min_coverage_diagonal).powi(2);
-        if !sample_coverage_condition.is_finite()
+        if !sample_coverage_condition.is_finite() // REVIEW: many variables in the above are not used by the main optimiser, what makes them necessary?
             || sample_coverage_condition > MAX_MATRIX_CONDITION
         {
             return Err(BadCalibration::DegenerateSoftIronMatrix {
