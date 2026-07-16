@@ -178,9 +178,9 @@ impl<const N: usize> MagCalibrator<N> {
         raw_mag: Vector3<f32>,
         timestamp_us: u64,
     ) -> Result<Vector3<f32>, BadMagCause> {
-        self.evaluate_sample_vec(raw_mag, timestamp_us);
+        self.evaluate_sample_vec(raw_mag, timestamp_us); // TODO: this should return an Option<Unit>, if the new sample is not added, there is no need to perform_calibration, the reading can be corrected using previous state directly.
         let (offset, correction) = self.perform_calibration()?;
-        let mag = correction * (raw_mag - offset);
+        let mag = correction * (raw_mag - offset); // REVIEW: should use hard_iron_offset and soft_iron_cholesky state directly
 
         let mag_norm = mag.norm();
         if mag_norm < MIN_MAG_NORM {
@@ -196,6 +196,7 @@ impl<const N: usize> MagCalibrator<N> {
     /// Try to calculate the hard-iron offset and full SPD soft-iron correction.
     /// Returns the cause when the calibration cannot be produced.
     pub fn perform_calibration(&mut self) -> Result<(Vector3<f32>, Matrix3<f32>), BadCalibration> {
+        // REVIEW: explain return data in the docstring. In this function, the return data should be a tuple of updated hard_iron_offset and soft_iron_cholesky. Also review this implementation to ensure that code and docstring are consistent
         let sample_count = self.matrix_filled.min(N);
         let required_samples = N.max(CALIBRATION_PARAMETER_COUNT);
         if sample_count < required_samples {
@@ -236,7 +237,7 @@ impl<const N: usize> MagCalibrator<N> {
             .max(sample_coverage_factor[(1, 1)])
             .max(sample_coverage_factor[(2, 2)]);
         let sample_coverage_condition = (max_coverage_diagonal / min_coverage_diagonal).powi(2);
-        if !sample_coverage_condition.is_finite() // REVIEW: many variables in the above are not used by the main optimiser, what makes them necessary?
+        if !sample_coverage_condition.is_finite() // REVIEW: cholesky decomposition is expensive and unnecessary, particularly when cholesky factors are already available in the saved state or the alternating block descent
             || sample_coverage_condition > MAX_MATRIX_CONDITION
         {
             return Err(BadCalibration::DegenerateSoftIronMatrix {
@@ -249,6 +250,7 @@ impl<const N: usize> MagCalibrator<N> {
         let mut cholesky = self.soft_iron_cholesky;
 
         let robust_objective = |candidate_offset: &Vector3<f32>, candidate_l: &Matrix3<f32>| {
+            // REVIEW: Should be an equally short or even shorter private function
             let candidate_correction = candidate_l * candidate_l.transpose();
             let mut objective = 0.0;
             for row in 0..sample_count {
@@ -289,11 +291,13 @@ impl<const N: usize> MagCalibrator<N> {
             objective = next_objective;
         }
         if !converged {
+            // REVIEW: no need to throw an error, just save the suboptimal updated result, which will be gradually corrected over time
             return Err(BadCalibration::Unsolveable {
                 message: "full soft-iron calibration did not converge",
             });
         }
 
+        // REVIEW: everything below are for computing corrected reading, not calibration.
         let correction = cholesky * cholesky.transpose();
         let radial_rms = ((0..sample_count).fold(0.0, |sum, row| {
             let sample = Vector3::new(
@@ -354,6 +358,7 @@ impl<const N: usize> MagCalibrator<N> {
     ) -> bool {
         let correction = cholesky * cholesky.transpose();
         let objective = |candidate: &Vector3<f32>| {
+            // REVIEW: Should be an equally short or even shorter private function
             let mut value = 0.0;
             for row in 0..sample_count {
                 let sample = Vector3::new(
@@ -430,6 +435,7 @@ impl<const N: usize> MagCalibrator<N> {
         cholesky: &mut Matrix3<f32>,
     ) -> bool {
         let objective = |candidate_l: &Matrix3<f32>| {
+            // REVIEW: Should be an equally short or even shorter private function, avoid duplication
             let candidate_correction = candidate_l * candidate_l.transpose();
             let mut value = 0.0;
             for row in 0..sample_count {
@@ -499,6 +505,7 @@ impl<const N: usize> MagCalibrator<N> {
             cholesky[(2, 2)].ln(),
         );
         for attempt in 0..6 {
+            // REVIEW: why do you need 6 attempts?
             let damping = 1.0e-4 * 10.0f32.powi(attempt);
             let Some(inverse) =
                 (hessian + SMatrix::<f32, 6, 6>::identity() * damping).try_inverse()
