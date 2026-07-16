@@ -44,7 +44,8 @@ fn corrected_dummy_magnetometer_stays_within_twenty_degrees_for_five_seconds() {
             continue;
         }
 
-        let (offset, correction) = calibration.as_ref().unwrap();
+        let (offset, cholesky) = calibration.as_ref().unwrap();
+        let correction = cholesky * cholesky.transpose();
         let corrected = (correction * (raw_frd - offset)).normalize();
         let angle_degrees = corrected.angle(&ideal_body_frd).to_degrees();
         assert!(

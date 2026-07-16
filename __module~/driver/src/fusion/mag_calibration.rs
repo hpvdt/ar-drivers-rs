@@ -178,9 +178,12 @@ impl<const N: usize> MagCalibrator<N> {
         raw_mag: Vector3<f32>,
         timestamp_us: u64,
     ) -> Result<Vector3<f32>, BadMagCause> {
-        self.evaluate_sample_vec(raw_mag, timestamp_us); // TODO: this should return an Option<Unit>, if the new sample is not added, there is no need to perform_calibration, the reading can be corrected using previous state directly.
-        let (offset, correction) = self.perform_calibration()?;
-        let mag = correction * (raw_mag - offset); // REVIEW: should use hard_iron_offset and soft_iron_cholesky state directly
+        self.evaluate_sample_vec(raw_mag, timestamp_us);
+        // Re-running the warm-started solve is intentional: a capped BCD result is
+        // persisted and refined even when the KNN buffer rejects the new sample.
+        self.perform_calibration()?;
+        let correction = self.soft_iron_cholesky * self.soft_iron_cholesky.transpose();
+        let mag = correction * (raw_mag - self.hard_iron_offset);
 
         let mag_norm = mag.norm();
         if mag_norm < MIN_MAG_NORM {
@@ -193,10 +196,14 @@ impl<const N: usize> MagCalibrator<N> {
         }
     }
 
-    /// Try to calculate the hard-iron offset and full SPD soft-iron correction.
+    /// Refines the saved hard-iron offset and full SPD soft-iron calibration by
+    /// alternating block-coordinate descent.
+    ///
+    /// On success, persists and returns `(hard_iron_offset, soft_iron_cholesky)`.
+    /// The Cholesky factor has a positive diagonal and represents the correction
+    /// matrix as `soft_iron_cholesky * soft_iron_cholesky.transpose()`.
     /// Returns the cause when the calibration cannot be produced.
     pub fn perform_calibration(&mut self) -> Result<(Vector3<f32>, Matrix3<f32>), BadCalibration> {
-        // REVIEW: explain return data in the docstring. In this function, the return data should be a tuple of updated hard_iron_offset and soft_iron_cholesky. Also review this implementation to ensure that code and docstring are consistent
         let sample_count = self.matrix_filled.min(N);
         let required_samples = N.max(CALIBRATION_PARAMETER_COUNT);
         if sample_count < required_samples {
@@ -222,6 +229,9 @@ impl<const N: usize> MagCalibrator<N> {
             let centered = sample - sample_mean;
             sum + centered * centered.transpose()
         }) / sample_count as f32;
+        // This factor describes the current sample covariance, whereas the saved
+        // soft-iron factor describes the previous calibration. A single 3x3
+        // factorization rejects degenerate buffers before the iterative solve.
         let sample_coverage_cholesky =
             sample_covariance
                 .cholesky()
@@ -237,7 +247,7 @@ impl<const N: usize> MagCalibrator<N> {
             .max(sample_coverage_factor[(1, 1)])
             .max(sample_coverage_factor[(2, 2)]);
         let sample_coverage_condition = (max_coverage_diagonal / min_coverage_diagonal).powi(2);
-        if !sample_coverage_condition.is_finite() // REVIEW: cholesky decomposition is expensive and unnecessary, particularly when cholesky factors are already available in the saved state or the alternating block descent
+        if !sample_coverage_condition.is_finite()
             || sample_coverage_condition > MAX_MATRIX_CONDITION
         {
             return Err(BadCalibration::DegenerateSoftIronMatrix {
@@ -249,62 +259,32 @@ impl<const N: usize> MagCalibrator<N> {
         let mut offset = self.hard_iron_offset;
         let mut cholesky = self.soft_iron_cholesky;
 
-        let robust_objective = |candidate_offset: &Vector3<f32>, candidate_l: &Matrix3<f32>| {
-            // REVIEW: Should be an equally short or even shorter private function
-            let candidate_correction = candidate_l * candidate_l.transpose();
-            let mut objective = 0.0;
-            for row in 0..sample_count {
-                let sample = Vector3::new(
-                    self.matrix[(row, 0)],
-                    self.matrix[(row, 1)],
-                    self.matrix[(row, 2)],
-                );
-                let residual = (candidate_correction * (sample - candidate_offset)).norm() - 1.0;
-                let absolute = residual.abs();
-                objective += if absolute <= 0.1 {
-                    0.5 * residual * residual
-                } else {
-                    0.1 * (absolute - 0.05)
-                };
-            }
-            objective / sample_count as f32
-        };
-        let mut objective = robust_objective(&offset, &cholesky);
+        let mut correction = cholesky * cholesky.transpose();
+        let mut objective = self.robust_radial_objective(sample_count, &offset, &correction);
         if !objective.is_finite() {
             return Err(BadCalibration::Unsolveable {
                 message: "saved full soft-iron calibration state is not finite",
             });
         }
-        let mut converged = false;
         for iteration in 0..200 {
             let offset_updated = self.update_offset(sample_count, &mut offset, &cholesky);
             let cholesky_updated = self.update_cholesky(sample_count, &offset, &mut cholesky);
-            let next_objective = robust_objective(&offset, &cholesky);
+            correction = cholesky * cholesky.transpose();
+            let next_objective = self.robust_radial_objective(sample_count, &offset, &correction);
             let improvement = objective - next_objective;
             if (!offset_updated && !cholesky_updated)
                 || (iteration >= 20 && improvement <= 1.0e-6 * objective.max(1.0))
             {
-                converged = true;
                 objective = next_objective;
                 break;
             }
             objective = next_objective;
         }
-        if !converged {
-            // REVIEW: no need to throw an error, just save the suboptimal updated result, which will be gradually corrected over time
-            return Err(BadCalibration::Unsolveable {
-                message: "full soft-iron calibration did not converge",
-            });
-        }
 
-        // REVIEW: everything below are for computing corrected reading, not calibration.
-        let correction = cholesky * cholesky.transpose();
+        // These checks validate the candidate calibration before it is persisted;
+        // corrected sensor readings are computed only by `evaluate_correct`.
         let radial_rms = ((0..sample_count).fold(0.0, |sum, row| {
-            let sample = Vector3::new(
-                self.matrix[(row, 0)],
-                self.matrix[(row, 1)],
-                self.matrix[(row, 2)],
-            );
+            let sample = self.sample(row);
             let residual = (correction * (sample - offset)).norm() - 1.0;
             sum + residual * residual
         }) / sample_count as f32)
@@ -335,7 +315,7 @@ impl<const N: usize> MagCalibrator<N> {
 
         if !offset
             .iter()
-            .chain(correction.iter())
+            .chain(cholesky.iter())
             .all(|value| value.is_finite())
         {
             return Err(BadCalibration::Unsolveable {
@@ -347,7 +327,31 @@ impl<const N: usize> MagCalibrator<N> {
         self.soft_iron_cholesky = cholesky;
 
         // TODO Add option for low-pass filtering this result
-        Ok((offset, correction))
+        Ok((offset, cholesky))
+    }
+
+    fn sample(&self, row: usize) -> Vector3<f32> {
+        Vector3::new(
+            self.matrix[(row, 0)],
+            self.matrix[(row, 1)],
+            self.matrix[(row, 2)],
+        )
+    }
+
+    fn robust_radial_objective(
+        &self,
+        sample_count: usize,
+        offset: &Vector3<f32>,
+        correction: &Matrix3<f32>,
+    ) -> f32 {
+        (0..sample_count)
+            .map(|row| (correction * (self.sample(row) - offset)).norm() - 1.0)
+            .map(|residual| match residual.abs() {
+                absolute if absolute <= 0.1 => 0.5 * residual * residual,
+                absolute => 0.1 * (absolute - 0.05),
+            })
+            .sum::<f32>()
+            / sample_count as f32
     }
 
     fn update_offset(
@@ -357,45 +361,19 @@ impl<const N: usize> MagCalibrator<N> {
         cholesky: &Matrix3<f32>,
     ) -> bool {
         let correction = cholesky * cholesky.transpose();
-        let objective = |candidate: &Vector3<f32>| {
-            // REVIEW: Should be an equally short or even shorter private function
-            let mut value = 0.0;
-            for row in 0..sample_count {
-                let sample = Vector3::new(
-                    self.matrix[(row, 0)],
-                    self.matrix[(row, 1)],
-                    self.matrix[(row, 2)],
-                );
-                let residual = (correction * (sample - candidate)).norm() - 1.0;
-                let absolute = residual.abs();
-                value += if absolute <= 0.1 {
-                    0.5 * residual * residual
-                } else {
-                    0.1 * (absolute - 0.05)
-                };
-            }
-            value / sample_count as f32
-        };
-        let current_objective = objective(offset);
-        let sample_mean = (0..sample_count).fold(Vector3::zeros(), |sum, row| {
-            sum + Vector3::new(
-                self.matrix[(row, 0)],
-                self.matrix[(row, 1)],
-                self.matrix[(row, 2)],
-            )
-        }) / sample_count as f32;
-        if objective(&sample_mean) < current_objective {
+        let current_objective = self.robust_radial_objective(sample_count, offset, &correction);
+        let sample_mean = (0..sample_count)
+            .fold(Vector3::zeros(), |sum, row| sum + self.sample(row))
+            / sample_count as f32;
+        if self.robust_radial_objective(sample_count, &sample_mean, &correction) < current_objective
+        {
             *offset = sample_mean;
             return true;
         }
         let mut hessian = Matrix3::zeros();
         let mut gradient = Vector3::zeros();
         for row in 0..sample_count {
-            let sample = Vector3::new(
-                self.matrix[(row, 0)],
-                self.matrix[(row, 1)],
-                self.matrix[(row, 2)],
-            );
+            let sample = self.sample(row);
             let centered = sample - *offset;
             let corrected = correction * centered;
             let norm = corrected.norm();
@@ -413,13 +391,16 @@ impl<const N: usize> MagCalibrator<N> {
             gradient += weight * jacobian * residual;
         }
 
-        for attempt in 0..6 {
-            let damping = 1.0e-4 * 10.0f32.powi(attempt);
+        // Six damping decades let a rejected Gauss-Newton step fall back to a
+        // conservative objective-decreasing step without an unbounded search.
+        for damping_exponent in -4..=1 {
+            let damping = 10.0f32.powi(damping_exponent);
             let Some(inverse) = (hessian + Matrix3::identity() * damping).try_inverse() else {
                 continue;
             };
             let candidate = *offset - inverse * gradient;
-            let candidate_objective = objective(&candidate);
+            let candidate_objective =
+                self.robust_radial_objective(sample_count, &candidate, &correction);
             if candidate_objective.is_finite() && candidate_objective < current_objective {
                 *offset = candidate;
                 return true;
@@ -434,36 +415,12 @@ impl<const N: usize> MagCalibrator<N> {
         offset: &Vector3<f32>,
         cholesky: &mut Matrix3<f32>,
     ) -> bool {
-        let objective = |candidate_l: &Matrix3<f32>| {
-            // REVIEW: Should be an equally short or even shorter private function, avoid duplication
-            let candidate_correction = candidate_l * candidate_l.transpose();
-            let mut value = 0.0;
-            for row in 0..sample_count {
-                let sample = Vector3::new(
-                    self.matrix[(row, 0)],
-                    self.matrix[(row, 1)],
-                    self.matrix[(row, 2)],
-                );
-                let residual = (candidate_correction * (sample - offset)).norm() - 1.0;
-                let absolute = residual.abs();
-                value += if absolute <= 0.1 {
-                    0.5 * residual * residual
-                } else {
-                    0.1 * (absolute - 0.05)
-                };
-            }
-            value / sample_count as f32
-        };
-        let current_objective = objective(cholesky);
         let correction = *cholesky * cholesky.transpose();
+        let current_objective = self.robust_radial_objective(sample_count, offset, &correction);
         let mut hessian = SMatrix::<f32, 6, 6>::zeros();
         let mut gradient = SVector::<f32, 6>::zeros();
         for row in 0..sample_count {
-            let sample = Vector3::new(
-                self.matrix[(row, 0)],
-                self.matrix[(row, 1)],
-                self.matrix[(row, 2)],
-            );
+            let sample = self.sample(row);
             let centered = sample - offset;
             let corrected = correction * centered;
             let norm = corrected.norm();
@@ -504,9 +461,10 @@ impl<const N: usize> MagCalibrator<N> {
             cholesky[(2, 1)],
             cholesky[(2, 2)].ln(),
         );
-        for attempt in 0..6 {
-            // REVIEW: why do you need 6 attempts?
-            let damping = 1.0e-4 * 10.0f32.powi(attempt);
+        // Six damping decades let a rejected Gauss-Newton step fall back to a
+        // conservative objective-decreasing step without an unbounded search.
+        for damping_exponent in -4..=1 {
+            let damping = 10.0f32.powi(damping_exponent);
             let Some(inverse) =
                 (hessian + SMatrix::<f32, 6, 6>::identity() * damping).try_inverse()
             else {
@@ -524,7 +482,9 @@ impl<const N: usize> MagCalibrator<N> {
                 candidate_parameters[4],
                 candidate_parameters[5].exp(),
             );
-            let candidate_objective = objective(&candidate);
+            let candidate_correction = candidate * candidate.transpose();
+            let candidate_objective =
+                self.robust_radial_objective(sample_count, offset, &candidate_correction);
             if candidate_objective.is_finite() && candidate_objective < current_objective {
                 *cholesky = candidate;
                 return true;
