@@ -16,6 +16,19 @@ fn mag_calibrator_solves_synthetic_offset_and_full_spd_correction() {
 }
 
 #[test]
+fn mag_calibrator_reuses_its_previous_solution() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+    let mut calibrator = seeded_calibrator::<63>(offset, distortion);
+
+    let first = calibrator.perform_calibration().unwrap();
+    let second = calibrator.perform_calibration().unwrap();
+
+    assert_vec_close(second.0, first.0, 0.01);
+    assert_matrix_close(second.1, first.1, 0.01);
+}
+
+#[test]
 fn mag_calibrator_degenerate_data_does_not_panic() {
     let mut calibrator = MagCalibrator::<9>::new();
     for timestamp_us in 0..9 {
