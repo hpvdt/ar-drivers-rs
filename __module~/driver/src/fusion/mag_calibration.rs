@@ -20,6 +20,7 @@ pub struct MagCalibrator<const N: usize> {
     matrix: SMatrix<f32, N, 6>,
     sample_timestamps_us: [u64; N],
     matrix_filled: usize,
+    // REVIEW: previous state of hard/soft-iron should be initialised & persisted here.
     mean_distance: f32,
     pre_scaler: f32,
     k: usize,
@@ -193,7 +194,7 @@ impl<const N: usize> MagCalibrator<N> {
         &mut self,
         raw_mag: Vector3<f32>,
         timestamp_us: u64,
-    ) -> std::result::Result<Vector3<f32>, BadMagCause> {
+    ) -> Result<Vector3<f32>, BadMagCause> {
         self.evaluate_sample_vec(raw_mag, timestamp_us);
         let (offset, correction) = self.perform_calibration()?;
         let mag = correction * (raw_mag - offset);
@@ -211,9 +212,7 @@ impl<const N: usize> MagCalibrator<N> {
 
     /// Try to calculate the hard-iron offset and full SPD soft-iron correction.
     /// Returns the cause when the calibration cannot be produced.
-    pub fn perform_calibration(
-        &mut self,
-    ) -> std::result::Result<(Vector3<f32>, Matrix3<f32>), BadCalibration> {
+    pub fn perform_calibration(&mut self) -> Result<(Vector3<f32>, Matrix3<f32>), BadCalibration> {
         let sample_count = self.matrix_filled.min(N);
         let required_samples = N.max(DESIGN_MATRIX_COLUMNS);
         if sample_count < required_samples {
@@ -263,9 +262,10 @@ impl<const N: usize> MagCalibrator<N> {
                 _ => unreachable!(),
             }
         });
-        let w = DVector::from_element(sample_count, 1.0);
+        let w = DVector::from_element(sample_count, 1.0); // REVIEW: use full name, not symbol in equation
 
         let svd = SVD::new(design, true, true);
+        // REVIEW: SVD should be completely superseded by Cholesky-factor based full soft-iron matrix estimation using alternating block-coordinate descent: starting from the saved state of hard-iron cholesky factor & soft-iron bias. As a result, SVD reference and anything that depends on it should be deleted.
         let singular_values = svd.singular_values.as_slice();
         let max_singular_value = singular_values[0];
         let min_singular_value = singular_values[DESIGN_MATRIX_COLUMNS - 1];
