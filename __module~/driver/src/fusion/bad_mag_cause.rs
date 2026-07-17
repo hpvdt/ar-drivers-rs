@@ -24,7 +24,7 @@ pub enum BadCalibration {
     },
     /// The samples or fitted soft-iron correction are numerically degenerate.
     DegenerateSoftIronMatrix {
-        /// Estimated condition number of the sample covariance or correction matrix.
+        /// Estimated condition number of the sample covariance or inverse factor.
         #[debug("{:+10.4}", condition)]
         condition: f32,
         /// Maximum accepted condition number.

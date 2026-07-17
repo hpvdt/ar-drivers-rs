@@ -4,16 +4,16 @@ use super::bad_mag_cause::BadCalibration;
 use super::mag_calibration::MagCalibrator;
 
 #[test]
-fn mag_calibrator_solves_synthetic_offset_and_full_spd_correction() {
+fn mag_calibrator_solves_synthetic_offset_and_full_spd_inverse_factor() {
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
     let mut calibrator = seeded_calibrator::<63>(offset, distortion);
 
     let (actual_offset, actual_cholesky) = calibrator.perform_calibration().unwrap();
-    let actual_correction = actual_cholesky * actual_cholesky.transpose();
+    let actual_inverse_correction = actual_cholesky * actual_cholesky.transpose();
 
     assert_vec_close(actual_offset, offset, 0.05);
-    assert_matrix_close(actual_correction * distortion, Matrix3::identity(), 0.05);
+    assert_matrix_close(actual_inverse_correction, distortion, 0.05);
     assert!(actual_cholesky[(0, 0)] > 0.0);
     assert!(actual_cholesky[(1, 1)] > 0.0);
     assert!(actual_cholesky[(2, 2)] > 0.0);

@@ -45,8 +45,7 @@ fn corrected_dummy_magnetometer_stays_within_twenty_degrees_for_five_seconds() {
         }
 
         let (offset, cholesky) = calibration.as_ref().unwrap();
-        let correction = cholesky * cholesky.transpose();
-        let corrected = (correction * (raw_frd - offset)).normalize();
+        let corrected = corrected(raw_frd - offset, cholesky).normalize();
         let angle_degrees = corrected.angle(&ideal_body_frd).to_degrees();
         assert!(
             angle_degrees <= 20.0,
@@ -62,4 +61,16 @@ fn corrected_dummy_magnetometer_stays_within_twenty_degrees_for_five_seconds() {
     panic!(
         "corrected magnetometer did not complete a 5-second validation window; worst_angle_degrees={worst_angle_degrees}"
     );
+}
+
+fn corrected(vector: Vector3<f32>, inverse_cholesky: &nalgebra::Matrix3<f32>) -> Vector3<f32> {
+    let y0 = vector.x / inverse_cholesky[(0, 0)];
+    let y1 = (vector.y - inverse_cholesky[(1, 0)] * y0) / inverse_cholesky[(1, 1)];
+    let y2 = (vector.z - inverse_cholesky[(2, 0)] * y0 - inverse_cholesky[(2, 1)] * y1)
+        / inverse_cholesky[(2, 2)];
+    let x2 = y2 / inverse_cholesky[(2, 2)];
+    let x1 = (y1 - inverse_cholesky[(2, 1)] * x2) / inverse_cholesky[(1, 1)];
+    let x0 = (y0 - inverse_cholesky[(1, 0)] * x1 - inverse_cholesky[(2, 0)] * x2)
+        / inverse_cholesky[(0, 0)];
+    Vector3::new(x0, x1, x2)
 }
