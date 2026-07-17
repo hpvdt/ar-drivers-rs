@@ -384,12 +384,7 @@ impl<const N: usize> MagCalibrator<N> {
         ];
         let mut objective = self.robust_radial_objective(sample_count, offset, inverse_cholesky);
         let candidate_objective = |candidate: &Matrix3<f32>| {
-            let determinant = candidate[(0, 0)] * candidate[(1, 1)] * candidate[(2, 2)];
-            let condition = candidate.norm().powi(6) / (27.0 * determinant.powi(2));
-            if condition.is_finite()
-                && condition <= MAX_MATRIX_CONDITION
-                && candidate.iter().all(|value| value.is_finite())
-            {
+            if candidate.iter().all(|value| value.is_finite()) {
                 self.robust_radial_objective(sample_count, offset, candidate)
             } else {
                 f32::INFINITY
