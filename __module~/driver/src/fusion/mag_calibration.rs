@@ -184,6 +184,7 @@ impl<const N: usize> MagCalibrator<N> {
         // result is persisted and refined even when the KNN buffer rejects the sample.
         self.perform_calibration()?;
         let mag = Self::corrected(
+            // TODO: this should be private that uses self directly
             raw_mag - self.hard_iron_offset,
             &self.inverse_soft_iron_cholesky,
         );
@@ -289,6 +290,7 @@ impl<const N: usize> MagCalibrator<N> {
         };
         if !parameters_valid || !radial_rms.is_finite() || radial_rms > 0.15 {
             return Err(BadCalibration::DegenerateSoftIronMatrix {
+                // TODO: DegenerateSoftIronMatrix is used to describe 2 different failure mode, bad
                 condition,
                 max_condition: MAX_MATRIX_CONDITION,
             });
@@ -300,6 +302,7 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     fn sample(&self, row: usize) -> Vector3<f32> {
+        // TODO: can this be a standard nalgebra function?
         Vector3::new(
             self.matrix[(row, 0)],
             self.matrix[(row, 1)],
@@ -308,6 +311,7 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     fn corrected(vector: Vector3<f32>, inverse_cholesky: &Matrix3<f32>) -> Vector3<f32> {
+        // TODO: this should be a linear algebra operation, avoid elementwise operations
         let y0 = vector.x / inverse_cholesky[(0, 0)];
         let y1 = (vector.y - inverse_cholesky[(1, 0)] * y0) / inverse_cholesky[(1, 1)];
         let y2 = (vector.z - inverse_cholesky[(2, 0)] * y0 - inverse_cholesky[(2, 1)] * y1)
