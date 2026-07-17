@@ -179,8 +179,9 @@ impl<const N: usize> MagCalibrator<N> {
         timestamp_us: u64,
     ) -> Result<Vector3<f32>, BadMagCause> {
         self.evaluate_sample_vec(raw_mag, timestamp_us);
-        // Re-running the warm-started solve is intentional: a capped BCD result is
-        // persisted and refined even when the KNN buffer rejects the new sample.
+        // TODO: this should return an Option<Unit>, if the new sample is not added, there is no need to perform_calibration, the reading can be corrected using previous state directly.
+        // REBUTTAL: Re-running the warm-started solve is intentional: a capped BCD
+        // result is persisted and refined even when the KNN buffer rejects the sample.
         self.perform_calibration()?;
         let correction = self.soft_iron_cholesky * self.soft_iron_cholesky.transpose();
         let mag = correction * (raw_mag - self.hard_iron_offset);
@@ -229,8 +230,9 @@ impl<const N: usize> MagCalibrator<N> {
             let centered = sample - sample_mean;
             sum + centered * centered.transpose()
         }) / sample_count as f32;
-        // This factor describes the current sample covariance, whereas the saved
-        // soft-iron factor describes the previous calibration. A single 3x3
+        // REVIEW: cholesky decomposition is expensive and unnecessary, particularly when cholesky factors are already available in the saved state or the alternating block descent
+        // REBUTTAL: This factor describes the current sample covariance, whereas the
+        // saved soft-iron factor describes the previous calibration. A single 3x3
         // factorization rejects degenerate buffers before the iterative solve.
         let sample_coverage_cholesky =
             sample_covariance
@@ -281,8 +283,9 @@ impl<const N: usize> MagCalibrator<N> {
             objective = next_objective;
         }
 
-        // These checks validate the candidate calibration before it is persisted;
-        // corrected sensor readings are computed only by `evaluate_correct`.
+        // REVIEW: everything below are for computing corrected reading, not calibration.
+        // REBUTTAL: These checks validate the candidate calibration before it is
+        // persisted; corrected readings are computed only by `evaluate_correct`.
         let radial_rms = ((0..sample_count).fold(0.0, |sum, row| {
             let sample = self.sample(row);
             let residual = (correction * (sample - offset)).norm() - 1.0;
@@ -461,8 +464,9 @@ impl<const N: usize> MagCalibrator<N> {
             cholesky[(2, 1)],
             cholesky[(2, 2)].ln(),
         );
-        // Six damping decades let a rejected Gauss-Newton step fall back to a
-        // conservative objective-decreasing step without an unbounded search.
+        // REVIEW: why do you need 6 attempts?
+        // REBUTTAL: Six damping decades let a rejected Gauss-Newton step fall back
+        // to a conservative objective-decreasing step without an unbounded search.
         for damping_exponent in -4..=1 {
             let damping = 10.0f32.powi(damping_exponent);
             let Some(inverse) =
