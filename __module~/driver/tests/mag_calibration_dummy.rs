@@ -3,7 +3,7 @@ use ar_drivers::{ARGlasses, Dummy, DummyConfig, GlassesEvent};
 use nalgebra::Vector3;
 
 #[test]
-fn corrected_dummy_magnetometer_stays_within_twenty_degrees_for_five_seconds() {
+fn dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_seconds() {
     let config = DummyConfig::default();
     let dip = config
         .magnetic_dip_rad
@@ -15,9 +15,10 @@ fn corrected_dummy_magnetometer_stays_within_twenty_degrees_for_five_seconds() {
     let required_window_us = 5_000_000;
     let simulation_limit_us = 20_000_000;
     let calibration_sample_count = 255;
-    let mut accepted_samples = 0;
+    let mut samples_since_calibration = 0;
     let mut calibration = None;
     let mut window_start_us = None;
+    let mut completed_validation_window = false;
     let mut worst_angle_degrees = 0.0f32;
 
     while dummy.snapshot().timestamp_us <= simulation_limit_us {
@@ -35,12 +36,23 @@ fn corrected_dummy_magnetometer_stays_within_twenty_degrees_for_five_seconds() {
         let ideal_body_rub = ground_truth.attitude.inverse() * magnetic_world_rub;
         let ideal_body_frd = rub_to_frd(&ideal_body_rub).normalize();
         let raw_frd = rub_to_frd(&magnetometer);
-        if calibration.is_none() {
-            fusion.mag.evaluate_sample_vec(raw_frd, timestamp);
-            accepted_samples += 1;
-            if accepted_samples == calibration_sample_count {
-                calibration = Some(fusion.mag.perform_calibration().unwrap());
+
+        fusion.mag.evaluate_sample_vec(raw_frd, timestamp);
+        samples_since_calibration += 1;
+        if samples_since_calibration == calibration_sample_count {
+            match fusion.mag.perform_calibration() {
+                Ok(updated_calibration) => calibration = Some(updated_calibration),
+                Err(_) if calibration.is_none() => {}
+                Err(error) => {
+                    panic!(
+                        "magnetometer calibration became unstable at timestamp={timestamp}: {error:?}"
+                    )
+                }
             }
+            samples_since_calibration = 0;
+        }
+
+        if calibration.is_none() {
             continue;
         }
 
@@ -54,11 +66,17 @@ fn corrected_dummy_magnetometer_stays_within_twenty_degrees_for_five_seconds() {
         let start = *window_start_us.get_or_insert(timestamp);
         worst_angle_degrees = worst_angle_degrees.max(angle_degrees);
         if timestamp - start >= required_window_us {
-            return;
+            completed_validation_window = true;
         }
     }
 
-    panic!(
+    fusion.mag.perform_calibration().unwrap_or_else(|error| {
+        panic!(
+            "magnetometer calibration was not stable after {simulation_limit_us} microseconds: {error:?}"
+        )
+    });
+    assert!(
+        completed_validation_window,
         "corrected magnetometer did not complete a 5-second validation window; worst_angle_degrees={worst_angle_degrees}"
     );
 }
