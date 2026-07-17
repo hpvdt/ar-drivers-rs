@@ -348,15 +348,23 @@ impl<const N: usize> MagCalibrator<N> {
         {
             *offset = sample_mean;
         }
-        let mut parameters = [offset.x, offset.y, offset.z];
-        Self::coordinate_descent(&mut parameters, steps, |candidate| {
-            self.robust_radial_objective(
-                sample_count,
-                &Vector3::new(candidate[0], candidate[1], candidate[2]),
-                inverse_cholesky,
-            )
-        });
-        *offset = Vector3::from(parameters);
+        let mut objective = self.robust_radial_objective(sample_count, offset, inverse_cholesky);
+        for index in 0..3 {
+            let original = offset[index];
+            offset[index] = original + steps[index];
+            let positive = self.robust_radial_objective(sample_count, offset, inverse_cholesky);
+            offset[index] = original - steps[index];
+            let negative = self.robust_radial_objective(sample_count, offset, inverse_cholesky);
+            if positive < objective && positive <= negative {
+                offset[index] = original + steps[index];
+                objective = positive;
+            } else if negative < objective {
+                objective = negative;
+            } else {
+                offset[index] = original;
+                steps[index] *= 0.5;
+            }
+        }
     }
 
     fn update_inverse_cholesky(
@@ -451,29 +459,5 @@ impl<const N: usize> MagCalibrator<N> {
             parameters[4],
             parameters[5].exp(),
         )
-    }
-
-    fn coordinate_descent(
-        parameters: &mut [f32],
-        steps: &mut [f32],
-        mut objective: impl FnMut(&[f32]) -> f32,
-    ) {
-        let mut best = objective(parameters);
-        for index in 0..parameters.len() {
-            let original = parameters[index];
-            parameters[index] = original + steps[index];
-            let positive = objective(parameters);
-            parameters[index] = original - steps[index];
-            let negative = objective(parameters);
-            if positive < best && positive <= negative {
-                parameters[index] = original + steps[index];
-                best = positive;
-            } else if negative < best {
-                best = negative;
-            } else {
-                parameters[index] = original;
-                steps[index] *= 0.5;
-            }
-        }
     }
 }
