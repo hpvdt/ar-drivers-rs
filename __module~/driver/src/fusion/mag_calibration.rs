@@ -264,27 +264,30 @@ impl<const N: usize> MagCalibrator<N> {
             );
         }
 
-        // REVIEW: everything below are for computing corrected reading, not calibration.
-        // REBUTTAL: These checks validate the candidate calibration before it is
-        // persisted; corrected readings are computed only by `evaluate_correct`.
-        let radial_rms = ((0..sample_count).fold(0.0, |sum, row| {
-            let residual =
-                Self::corrected(self.sample(row) - offset, &inverse_cholesky).norm() - 1.0;
-            sum + residual * residual
-        }) / sample_count as f32)
-            .sqrt();
         let determinant =
             inverse_cholesky[(0, 0)] * inverse_cholesky[(1, 1)] * inverse_cholesky[(2, 2)];
         let condition = inverse_cholesky.norm().powi(6) / (27.0 * determinant.powi(2));
-        if !radial_rms.is_finite()
-            || radial_rms > 0.15
-            || !condition.is_finite()
-            || condition > MAX_MATRIX_CONDITION
-            || !offset
+        let parameters_valid = condition.is_finite()
+            && condition <= MAX_MATRIX_CONDITION
+            && offset
                 .iter()
                 .chain(inverse_cholesky.iter())
-                .all(|value| value.is_finite())
-        {
+                .all(|value| value.is_finite());
+
+        // REVIEW: everything below are for computing corrected reading, not calibration.
+        // REBUTTAL: These checks validate the candidate calibration before it is
+        // persisted; corrected readings are computed only by `evaluate_correct`.
+        let radial_rms = if parameters_valid {
+            ((0..sample_count).fold(0.0, |sum, row| {
+                let residual =
+                    Self::corrected(self.sample(row) - offset, &inverse_cholesky).norm() - 1.0;
+                sum + residual * residual
+            }) / sample_count as f32)
+                .sqrt()
+        } else {
+            f32::INFINITY
+        };
+        if !parameters_valid || !radial_rms.is_finite() || radial_rms > 0.15 {
             return Err(BadCalibration::DegenerateSoftIronMatrix {
                 condition,
                 max_condition: MAX_MATRIX_CONDITION,
@@ -372,6 +375,18 @@ impl<const N: usize> MagCalibrator<N> {
             inverse_cholesky[(2, 2)].ln(),
         ];
         let mut objective = self.robust_radial_objective(sample_count, offset, inverse_cholesky);
+        let candidate_objective = |candidate: &Matrix3<f32>| {
+            let determinant = candidate[(0, 0)] * candidate[(1, 1)] * candidate[(2, 2)];
+            let condition = candidate.norm().powi(6) / (27.0 * determinant.powi(2));
+            if condition.is_finite()
+                && condition <= MAX_MATRIX_CONDITION
+                && candidate.iter().all(|value| value.is_finite())
+            {
+                self.robust_radial_objective(sample_count, offset, candidate)
+            } else {
+                f32::INFINITY
+            }
+        };
         for index in 0..6 {
             let (gradient, curvature) =
                 (0..sample_count).fold((0.0, 0.0), |(gradient, curvature), row| {
@@ -409,17 +424,15 @@ impl<const N: usize> MagCalibrator<N> {
             let step = (gradient / curvature.max(f32::EPSILON)).clamp(-steps[index], steps[index]);
             parameters[index] = original - step;
             let mut candidate = Self::inverse_cholesky(&parameters);
-            let mut candidate_objective =
-                self.robust_radial_objective(sample_count, offset, &candidate);
-            if candidate_objective >= objective {
+            let mut next_objective = candidate_objective(&candidate);
+            if next_objective >= objective {
                 parameters[index] = original - step * 0.5;
                 candidate = Self::inverse_cholesky(&parameters);
-                candidate_objective =
-                    self.robust_radial_objective(sample_count, offset, &candidate);
+                next_objective = candidate_objective(&candidate);
             }
-            if candidate_objective < objective {
+            if next_objective < objective {
                 *inverse_cholesky = candidate;
-                objective = candidate_objective;
+                objective = next_objective;
             } else {
                 parameters[index] = original;
             }
