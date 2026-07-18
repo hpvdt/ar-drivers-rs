@@ -210,7 +210,7 @@ impl<const N: usize> MagCalibrator<N> {
     /// inverse_soft_iron_cholesky)`. If `R` is the returned factor, the correction
     /// matrix is `(R * R.transpose())^-1` and is applied by triangular solves.
     /// Returns the cause when there are not enough samples to start calibration.
-    pub fn perform_calibration(&mut self) -> Result<(Vector3<f32>, Matrix3<f32>), BadCalibration> {
+    fn perform_calibration(&mut self) -> Result<(Vector3<f32>, Matrix3<f32>), BadCalibration> {
         let sample_count = self.matrix_filled.min(N);
         let required_samples = N.max(CALIBRATION_PARAMETER_COUNT);
         if sample_count < required_samples {
