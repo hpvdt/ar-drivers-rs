@@ -15,7 +15,9 @@ fn dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_sec
     let required_window_us = 5_000_000;
     let simulation_limit_us = 20_000_000;
     let calibration_sample_count = 255;
+    let calibration_warmup_sample_count = 510;
     let mut samples_since_calibration = 0;
+    let mut samples_before_next_calibration = calibration_warmup_sample_count;
     let mut calibration = None;
     let mut window_start_us = None;
     let mut completed_validation_window = false;
@@ -39,7 +41,7 @@ fn dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_sec
 
         fusion.mag.evaluate_sample_vec(raw_frd, timestamp);
         samples_since_calibration += 1;
-        if samples_since_calibration == calibration_sample_count {
+        if samples_since_calibration == samples_before_next_calibration {
             match fusion.mag.perform_calibration() {
                 Ok(updated_calibration) => calibration = Some(updated_calibration),
                 Err(_) if calibration.is_none() => {}
@@ -50,6 +52,7 @@ fn dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_sec
                 }
             }
             samples_since_calibration = 0;
+            samples_before_next_calibration = calibration_sample_count;
         }
 
         if calibration.is_none() {

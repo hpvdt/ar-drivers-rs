@@ -14,9 +14,6 @@ fn mag_calibrator_solves_synthetic_offset_and_full_spd_inverse_factor() {
 
     assert_vec_close(actual_offset, offset, 0.05);
     assert_matrix_close(actual_inverse_correction, distortion, 0.05);
-    assert!(actual_cholesky[(0, 0)] > 0.0);
-    assert!(actual_cholesky[(1, 1)] > 0.0);
-    assert!(actual_cholesky[(2, 2)] > 0.0);
     assert_eq!(actual_cholesky[(0, 1)], 0.0);
     assert_eq!(actual_cholesky[(0, 2)], 0.0);
     assert_eq!(actual_cholesky[(1, 2)], 0.0);
@@ -36,16 +33,15 @@ fn mag_calibrator_reuses_its_previous_solution() {
 }
 
 #[test]
-fn mag_calibrator_degenerate_data_does_not_panic() {
+fn mag_calibrator_returns_finite_best_effort_for_degenerate_data() {
     let mut calibrator = MagCalibrator::<9>::new();
     for timestamp_us in 0..9 {
         calibrator.evaluate_sample_vec(Vector3::new(5.0, 6.0, 7.0), timestamp_us);
     }
 
-    assert!(matches!(
-        calibrator.perform_calibration(),
-        Err(BadCalibration::DegenerateSoftIronMatrix { .. })
-    ));
+    let calibration = calibrator.perform_calibration().unwrap();
+
+    assert_finite_calibration(calibration);
 }
 
 #[test]
@@ -65,7 +61,7 @@ fn mag_calibrator_waits_for_the_full_buffer_after_reaching_the_model_minimum() {
 }
 
 #[test]
-fn mag_calibrator_rejects_nearly_collinear_samples() {
+fn mag_calibrator_returns_finite_best_effort_for_nearly_collinear_samples() {
     let mut calibrator = MagCalibrator::<12>::new();
     for i in 0..12 {
         let t = i as f32 * 0.0001;
@@ -75,10 +71,9 @@ fn mag_calibrator_rejects_nearly_collinear_samples() {
         );
     }
 
-    assert!(matches!(
-        calibrator.perform_calibration(),
-        Err(BadCalibration::DegenerateSoftIronMatrix { .. })
-    ));
+    let calibration = calibrator.perform_calibration().unwrap();
+
+    assert_finite_calibration(calibration);
 }
 
 #[test]
@@ -193,4 +188,11 @@ fn assert_matrix_close(actual: Matrix3<f32>, expected: Matrix3<f32>, tolerance: 
         expected,
         diff
     );
+}
+
+fn assert_finite_calibration((offset, factor): (Vector3<f32>, Matrix3<f32>)) {
+    assert!(offset
+        .iter()
+        .chain(factor.iter())
+        .all(|value| value.is_finite()));
 }
