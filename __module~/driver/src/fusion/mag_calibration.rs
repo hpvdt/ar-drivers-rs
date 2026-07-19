@@ -64,26 +64,35 @@ impl<const N: usize> MagCalibrator<N> {
     /// Calculates mean distance to the `k` nearest neighbors.
     /// A smaller number means the point is "similar" to its neighbors.
     fn mean_distance_from_single(&self, vec: SMatrix<f32, 1, 3>) -> f32 {
-        let matrix_view: SMatrixView<f32, N, 3> = self.matrix.fixed_columns::<3>(0);
-
-        // Distance to every other point
-        let mut squared_dists: [f32; N] = [0.; N];
-        matrix_view.row_iter().enumerate().for_each(|(j, cmp)| {
-            let diff = vec - cmp;
-            squared_dists[j] = diff.dot(&diff).sqrt(); // ?
-        });
-
-        // Sort floats and return mean distance to nearest neighbors
-        squared_dists.sort_unstable_by(|a, b| a.total_cmp(b));
         let k = self.k.min(N.saturating_sub(1));
         if k == 0 {
             return f32::INFINITY;
         }
-        squared_dists
+
+        let mut nearest_squared_distances = [f32::INFINITY; N];
+        for row in 0..N {
+            let x = vec[(0, 0)] - self.matrix[(row, 0)];
+            let y = vec[(0, 1)] - self.matrix[(row, 1)];
+            let z = vec[(0, 2)] - self.matrix[(row, 2)];
+            let squared_distance = x * x + y * y + z * z;
+
+            let mut insertion_index = 0;
+            while insertion_index <= k
+                && nearest_squared_distances[insertion_index] <= squared_distance
+            {
+                insertion_index += 1;
+            }
+            if insertion_index <= k {
+                nearest_squared_distances.copy_within(insertion_index..k, insertion_index + 1);
+                nearest_squared_distances[insertion_index] = squared_distance;
+            }
+        }
+
+        nearest_squared_distances
             .iter()
             .skip(1)
             .take(k)
-            .rfold(0., |a, &b| a + b)
+            .rfold(0., |sum, squared_distance| sum + squared_distance.sqrt())
             / k as f32
     }
 
@@ -280,8 +289,30 @@ impl<const N: usize> MagCalibrator<N> {
         )
     }
 
+    #[inline(always)]
+    fn apply_factor(vector: Vector3<f32>, factor: &Matrix3<f32>) -> Vector3<f32> {
+        Vector3::new(
+            factor[(0, 0)] * vector.x,
+            factor[(1, 0)] * vector.x + factor[(1, 1)] * vector.y,
+            factor[(2, 0)] * vector.x + factor[(2, 1)] * vector.y + factor[(2, 2)] * vector.z,
+        )
+    }
+
+    #[inline(always)]
+    fn apply_factor_transpose(vector: Vector3<f32>, factor: &Matrix3<f32>) -> Vector3<f32> {
+        Vector3::new(
+            factor[(0, 0)] * vector.x + factor[(1, 0)] * vector.y + factor[(2, 0)] * vector.z,
+            factor[(1, 1)] * vector.y + factor[(2, 1)] * vector.z,
+            factor[(2, 2)] * vector.z,
+        )
+    }
+
+    #[inline(always)]
     fn apply_correction(vector: Vector3<f32>, correction_factor: &Matrix3<f32>) -> Vector3<f32> {
-        correction_factor.transpose() * (correction_factor * vector)
+        Self::apply_factor_transpose(
+            Self::apply_factor(vector, correction_factor),
+            correction_factor,
+        )
     }
 
     fn update_offset(
@@ -335,14 +366,14 @@ impl<const N: usize> MagCalibrator<N> {
 
         for row in 0..sample_count {
             let centered = self.sample(row) - offset;
-            let projected = &*correction_factor * centered;
-            let corrected = correction_factor.transpose() * projected;
+            let projected = Self::apply_factor(centered, correction_factor);
+            let corrected = Self::apply_factor_transpose(projected, correction_factor);
             let norm = corrected.norm();
             if !norm.is_finite() || norm <= f32::EPSILON {
                 continue;
             }
             let residual = norm - 1.0;
-            let factor_corrected = &*correction_factor * corrected;
+            let factor_corrected = Self::apply_factor(corrected, correction_factor);
             for (index, &(matrix_row, matrix_column)) in parameter_indices.iter().enumerate() {
                 let jacobian = (corrected[matrix_column] * projected[matrix_row]
                     + centered[matrix_column] * factor_corrected[matrix_row])
