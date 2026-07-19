@@ -1,36 +1,5 @@
 ## High severity
 
-- [ ]  Fit the full soft-iron model emitted by the simulator
-
-    - **Summary:** The calibrator fits only an axis-aligned ellipsoid even though the dummy deliberately emits
-      cross-axis soft-iron coupling.
-    - **Affected module:** `src/fusion/mag_calibration.rs`
-    - **Severity:** High
-    - **Description:** The current design has no `xy`, `xz`, or `yz` terms and returns three component-wise scales:
-
-      ```rust
-      mag[3] = -mag[1] * mag[1];  
-      mag[4] = -mag[2] * mag[2];  
-
-      let scale = Vector3::new(temp.sqrt(), (temp / x[3]).sqrt(), (temp / x[4]).sqrt());
-      ```
-
-      By contrast, `sample_soft_iron` constructs a generally rotated symmetric positive-definite matrix:
-
-      ```rust
-      let scaled_eigenvectors = Matrix3::from_columns(&vectors);
-      scaled_eigenvectors * scaled_eigenvectors.transpose()
-      ```
-
-      A diagonal correction cannot undo the resulting cross-axis coupling, so even otherwise good simulated samples do
-      not lie on the axis-aligned ellipsoid assumed by `perform_calibration`.
-    - **Recommended fix:** Replace the diagonal `(offset, scale)` fit with a hard-iron offset `b` and an SPD 3x3
-      correction `A = L^T L`, with a positive-diagonal parameterization for `L`. Minimize robust radial residuals
-      `||A (x_i - b)|| - 1` by alternating block-coordinate descent: optimize `b` with `L` fixed, then optimize `L`
-      with `b` fixed. Initialize from a valid full-ellipsoid fit, fix the unit-radius scale gauge, accept only
-      objective-decreasing updates, and reject ill-conditioned, non-converged, or high-residual results.
-    - **Resolution:** Accepted, updating `b` and `L` must be in 2 different private functions.
-
 - [ ]  Require redundant samples and three-dimensional coverage before solving
 
     - **Summary:** Six accepted samples make the six-parameter algebraic system square, but do not make it
