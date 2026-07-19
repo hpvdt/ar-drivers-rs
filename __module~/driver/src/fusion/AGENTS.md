@@ -92,12 +92,16 @@ Every calibration runs exactly 20 alternating sweeps:
    gradient and $\lambda$ to the averaged curvature, then update all six factor
    coordinates directly.
 
-Each coordinate step is clamped to $[-0.25, 0.25]$. The coordinates of $L$,
-including its diagonal, are unconstrained: the solver does not enforce the
-positive-diagonal convention that would make the triangular factor unique. There
-is no logarithmic parameterization, determinant or condition-number gate,
-backtracking, convergence test, or final RMS validation. Frobenius regularization
-is the only soft pressure against excessively large factor entries.
+Because the diagonal approximation updates every coordinate in a block at once,
+the first offset and factor steps are divided by their block widths, 3 and 6.
+Warm-started steps are divided by $n$ so frequent online refinements do not
+over-apply correlated updates. Each resulting coordinate step is clamped to
+$[-0.25, 0.25]$. The coordinates of $L$, including its diagonal, are
+unconstrained: the solver does not enforce the positive-diagonal convention that
+would make the triangular factor unique. There is no logarithmic
+parameterization, determinant or condition-number gate, backtracking,
+convergence test, or final RMS validation. Frobenius regularization is the only
+soft pressure against excessively large factor entries.
 Non-finite sample contributions, deltas, and candidates are skipped; the previous
 coordinate is retained. Once enough samples exist, the latest finite parameter
 state is persisted and returned as a best-effort result.

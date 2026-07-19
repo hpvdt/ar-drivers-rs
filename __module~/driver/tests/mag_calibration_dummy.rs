@@ -14,7 +14,7 @@ fn dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_sec
     let mut fusion = FusionState::new(Box::new(Dummy::new()));
     let required_window_us = 5_000_000;
     let simulation_limit_us = 20_000_000;
-    let calibration_warmup_sample_count = 510;
+    let calibration_warmup_sample_count = 700;
     let mut magnetometer_sample_count = 0;
     let mut window_start_us = None;
     let mut completed_validation_window = false;

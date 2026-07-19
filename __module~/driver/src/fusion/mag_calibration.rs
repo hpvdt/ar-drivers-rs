@@ -15,7 +15,7 @@ pub struct MagCalibrator<const N: usize> {
     sample_timestamps_us: [u64; N],
     matrix_filled: usize,
     hard_iron_offset: Vector3<f32>,
-    inverse_soft_iron_cholesky: Matrix3<f32>,
+    soft_iron_correction_factor: Matrix3<f32>,
     calibration_initialized: bool,
     mean_distance: f32,
     k: usize,
@@ -29,7 +29,7 @@ impl<const N: usize> Default for MagCalibrator<N> {
             sample_timestamps_us: [0; N],
             matrix_filled: Default::default(),
             hard_iron_offset: Vector3::zeros(),
-            inverse_soft_iron_cholesky: Matrix3::identity(),
+            soft_iron_correction_factor: Matrix3::identity(),
             calibration_initialized: false,
             mean_distance: Default::default(),
             k: 2, // Works well in testing
@@ -187,9 +187,9 @@ impl<const N: usize> MagCalibrator<N> {
         // REBUTTAL: Re-running the warm-started solve is intentional: a capped BCD
         // result is persisted and refined even when the KNN buffer rejects the sample.
         self.perform_calibration()?;
-        let mag = Self::corrected(
+        let mag = Self::apply_correction(
             raw_mag - self.hard_iron_offset,
-            &self.inverse_soft_iron_cholesky,
+            &self.soft_iron_correction_factor,
         );
 
         let mag_norm = mag.norm();
@@ -203,7 +203,7 @@ impl<const N: usize> MagCalibrator<N> {
         }
     }
 
-    /// Refines the saved hard-iron offset and inverse soft-iron factor with a
+    /// Refines the saved hard-iron offset and soft-iron correction factor with a
     /// fixed-budget regularized least-squares coordinate descent.
     ///
     /// On success, persists the updated calibration state. Returns the cause when
@@ -228,25 +228,45 @@ impl<const N: usize> MagCalibrator<N> {
         } else {
             self.hard_iron_offset
         };
-        let mut inverse_cholesky = self.inverse_soft_iron_cholesky;
+        let mut correction_factor = self.soft_iron_correction_factor;
         if first_calibration {
             let mean_squared_radius = (0..sample_count)
                 .map(|row| (self.sample(row) - sample_mean).norm_squared())
                 .sum::<f32>()
                 / sample_count as f32;
-            let factor_scale = mean_squared_radius.sqrt().sqrt();
-            if factor_scale.is_finite() && factor_scale > f32::EPSILON {
-                inverse_cholesky = Matrix3::identity() * factor_scale;
+            let rho = mean_squared_radius.sqrt().sqrt();
+            if rho.is_finite() && rho > f32::EPSILON {
+                correction_factor = Matrix3::identity() * rho.recip();
             }
         }
+        let offset_step_relaxation = if first_calibration {
+            3.0
+        } else {
+            sample_count as f32
+        };
+        let factor_step_relaxation = if first_calibration {
+            6.0
+        } else {
+            sample_count as f32
+        };
 
         for _ in 0..CALIBRATION_SWEEPS {
-            self.update_offset(sample_count, &mut offset, &inverse_cholesky);
-            self.update_inverse_cholesky(sample_count, &offset, &mut inverse_cholesky);
+            self.update_offset(
+                sample_count,
+                &mut offset,
+                &correction_factor,
+                offset_step_relaxation,
+            );
+            self.update_correction_factor(
+                sample_count,
+                &offset,
+                &mut correction_factor,
+                factor_step_relaxation,
+            );
         }
 
         self.hard_iron_offset = offset;
-        self.inverse_soft_iron_cholesky = inverse_cholesky;
+        self.soft_iron_correction_factor = correction_factor;
         self.calibration_initialized = true;
         Ok(())
     }
@@ -260,47 +280,40 @@ impl<const N: usize> MagCalibrator<N> {
         )
     }
 
-    // TODO: wrong name: mag vector must be "corrected" by BOTH hard & soft iron distortion
-    fn corrected(vector: Vector3<f32>, inverse_cholesky: &Matrix3<f32>) -> Vector3<f32> {
-        // TODO: this should be a linear algebra operation, avoid elementwise operations
-        let y0 = vector.x / inverse_cholesky[(0, 0)];
-        let y1 = (vector.y - inverse_cholesky[(1, 0)] * y0) / inverse_cholesky[(1, 1)];
-        let y2 = (vector.z - inverse_cholesky[(2, 0)] * y0 - inverse_cholesky[(2, 1)] * y1)
-            / inverse_cholesky[(2, 2)];
-        let x2 = y2 / inverse_cholesky[(2, 2)];
-        let x1 = (y1 - inverse_cholesky[(2, 1)] * x2) / inverse_cholesky[(1, 1)];
-        let x0 = (y0 - inverse_cholesky[(1, 0)] * x1 - inverse_cholesky[(2, 0)] * x2)
-            / inverse_cholesky[(0, 0)];
-        Vector3::new(x0, x1, x2)
+    fn apply_correction(vector: Vector3<f32>, correction_factor: &Matrix3<f32>) -> Vector3<f32> {
+        correction_factor.transpose() * (correction_factor * vector)
     }
 
     fn update_offset(
         &self,
         sample_count: usize,
         offset: &mut Vector3<f32>,
-        inverse_cholesky: &Matrix3<f32>,
+        correction_factor: &Matrix3<f32>,
+        step_relaxation: f32,
     ) {
         let mut gradient = [0.0; 3];
         let mut curvature = [0.0; 3];
 
         for row in 0..sample_count {
-            let corrected = Self::corrected(self.sample(row) - *offset, inverse_cholesky);
+            let corrected = Self::apply_correction(self.sample(row) - *offset, correction_factor);
             let norm = corrected.norm();
             if !norm.is_finite() || norm <= f32::EPSILON {
                 continue;
             }
             let residual = norm - 1.0;
-            let jacobian = -Self::corrected(corrected, inverse_cholesky) / norm;
+            let jacobian = -Self::apply_correction(corrected, correction_factor) / norm;
             for index in 0..3 {
-                if jacobian[index].is_finite() {
-                    gradient[index] += jacobian[index] * residual;
-                    curvature[index] += jacobian[index] * jacobian[index];
+                let gradient_contribution = jacobian[index] * residual;
+                let curvature_contribution = jacobian[index] * jacobian[index];
+                if gradient_contribution.is_finite() && curvature_contribution.is_finite() {
+                    gradient[index] += gradient_contribution;
+                    curvature[index] += curvature_contribution;
                 }
             }
         }
 
         for index in 0..3 {
-            let delta = (gradient[index] / curvature[index].max(f32::EPSILON))
+            let delta = (gradient[index] / curvature[index].max(f32::EPSILON) / step_relaxation)
                 .clamp(-MAX_PARAMETER_STEP, MAX_PARAMETER_STEP);
             let candidate = offset[index] - delta;
             if delta.is_finite() && candidate.is_finite() {
@@ -309,46 +322,50 @@ impl<const N: usize> MagCalibrator<N> {
         }
     }
 
-    fn update_inverse_cholesky(
+    fn update_correction_factor(
         &self,
         sample_count: usize,
         offset: &Vector3<f32>,
-        inverse_cholesky: &mut Matrix3<f32>,
+        correction_factor: &mut Matrix3<f32>,
+        step_relaxation: f32,
     ) {
         let parameter_indices = [(0, 0), (1, 0), (1, 1), (2, 0), (2, 1), (2, 2)];
         let mut gradient = [0.0; 6];
         let mut curvature = [0.0; 6];
 
         for row in 0..sample_count {
-            let corrected = Self::corrected(self.sample(row) - offset, inverse_cholesky);
+            let centered = self.sample(row) - offset;
+            let projected = &*correction_factor * centered;
+            let corrected = correction_factor.transpose() * projected;
             let norm = corrected.norm();
             if !norm.is_finite() || norm <= f32::EPSILON {
                 continue;
             }
             let residual = norm - 1.0;
-            let corrected_again = Self::corrected(corrected, inverse_cholesky);
-            let derivative = -(corrected_again
-                * (inverse_cholesky.transpose() * corrected).transpose()
-                + corrected * (inverse_cholesky.transpose() * corrected_again).transpose())
-                / norm;
+            let factor_corrected = &*correction_factor * corrected;
             for (index, &(matrix_row, matrix_column)) in parameter_indices.iter().enumerate() {
-                let jacobian = derivative[(matrix_row, matrix_column)];
-                if jacobian.is_finite() {
-                    gradient[index] += jacobian * residual;
-                    curvature[index] += jacobian * jacobian;
+                let jacobian = (corrected[matrix_column] * projected[matrix_row]
+                    + centered[matrix_column] * factor_corrected[matrix_row])
+                    / norm;
+                let gradient_contribution = jacobian * residual;
+                let curvature_contribution = jacobian * jacobian;
+                if gradient_contribution.is_finite() && curvature_contribution.is_finite() {
+                    gradient[index] += gradient_contribution;
+                    curvature[index] += curvature_contribution;
                 }
             }
         }
 
         let regularization = FACTOR_REGULARIZATION * sample_count as f32;
         for (index, &(matrix_row, matrix_column)) in parameter_indices.iter().enumerate() {
-            let value = inverse_cholesky[(matrix_row, matrix_column)];
+            let value = correction_factor[(matrix_row, matrix_column)];
             let delta = ((gradient[index] + regularization * value)
-                / (curvature[index] + regularization))
+                / (curvature[index] + regularization)
+                / step_relaxation)
                 .clamp(-MAX_PARAMETER_STEP, MAX_PARAMETER_STEP);
             let candidate = value - delta;
             if delta.is_finite() && candidate.is_finite() {
-                inverse_cholesky[(matrix_row, matrix_column)] = candidate;
+                correction_factor[(matrix_row, matrix_column)] = candidate;
             }
         }
     }
