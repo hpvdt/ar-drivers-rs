@@ -77,7 +77,7 @@ fn seeded_calibrator(offset: Vector3<f32>, scale: Vector3<f32>) -> MagCalibrator
     let mut calibrator = MagCalibrator::new();
     for i in 0..255 {
         let direction = sample_direction(i);
-        calibrator.evaluate_sample_vec(offset + scale.component_mul(&direction), i as u64);
+        let _ = calibrator.evaluate_correct(offset + scale.component_mul(&direction), i as u64);
     }
     calibrator
 }
@@ -86,7 +86,7 @@ fn nearly_collinear_calibrator() -> MagCalibrator<255> {
     let mut calibrator = MagCalibrator::new();
     for i in 0..255 {
         let t = i as f32 * 0.0001;
-        calibrator.evaluate_sample_vec(
+        let _ = calibrator.evaluate_correct(
             Vector3::new(10.0 + t, -5.0 + 2.0 * t, 3.0 + 0.5 * t),
             i as u64,
         );

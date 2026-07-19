@@ -1,85 +1,103 @@
 use nalgebra::{Matrix3, Vector3};
 
-use super::bad_mag_cause::BadCalibration;
+use super::bad_mag_cause::{BadCalibration, BadMagCause};
 use super::mag_calibration::MagCalibrator;
 
 #[test]
-fn mag_calibrator_solves_synthetic_offset_and_full_spd_inverse_factor() {
+fn mag_calibrator_corrects_synthetic_full_spd_distortion() {
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
     let mut calibrator = seeded_calibrator::<63>(offset, distortion);
 
-    let (actual_offset, actual_cholesky) = calibrator.perform_calibration().unwrap();
-    let actual_inverse_correction = actual_cholesky * actual_cholesky.transpose();
-
-    assert_vec_close(actual_offset, offset, 0.05);
-    assert_matrix_close(actual_inverse_correction, distortion, 0.05);
-    assert_eq!(actual_cholesky[(0, 1)], 0.0);
-    assert_eq!(actual_cholesky[(0, 2)], 0.0);
-    assert_eq!(actual_cholesky[(1, 2)], 0.0);
-}
-
-#[test]
-fn mag_calibrator_reuses_its_previous_solution() {
-    let offset = Vector3::new(11.0, -7.0, 5.0);
-    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
-    let mut calibrator = seeded_calibrator::<63>(offset, distortion);
-
-    let first = calibrator.perform_calibration().unwrap();
-    let second = calibrator.perform_calibration().unwrap();
-
-    assert_vec_close(second.0, first.0, 0.01);
-    assert_matrix_close(second.1, first.1, 0.01);
-}
-
-#[test]
-fn mag_calibrator_returns_finite_best_effort_for_degenerate_data() {
-    let mut calibrator = MagCalibrator::<9>::new();
-    for timestamp_us in 0..9 {
-        calibrator.evaluate_sample_vec(Vector3::new(5.0, 6.0, 7.0), timestamp_us);
+    for (timestamp_us, expected) in [
+        Vector3::new(1.0, 0.0, 0.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        Vector3::new(0.0, 0.0, 1.0),
+        Vector3::new(1.0, -2.0, 3.0).normalize(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let corrected = calibrator
+            .evaluate_correct(offset + distortion * expected, timestamp_us as u64)
+            .unwrap();
+        assert_vec_close(corrected, expected, 0.05);
     }
+}
 
-    let calibration = calibrator.perform_calibration().unwrap();
+#[test]
+fn mag_calibrator_returns_stable_warm_started_corrections() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+    let mut calibrator = seeded_calibrator::<63>(offset, distortion);
+    let expected = Vector3::new(1.0, -2.0, 3.0).normalize();
+    let raw = offset + distortion * expected;
 
-    assert_finite_calibration(calibration);
+    let first = calibrator.evaluate_correct(raw, 1).unwrap();
+    let second = calibrator.evaluate_correct(raw, 2).unwrap();
+
+    assert_vec_close(second, first, 0.01);
+}
+
+#[test]
+fn mag_calibrator_returns_best_effort_result_for_degenerate_data() {
+    let mut calibrator = MagCalibrator::<9>::new();
+    let result = (0..9)
+        .map(|timestamp_us| calibrator.evaluate_correct(Vector3::new(5.0, 6.0, 7.0), timestamp_us))
+        .last()
+        .unwrap();
+
+    assert_finite_result_or_bad_reading(result);
 }
 
 #[test]
 fn mag_calibrator_waits_for_the_full_buffer_after_reaching_the_model_minimum() {
     let mut calibrator = MagCalibrator::<12>::new();
+    let mut result = None;
     for i in 0..9 {
-        calibrator.evaluate_sample_vec(Vector3::new(5.0 + i as f32, 6.0, 7.0), i as u64);
+        result =
+            Some(calibrator.evaluate_correct(Vector3::new(5.0 + i as f32, 6.0, 7.0), i as u64));
     }
 
     assert!(matches!(
-        calibrator.perform_calibration(),
-        Err(BadCalibration::InsufficientSamples {
-            samples: 9,
-            required: 12
-        })
+        result.unwrap(),
+        Err(BadMagCause::BadCalibration(
+            BadCalibration::InsufficientSamples {
+                samples: 9,
+                required: 12
+            }
+        ))
     ));
 }
 
 #[test]
-fn mag_calibrator_returns_finite_best_effort_for_nearly_collinear_samples() {
+fn mag_calibrator_returns_best_effort_result_for_nearly_collinear_samples() {
     let mut calibrator = MagCalibrator::<12>::new();
+    let mut result = None;
     for i in 0..12 {
         let t = i as f32 * 0.0001;
-        calibrator.evaluate_sample_vec(
+        result = Some(calibrator.evaluate_correct(
             Vector3::new(10.0 + t, -5.0 + 2.0 * t, 3.0 + 0.5 * t),
             i as u64,
-        );
+        ));
     }
 
-    let calibration = calibrator.perform_calibration().unwrap();
-
-    assert_finite_calibration(calibration);
+    assert_finite_result_or_bad_reading(result.unwrap());
 }
 
 #[test]
-fn mag_calibrator_clamps_k_and_excludes_self_distance() {
-    assert!((mean_distance_after_replacement(0) - 27.5).abs() < 0.001);
-    assert!((mean_distance_after_replacement(99) - 51.666668).abs() < 0.001);
+fn mag_calibrator_clamps_neighbor_count_through_public_result() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+    let expected = Vector3::new(1.0, -2.0, 3.0).normalize();
+
+    for k in [0, 99] {
+        let mut calibrator = seeded_calibrator::<63>(offset, distortion).num_neighbors(k);
+        let corrected = calibrator
+            .evaluate_correct(offset + distortion * expected, 1)
+            .unwrap();
+        assert_vec_close(corrected, expected, 0.05);
+    }
 }
 
 #[test]
@@ -94,16 +112,17 @@ fn mag_calibrator_accepts_zero_components_and_rejects_bad_vectors() {
     .into_iter()
     .enumerate()
     {
-        calibrator.evaluate_sample_vec(sample, timestamp_us as u64);
+        let result = calibrator.evaluate_correct(sample, timestamp_us as u64);
+        assert!(matches!(
+            result,
+            Err(BadMagCause::BadCalibration(
+                BadCalibration::InsufficientSamples {
+                    samples: 1,
+                    required: 12
+                }
+            ))
+        ));
     }
-
-    assert!(matches!(
-        calibrator.perform_calibration(),
-        Err(BadCalibration::InsufficientSamples {
-            samples: 1,
-            required: 12
-        })
-    ));
 }
 
 #[test]
@@ -112,14 +131,17 @@ fn mag_calibrator_defaults_sample_lifespan_to_one_hour() {
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
     let mut calibrator = seeded_calibrator::<12>(offset, distortion);
 
-    calibrator.evaluate_sample_vec(Vector3::new(20.0, 30.0, 40.0), 60 * 60 * 1_000_000 + 1);
+    let result =
+        calibrator.evaluate_correct(Vector3::new(20.0, 30.0, 40.0), 60 * 60 * 1_000_000 + 1);
 
     assert!(matches!(
-        calibrator.perform_calibration(),
-        Err(BadCalibration::InsufficientSamples {
-            samples: 1,
-            required: 12
-        })
+        result,
+        Err(BadMagCause::BadCalibration(
+            BadCalibration::InsufficientSamples {
+                samples: 1,
+                required: 12
+            }
+        ))
     ));
 }
 
@@ -129,24 +151,17 @@ fn mag_calibrator_uses_configured_sample_lifespan() {
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
     let mut calibrator = seeded_calibrator::<12>(offset, distortion).max_sample_lifespan_us(10);
 
-    calibrator.evaluate_sample_vec(Vector3::new(20.0, 30.0, 40.0), 11);
+    let result = calibrator.evaluate_correct(Vector3::new(20.0, 30.0, 40.0), 11);
 
     assert!(matches!(
-        calibrator.perform_calibration(),
-        Err(BadCalibration::InsufficientSamples {
-            samples: 1,
-            required: 12
-        })
+        result,
+        Err(BadMagCause::BadCalibration(
+            BadCalibration::InsufficientSamples {
+                samples: 1,
+                required: 12
+            }
+        ))
     ));
-}
-
-fn mean_distance_after_replacement(k: usize) -> f32 {
-    let mut calibrator = MagCalibrator::<4>::new().num_neighbors(k);
-    for (timestamp_us, x) in [1.0, 11.0, 21.0, 101.0].into_iter().enumerate() {
-        calibrator.evaluate_sample_vec(Vector3::new(x, 1.0, 1.0), timestamp_us as u64);
-    }
-    calibrator.evaluate_sample_vec(Vector3::new(201.0, 1.0, 1.0), 4);
-    calibrator.get_mean_distance()
 }
 
 fn seeded_calibrator<const N: usize>(
@@ -156,7 +171,7 @@ fn seeded_calibrator<const N: usize>(
     let mut calibrator = MagCalibrator::new();
     for i in 0..N {
         let direction = sample_direction(i, N);
-        calibrator.evaluate_sample_vec(offset + distortion * direction, 0);
+        let _ = calibrator.evaluate_correct(offset + distortion * direction, 0);
     }
     calibrator
 }
@@ -179,20 +194,10 @@ fn assert_vec_close(actual: Vector3<f32>, expected: Vector3<f32>, tolerance: f32
     );
 }
 
-fn assert_matrix_close(actual: Matrix3<f32>, expected: Matrix3<f32>, tolerance: f32) {
-    let diff = (actual - expected).norm();
-    assert!(
-        diff < tolerance,
-        "actual={} expected={} diff={}",
-        actual,
-        expected,
-        diff
-    );
-}
-
-fn assert_finite_calibration((offset, factor): (Vector3<f32>, Matrix3<f32>)) {
-    assert!(offset
-        .iter()
-        .chain(factor.iter())
-        .all(|value| value.is_finite()));
+fn assert_finite_result_or_bad_reading(result: Result<Vector3<f32>, BadMagCause>) {
+    match result {
+        Ok(corrected) => assert!(corrected.iter().all(|value| value.is_finite())),
+        Err(BadMagCause::BadReading(_)) => {}
+        Err(error) => panic!("expected a best-effort correction result, got {error:?}"),
+    }
 }

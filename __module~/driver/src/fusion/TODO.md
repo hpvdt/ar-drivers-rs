@@ -25,8 +25,8 @@
       A diagonal correction cannot undo the resulting cross-axis coupling, so even otherwise good simulated samples do
       not lie on the axis-aligned ellipsoid assumed by `perform_calibration`.
     - **Recommended fix:** Replace the diagonal `(offset, scale)` fit with a hard-iron offset `b` and an SPD 3x3
-      correction `C = L L^T`, with a positive-diagonal parameterization for `L`. Minimize robust radial residuals
-      `||C (m_i - b)|| - 1` by alternating block-coordinate descent: optimize `b` with `L` fixed, then optimize `L`
+      correction `A = L^T L`, with a positive-diagonal parameterization for `L`. Minimize robust radial residuals
+      `||A (x_i - b)|| - 1` by alternating block-coordinate descent: optimize `b` with `L` fixed, then optimize `L`
       with `b` fixed. Initialize from a valid full-ellipsoid fit, fix the unit-radius scale gauge, accept only
       objective-decreasing updates, and reject ill-conditioned, non-converged, or high-residual results.
     - **Resolution:** Accepted, updating `b` and `L` must be in 2 different private functions.

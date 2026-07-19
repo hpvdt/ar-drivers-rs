@@ -193,7 +193,7 @@ impl<const N: usize> MagCalibrator<N> {
         );
 
         let mag_norm = mag.norm();
-        if mag_norm < MIN_MAG_NORM {
+        if !mag_norm.is_finite() || mag_norm < MIN_MAG_NORM {
             Err(BadMagCause::BadReading(BadReading::WeakCalibratedReading {
                 norm: mag_norm,
                 min_norm: MIN_MAG_NORM,
@@ -206,11 +206,9 @@ impl<const N: usize> MagCalibrator<N> {
     /// Refines the saved hard-iron offset and inverse soft-iron factor with a
     /// fixed-budget regularized least-squares coordinate descent.
     ///
-    /// On success, persists and returns `(hard_iron_offset,
-    /// inverse_soft_iron_cholesky)`. If `R` is the returned factor, the correction
-    /// matrix is `(R * R.transpose())^-1` and is applied by triangular solves.
-    /// Returns the cause when there are not enough samples to start calibration.
-    fn perform_calibration(&mut self) -> Result<(Vector3<f32>, Matrix3<f32>), BadCalibration> {
+    /// On success, persists the updated calibration state. Returns the cause when
+    /// there are not enough samples to start calibration.
+    fn perform_calibration(&mut self) -> Result<(), BadCalibration> {
         let sample_count = self.matrix_filled.min(N);
         let required_samples = N.max(CALIBRATION_PARAMETER_COUNT);
         if sample_count < required_samples {
@@ -250,7 +248,7 @@ impl<const N: usize> MagCalibrator<N> {
         self.hard_iron_offset = offset;
         self.inverse_soft_iron_cholesky = inverse_cholesky;
         self.calibration_initialized = true;
-        Ok((offset, inverse_cholesky))
+        Ok(())
     }
 
     fn sample(&self, row: usize) -> Vector3<f32> {
