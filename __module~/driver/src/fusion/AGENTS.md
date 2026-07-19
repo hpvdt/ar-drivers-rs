@@ -1,6 +1,8 @@
 # AGENTS.md - Fusion Module Guide
 
-## Reference Frames
+## Conventions
+
+### Reference Frames
 
 The library uses multiple coordinate reference frames:
 
@@ -8,7 +10,7 @@ The library uses multiple coordinate reference frames:
 - **FRD (Forward-Right-Down)**: Aerospace standard frame (used in fusion outputs)
 - **Custom frames**: Configurable via AHRS for different applications
 
-## Coordinate Transformations
+### Coordinate Transformations
 
 - Treat the shared sensor-event documentation and the fusion module as the source
   of truth for reference frames and units. Device events currently use RUB, while
@@ -16,7 +18,9 @@ The library uses multiple coordinate reference frames:
 - Keep frame transformations explicit and centralized, document device-specific
   deviations, and use the repository's existing linear-algebra types.
 
-## Magnetometer Calibration
+## Source Files
+
+### Magnetometer Calibration (`mag_calibration.rs`)
 
 `MagCalibrator<N>` keeps a cache of finite, nonzero FRD magnetometer samples. Old
 samples expire according to `max_sample_lifespan_us`; after the cache is full, a
