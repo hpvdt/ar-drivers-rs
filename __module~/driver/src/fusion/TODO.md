@@ -1,5 +1,46 @@
 ## High severity
 
+- [ ] Avoid recalibrating after every magnetometer reading
+
+    - **Summary:** `evaluate_correct` unconditionally runs the full calibration solve, making the wall-time integration
+      result sensitive to machine throughput even when the retained calibration samples have not changed.
+    - **Affected module:** `src/fusion/mag_calibration.rs`
+    - **Severity:** High
+    - **Description:** The correction path always invokes `perform_calibration` after evaluating the incoming sample:
+
+      ```rust
+      self.evaluate_sample_vec(raw_mag, timestamp_us);
+      self.perform_calibration()?;
+      ```
+
+      Before timing instrumentation, the default-seed integration test processed 869 magnetometer calls in 20.01
+      seconds and failed to complete its five-second post-warmup validation window despite a worst angle of only
+      11.967724 degrees. An instrumented rerun processed 944 calls and passed narrowly, with an average
+      `evaluate_correct` duration of 21.145257 ms. The randomized run averaged 22.091124 ms over 1,660 calls before an
+      unrelated accuracy failure stopped it. A subsequent all-target run failed this same validation-window condition
+      for seed `11193037924316477499`: 832 calls averaged 24.008114 ms, while the worst angle remained only 12.395225
+      degrees.
+    - **Recommended fix:** Have sample evaluation report whether the retained buffer changed, and avoid running all 20
+      calibration sweeps when the existing calibration can correct a rejected reading directly. If repeated warm-start
+      refinement is still required, schedule it at an explicitly bounded cadence instead of on every sensor reading.
+
+- [ ] Make calibration accuracy robust across simulator seeds
+
+    - **Summary:** The current solver can exceed the 20-degree corrected-heading limit for valid dummy configurations.
+    - **Affected module:** `src/fusion/mag_calibration.rs`
+    - **Severity:** High
+    - **Description:** The randomized integration test sampled unique seeds without replacement. Its second round failed
+      for seed `5001459942222248181` at virtual timestamp `15070000` microseconds:
+
+      ```text
+      corrected magnetometer exceeded 20 degrees at timestamp=15070000: angle_degrees=20.174479
+      ```
+
+      This occurred after the unchanged 700-sample warmup and while comparing every corrected reading with the seeded
+      simulator's ground truth.
+    - **Recommended fix:** Reproduce with the recorded seed and improve the calibration solve or its readiness criteria
+      so the existing 20-degree accuracy contract holds without weakening the assertion.
+
 - [ ]  Require redundant samples and three-dimensional coverage before solving
 
     - **Summary:** Six accepted samples make the six-parameter algebraic system square, but do not make it
