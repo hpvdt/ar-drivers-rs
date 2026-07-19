@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use ar_drivers::fusion::{rub_to_frd, FusionState};
 use ar_drivers::{ARGlasses, Dummy, DummyConfig, GlassesEvent};
 use nalgebra::Vector3;
@@ -12,15 +14,16 @@ fn dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_sec
         Vector3::new(0.0, dip.sin(), -dip.cos()) * config.magnetic_field_strength;
     let mut dummy = Dummy::with_config(config);
     let mut fusion = FusionState::new(Box::new(Dummy::new()));
-    let required_window_us = 5_000_000;
-    let simulation_limit_us = 20_000_000;
+    let required_window = Duration::from_secs(5);
+    let test_duration = Duration::from_secs(20);
     let calibration_warmup_sample_count = 700;
     let mut magnetometer_sample_count = 0;
-    let mut window_start_us = None;
+    let mut window_start = None;
     let mut completed_validation_window = false;
     let mut worst_angle_degrees = 0.0f32;
+    let deadline = Instant::now() + test_duration;
 
-    while dummy.snapshot().timestamp_us <= simulation_limit_us {
+    while Instant::now() < deadline {
         let ground_truth = dummy.snapshot();
         let event = dummy.read_event().unwrap();
         let GlassesEvent::Magnetometer {
@@ -50,15 +53,15 @@ fn dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_sec
             angle_degrees <= 20.0,
             "corrected magnetometer exceeded 20 degrees at timestamp={timestamp}: angle_degrees={angle_degrees}"
         );
-        let start = *window_start_us.get_or_insert(timestamp);
+        let start = *window_start.get_or_insert_with(Instant::now);
         worst_angle_degrees = worst_angle_degrees.max(angle_degrees);
-        if timestamp - start >= required_window_us {
+        if start.elapsed() >= required_window {
             completed_validation_window = true;
         }
     }
 
     assert!(
         completed_validation_window,
-        "corrected magnetometer did not complete a 5-second validation window; worst_angle_degrees={worst_angle_degrees}"
+        "corrected magnetometer did not complete a 5-second validation window within the 20-second wall-time limit; magnetometer_sample_count={magnetometer_sample_count}, worst_angle_degrees={worst_angle_degrees}"
     );
 }
