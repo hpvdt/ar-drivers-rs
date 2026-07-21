@@ -59,7 +59,7 @@ fn starts_with_magnetic_north_forward_frd() {
             magnetometer,
             timestamp,
         } => {
-            assert_eq!(timestamp, 10_000);
+            assert_eq!(timestamp, DummyConfig::default().event_period_us);
             let mag_frd = rub_to_frd(&magnetometer);
             let expected = Vector3::new(50.0, 0.0, 0.0);
 

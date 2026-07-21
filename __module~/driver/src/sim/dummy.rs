@@ -1,6 +1,8 @@
 //! Deterministic simulated AR glasses for integration tests.
 
 use std::f32::consts::PI;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use nalgebra::{Isometry3, Matrix3, UnitQuaternion, Vector3};
 use rand::rngs::StdRng;
@@ -27,6 +29,9 @@ const ANGULAR_RATE_SEGMENT_COUNT: usize = 3;
 const ADAPTIVE_CALIBRATION_HARD_IRON_DRIFT: Vector3<f32> = Vector3::new(2.0, 1.5, 2.5);
 const ADAPTIVE_CALIBRATION_DRIFT_PERIOD_US: u64 = 5 * 60 * 1_000_000;
 const DEFAULT_MAGNETOMETER_RANGE: f32 = 2_000.0;
+/// Upper bound for the wall-clock pacing delay applied per event. Events with
+/// a longer virtual period are emitted immediately.
+const MAX_EVENT_PACING_DELAY: Duration = Duration::from_millis(20);
 
 /// Configuration for [`Dummy`].
 #[derive(Clone, Debug)]
@@ -77,7 +82,7 @@ impl Default for DummyConfig {
     fn default() -> Self {
         Self {
             seed: DEFAULT_SEED,
-            event_period_us: 10_000,
+            event_period_us: 20_000,
             max_body_rate_rpm: 20.0,
             linear_jerk_std_dev: 1.2,
             linear_accel_damping: 0.8,
@@ -157,6 +162,7 @@ pub struct Dummy {
     timestamp_us: u64,
     next_event_is_acc_gyro: bool,
     display_mode: DisplayMode,
+    last_event_at: Option<Instant>,
 }
 
 impl Dummy {
@@ -202,6 +208,7 @@ impl Dummy {
             timestamp_us: 0,
             next_event_is_acc_gyro: true,
             display_mode: DisplayMode::SameOnBoth,
+            last_event_at: None,
         }
     }
 
@@ -320,7 +327,23 @@ impl ARGlasses for Dummy {
         Ok(String::from("dummy!"))
     }
 
+    /// Blocks briefly to pace emissions to the configured event period:
+    /// sleeps for the period minus the wall time elapsed since the previous
+    /// event, clamped to zero. Virtual periods longer than
+    /// [`MAX_EVENT_PACING_DELAY`] cannot be represented this way, so events
+    /// are emitted immediately instead.
     fn read_event(&mut self) -> Result<GlassesEvent> {
+        if let Some(last) = self.last_event_at {
+            let period = Duration::from_micros(self.config.event_period_us);
+            if period <= MAX_EVENT_PACING_DELAY {
+                let delay = period.saturating_sub(last.elapsed());
+                if !delay.is_zero() {
+                    thread::sleep(delay);
+                }
+            }
+        }
+        self.last_event_at = Some(Instant::now());
+
         let timestamp = self.timestamp_us;
         let result = if self.next_event_is_acc_gyro {
             self.next_event_is_acc_gyro = false;

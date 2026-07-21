@@ -7,7 +7,10 @@ The dummy AR glasses fixture is a deterministic, public, configurable simulator 
 
 - Expose the fixture through `pub mod sim` and re-export `Dummy`, `DummyConfig`, and `DummySnapshot`.
 - Provide `Dummy::new()`, `Dummy::with_seed(u64)`, `Dummy::with_config(DummyConfig)`, `Default`, and `snapshot()`.
-- Keep default operation deterministic, immediate, and virtual-time based, with the first emitted event being `AccGyro`.
+- Keep default operation deterministic and virtual-time based, with the first emitted event being `AccGyro`.
+- Pace `read_event` to the configured event period in wall time: sleep for the period minus the wall time elapsed since
+  the previous event, clamped to zero. Virtual periods longer than 20 ms cannot be represented this way, so those
+  events are emitted immediately.
 
 ## Sensor Model
 
