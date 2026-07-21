@@ -50,6 +50,7 @@ hidapi = { version = "2.6.6", optional = true }
 
 [dev-dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
+serial_test = "3"
 #opencv = { version = "0.89.0", default-features = false, features = ["highgui", "imgproc", "calib3d"] }
 
 [lib]
