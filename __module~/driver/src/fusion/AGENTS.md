@@ -43,65 +43,98 @@ m_i=A(x_i-b),
 AD=DA=I.
 $$
 
-The solver does not optimize $D$ or compute a matrix inverse. It represents $A$
-directly with a lower-triangular factor $L$:
+The solver estimates the ellipsoid as a quadratic form. Define the sample mean,
+RMS radius, and dimensionless samples as
 
 $$
-A=L^TL.
+\mu=\frac{1}{n}\sum_i x_i,
+\qquad
+r=\sqrt{\frac{1}{n}\sum_i\left\|x_i-\mu\right\|^2},
+\qquad
+u_i=\frac{x_i-\mu}{r}.
 $$
 
-The optimized calibration state consists only of $b$ and the six direct
-coordinates of $L$:
+Centering and scaling keep the direct solve independent of the sensor units and
+reduce its numerical condition. A non-finite or zero $r$ is rejected. The
+condition number of the centered sample covariance must not exceed $10^6$.
+
+Let $Q$ be a symmetric ellipsoid shape matrix and $q$ its linear term. The
+normalized samples obey
 
 $$
-[L_{00},L_{10},L_{11},L_{20},L_{21},L_{22}].
+u_i^T Q u_i + q^T u_i = 1.
 $$
 
-Correction therefore uses only two matrix-vector multiplications:
+The six independent coordinates of $Q$ and the three coordinates of $q$ form the
+nine-parameter vector
 
 $$
-y=L^TL(x-b).
+\theta=[Q_{00},Q_{11},Q_{22},Q_{01},Q_{02},Q_{12},q_0,q_1,q_2]^T.
 $$
 
-The solver minimizes the regularized radial least-squares objective
+For
 
 $$
-J(b,L)
-= \frac{1}{2n}\sum_i
-  \left(\left\|L^TL(x_i-b)\right\|-1\right)^2
-  +  \frac{\lambda}{2}\left\|L\right\|_F^2,
+\phi(u)=[u_x^2,u_y^2,u_z^2,2u_xu_y,2u_xu_z,2u_yu_z,u_x,u_y,u_z]^T,
+$$
+
+the solver minimizes the regularized algebraic least-squares objective
+
+$$
+J(\theta)
+=\frac{1}{2n}\sum_i\left(\phi(u_i)^T\theta-1\right)^2
++\frac{\lambda}{2}\left\|Q\right\|_F^2,
 \qquad \lambda=10^{-4}.
 $$
 
-The objective is differentiated but never evaluated. On the first calibration,
-$b$ starts at the sample mean. Define
+This retains Frobenius regularization on the soft-iron shape while making the
+entire objective quadratic. If $R=\operatorname{diag}(1,1,1,2,2,2,0,0,0)$,
+the unique candidate is obtained with one direct linear solve:
 
 $$
-\rho = \left(\frac{1}{n}\sum_i\left\|x_i-b\right\|^2\right)^{1/4};
+\left(\frac{1}{n}\sum_i\phi_i\phi_i^T+\lambda R\right)\theta
+=\frac{1}{n}\sum_i\phi_i.
 $$
 
-when $\rho$ is finite and nonzero, $L$ starts as $\rho^{-1}I$. Later
-calibrations warm-start from the saved state.
+There are no alternating sweeps, warm starts, parameter clamps, or convergence
+iterations.
 
-Every calibration runs exactly 20 alternating sweeps:
+After solving, the normalized hard-iron center and ellipsoid metric are
 
-1. Scan all samples once to accumulate the three offset-gradient coordinates and
-   their diagonal Gauss-Newton curvatures, then update the three coordinates.
-2. Scan all samples once to accumulate the six factor-gradient coordinates and
-   their diagonal Gauss-Newton curvatures. Add $\lambda L$ to the averaged
-   gradient and $\lambda$ to the averaged curvature, then update all six factor
-   coordinates directly.
+$$
+d=-\frac{1}{2}Q^{-1}q,
+\qquad
+\gamma=1+d^TQd,
+\qquad
+M=\frac{Q}{\gamma}.
+$$
 
-Each coordinate step is clamped to $[-0.25, 0.25]$. The coordinates of $L$,
-including its diagonal, are unconstrained: the solver does not enforce the
-positive-diagonal convention that would make the triangular factor unique. There
-is no logarithmic parameterization, determinant or condition-number gate,
-backtracking, convergence test, or final RMS validation. Frobenius regularization
-is the only soft pressure against excessively large factor entries.
-Non-finite sample contributions, deltas, and candidates are skipped; the previous
-coordinate is retained. Once enough samples exist, the latest finite parameter
-state is persisted and returned as a best-effort result.
+The candidate requires finite coefficients, positive-definite $Q$, and positive
+$\gamma$. Transforming back to sensor units gives
 
-With the sweep count fixed, calibration itself takes $O(n)$ time per call and
-$O(1)$ auxiliary space. This excludes maintenance of the sample cache and its
-k-nearest-neighbor replacement heuristic.
+$$
+b=\mu+rd,
+\qquad
+A=\frac{1}{r}M^{1/2}.
+$$
+
+The principal symmetric positive-definite square root is computed once from the
+eigendecomposition of $M$. The correction matrix condition number must not exceed
+$10^3$, and the RMS radial residual
+
+$$
+\sqrt{\frac{1}{n}\sum_i\left(\left\|A(x_i-b)\right\|-1\right)^2}
+$$
+
+must not exceed $0.25$. Failed solves and rejected candidates return a specific
+`BadCalibration` and leave the previously persisted calibration state unchanged.
+Successful calibration persists $b$ and $A$ directly; correcting a reading then
+requires one matrix-vector multiplication:
+
+$$
+m=A(x-b).
+$$
+
+Accumulating the fixed $9\times9$ normal system and validating the candidate take
+$O(n)$ time per calibration and $O(1)$ auxiliary space. This excludes maintenance
+of the sample cache and its k-nearest-neighbor replacement heuristic.
