@@ -4,9 +4,9 @@ use ar_drivers::fusion::{rub_to_frd, FusionState};
 use ar_drivers::{ARGlasses, Dummy, DummyConfig, GlassesEvent};
 use nalgebra::Vector3;
 
-#[test]
-fn dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_seconds() {
-    let config = DummyConfig::default();
+fn dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_seconds(
+    config: DummyConfig,
+) {
     let dip = config
         .magnetic_dip_rad
         .clamp(-30.0f32.to_radians(), 30.0f32.to_radians());
@@ -127,4 +127,20 @@ fn dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_sec
     );
     println!("  - sampling/optimization warm-up: {warmup_time:.2?} / {warmup_count} iterations");
     println!("  - verification: {verified_time:.2?} / {verified_count} iterations");
+}
+
+#[test]
+fn dummy_mag_calibration_short() {
+    dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_seconds(
+        DummyConfig::default(),
+    );
+}
+
+#[test]
+fn dummy_mag_calibration_long() {
+    for seed in 0..20 {
+        let mut config = DummyConfig::default();
+        config.seed = seed;
+        dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_seconds(config);
+    }
 }
