@@ -45,7 +45,7 @@ fn get_calibrated_mag_discards_underconstrained_calibration() {
 }
 
 #[test]
-fn update_mag_uses_best_effort_ill_conditioned_calibration() {
+fn update_mag_discards_ill_conditioned_calibration() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::Dummy::new())).unwrap();
     fusion.state.mag = nearly_collinear_calibrator();
     fusion.state.attitude = UnitQuaternion::identity();
@@ -56,10 +56,9 @@ fn update_mag_uses_best_effort_ill_conditioned_calibration() {
 
     fusion.update_mag(&mag_rub, 0);
 
-    assert!(fusion.state.corrections.mag.prev.is_finite());
-    assert!(fusion.state.corrections.mag.prev > 0.0);
-    assert!(fusion.state.corrections.mag.avg.is_finite());
-    assert!(fusion.state.attitude.angle().is_finite());
+    assert_eq!(fusion.state.corrections.mag.prev, 0.0);
+    assert_eq!(fusion.state.corrections.mag.avg, 0.0);
+    assert_eq!(fusion.state.attitude.angle(), 0.0);
 }
 
 // #[test]

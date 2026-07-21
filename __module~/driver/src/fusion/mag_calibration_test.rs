@@ -26,7 +26,28 @@ fn mag_calibrator_corrects_synthetic_full_spd_distortion() {
 }
 
 #[test]
-fn mag_calibrator_returns_stable_warm_started_corrections() {
+fn mag_calibrator_corrects_asymmetrically_sampled_distortion() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+    let mut calibrator = MagCalibrator::<63>::new();
+    for i in 0..63 {
+        let theta = 0.37 + i as f32 * 1.21;
+        let z = -0.1 + i as f32 / 62.0;
+        let radius = (1.0 - z * z).sqrt();
+        let direction = Vector3::new(radius * theta.cos(), radius * theta.sin(), z);
+        let _ = calibrator.evaluate_correct(offset + distortion * direction, i as u64);
+    }
+
+    let expected = Vector3::new(1.0, -2.0, -1.0).normalize();
+    let corrected = calibrator
+        .evaluate_correct(offset + distortion * expected, 64)
+        .unwrap();
+
+    assert_vec_close(corrected, expected, 0.05);
+}
+
+#[test]
+fn mag_calibrator_returns_stable_direct_corrections() {
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
     let mut calibrator = seeded_calibrator::<63>(offset, distortion);
@@ -40,14 +61,19 @@ fn mag_calibrator_returns_stable_warm_started_corrections() {
 }
 
 #[test]
-fn mag_calibrator_returns_best_effort_result_for_degenerate_data() {
+fn mag_calibrator_rejects_degenerate_data() {
     let mut calibrator = MagCalibrator::<9>::new();
     let result = (0..9)
         .map(|timestamp_us| calibrator.evaluate_correct(Vector3::new(5.0, 6.0, 7.0), timestamp_us))
         .last()
         .unwrap();
 
-    assert_finite_result_or_bad_reading(result);
+    assert!(matches!(
+        result,
+        Err(BadMagCause::BadCalibration(
+            BadCalibration::Unsolveable { .. }
+        ))
+    ));
 }
 
 #[test]
@@ -71,7 +97,7 @@ fn mag_calibrator_waits_for_the_full_buffer_after_reaching_the_model_minimum() {
 }
 
 #[test]
-fn mag_calibrator_returns_best_effort_result_for_nearly_collinear_samples() {
+fn mag_calibrator_rejects_nearly_collinear_samples() {
     let mut calibrator = MagCalibrator::<12>::new();
     let mut result = None;
     for i in 0..12 {
@@ -82,7 +108,12 @@ fn mag_calibrator_returns_best_effort_result_for_nearly_collinear_samples() {
         ));
     }
 
-    assert_finite_result_or_bad_reading(result.unwrap());
+    assert!(matches!(
+        result.unwrap(),
+        Err(BadMagCause::BadCalibration(
+            BadCalibration::DegenerateSoftIronMatrix { .. }
+        ))
+    ));
 }
 
 #[test]
@@ -192,12 +223,4 @@ fn assert_vec_close(actual: Vector3<f32>, expected: Vector3<f32>, tolerance: f32
         expected.transpose(),
         diff
     );
-}
-
-fn assert_finite_result_or_bad_reading(result: Result<Vector3<f32>, BadMagCause>) {
-    match result {
-        Ok(corrected) => assert!(corrected.iter().all(|value| value.is_finite())),
-        Err(BadMagCause::BadReading(_)) => {}
-        Err(error) => panic!("expected a best-effort correction result, got {error:?}"),
-    }
 }
