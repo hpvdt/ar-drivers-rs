@@ -92,7 +92,7 @@ impl NaiveCF {
 
     //CAUTION: right-multiplication means rotation, unconventionally
 
-    fn update_gyro_rub(&mut self, gyro_rub: &Vector3<f32>, t: u64) -> () {
+    fn update_gyro(&mut self, gyro_rub: &Vector3<f32>, t: u64) -> () {
         let gyro = rub_to_frd(gyro_rub);
 
         let d_t1 = t - self.prev_gyro.1;
@@ -316,7 +316,8 @@ impl Fusion for NaiveCF {
                 gyroscope,
                 timestamp,
             } => {
-                self.update_gyro_rub(&gyroscope, timestamp);
+                self.update_gyro(&gyroscope, timestamp);
+                // TODO: need an update_acc that avoid yaw?
                 self.update_acc(&accelerometer, timestamp);
                 self.renormalize();
             }

@@ -225,3 +225,21 @@ fn dummy_mag_calibration_long() {
         .collect();
     print_avg_stats(&runs);
 }
+
+#[test]
+#[serial]
+fn dummy_mag_calibration_regression() {
+    let fixedSeed: Vec<u64> = vec![12917596427754275728];
+
+    let runs: Vec<RunStats> = fixedSeed
+        .into_iter()
+        .map(|seed| {
+            let mut config = DummyConfig::default();
+            config.seed = seed;
+            dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_seconds(
+                config,
+            )
+        })
+        .collect();
+    print_avg_stats(&runs);
+}
