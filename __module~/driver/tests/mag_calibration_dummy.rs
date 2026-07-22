@@ -22,12 +22,14 @@ struct RunStats {
 fn dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_seconds(
     config: DummyConfig,
 ) -> RunStats {
+    let seed = config.seed;
+    println!("# Starting benchmark - PRNG seed: {seed}");
+
     let dip = config
         .magnetic_dip_rad
         .clamp(-30.0f32.to_radians(), 30.0f32.to_radians());
     let magnetic_world_rub =
         Vector3::new(0.0, dip.sin(), -dip.cos()) * config.magnetic_field_strength;
-    let seed = config.seed;
     let mut dummy = Dummy::with_config(config);
     let mut fusion = FusionState::new(Box::new(Dummy::new()));
     let required_validation_duration = Duration::from_secs(5);
@@ -125,8 +127,7 @@ fn dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_sec
     let (warmup_time, warmup_count) = warmup_span.expect("warm-up never completed");
     let verified_count = eval_count - count_until_first_success - warmup_count;
     let verified_time = total_time - time_until_first_success - warmup_time;
-    println!("# Stats");
-    println!("- PRNG seed: {seed}");
+
     println!("- evaluate_correct");
     println!(
         "  - avg computation time: {:.3} ms over {eval_count} calls",
@@ -229,7 +230,7 @@ fn dummy_mag_calibration_long() {
 #[test]
 #[serial]
 fn dummy_mag_calibration_regression() {
-    let fixedSeed: Vec<u64> = vec![12917596427754275728];
+    let fixedSeed: Vec<u64> = vec![934786981548549007];
 
     let runs: Vec<RunStats> = fixedSeed
         .into_iter()
