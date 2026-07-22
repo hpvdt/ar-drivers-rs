@@ -56,7 +56,7 @@ $$
 
 Centering and scaling keep the direct solve independent of the sensor units and
 reduce its numerical condition. A non-finite or zero $r$ is rejected. The
-condition number of the centered sample covariance must not exceed $10^6$.
+condition number of the centered sample covariance must not exceed $10^2$.
 
 Let $Q$ be a symmetric ellipsoid shape matrix and $q$ its linear term. The
 normalized samples obey
@@ -120,13 +120,13 @@ $$
 
 The principal symmetric positive-definite square root is computed once from the
 eigendecomposition of $M$. The correction matrix condition number must not exceed
-$10^3$, and the RMS radial residual
+$10$, and the RMS radial residual
 
 $$
 \sqrt{\frac{1}{n}\sum_i\left(\left\|A(x_i-b)\right\|-1\right)^2}
 $$
 
-must not exceed $0.25$. Before the first successful calibration, failed solves and
+must not exceed $0.1$. Before the first successful calibration, failed solves and
 rejected candidates return a specific `BadCalibration`. Later rejected candidates
 leave the persisted calibration unchanged and the reading uses that last accepted
 state. An incomplete sample buffer still returns `InsufficientSamples`. Successful

@@ -4,9 +4,9 @@ use super::bad_mag_cause::{BadCalibration, BadMagCause, BadReading};
 
 const CALIBRATION_PARAMETER_COUNT: usize = 9;
 const SHAPE_REGULARIZATION: f32 = 1.0e-4;
-const MAX_SAMPLE_CONDITION: f32 = 1.0e6;
-const MAX_CORRECTION_CONDITION: f32 = 1.0e3;
-const MAX_RADIAL_RMS: f32 = 0.25;
+const MAX_SAMPLE_CONDITION: f32 = 1.0e2;
+const MAX_CORRECTION_CONDITION: f32 = 1.0e1;
+const MAX_RADIAL_RMS: f32 = 0.1;
 const MIN_MAG_NORM: f32 = 0.4;
 
 /// Direct regularized ellipsoid fit for a hard-iron offset and full SPD

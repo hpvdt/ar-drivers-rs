@@ -104,8 +104,8 @@ fn dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_sec
         }
         let angle_degrees = angle_degrees.unwrap();
         assert!(
-            angle_degrees <= 30.0,
-            "corrected magnetometer exceeded 30 degrees at timestamp={timestamp}: angle_degrees={angle_degrees}"
+            angle_degrees <= 20.0,
+            "corrected magnetometer exceeded 20 degrees at timestamp={timestamp}: angle_degrees={angle_degrees}"
         );
         let start = *validation_start.get_or_insert_with(Instant::now);
         worst_angle_degrees = worst_angle_degrees.max(angle_degrees);
