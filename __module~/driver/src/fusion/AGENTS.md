@@ -126,10 +126,12 @@ $$
 \sqrt{\frac{1}{n}\sum_i\left(\left\|A(x_i-b)\right\|-1\right)^2}
 $$
 
-must not exceed $0.25$. Failed solves and rejected candidates return a specific
-`BadCalibration` and leave the previously persisted calibration state unchanged.
-Successful calibration persists $b$ and $A$ directly; correcting a reading then
-requires one matrix-vector multiplication:
+must not exceed $0.25$. Before the first successful calibration, failed solves and
+rejected candidates return a specific `BadCalibration`. Later rejected candidates
+leave the persisted calibration unchanged and the reading uses that last accepted
+state. An incomplete sample buffer still returns `InsufficientSamples`. Successful
+calibration persists $b$ and $A$ directly; correcting a reading then requires one
+matrix-vector multiplication:
 
 $$
 m=A(x-b).

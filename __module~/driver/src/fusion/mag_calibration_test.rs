@@ -117,6 +117,22 @@ fn mag_calibrator_rejects_nearly_collinear_samples() {
 }
 
 #[test]
+fn mag_calibrator_keeps_last_correction_after_rejected_refit() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+    let mut calibrator = seeded_calibrator::<12>(offset, distortion).max_sample_lifespan_us(0);
+    let mut result = None;
+    let expected = Vector3::x();
+    let raw = offset + distortion * expected;
+
+    for _ in 0..12 {
+        result = Some(calibrator.evaluate_correct(raw, 1));
+    }
+
+    assert_vec_close(result.unwrap().unwrap(), expected, 0.05);
+}
+
+#[test]
 fn mag_calibrator_clamps_neighbor_count_through_public_result() {
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);

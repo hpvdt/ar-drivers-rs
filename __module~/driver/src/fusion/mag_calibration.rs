@@ -17,6 +17,7 @@ pub struct MagCalibrator<const N: usize> {
     matrix_filled: usize,
     hard_iron_offset: Vector3<f32>,
     soft_iron_correction: Matrix3<f32>,
+    calibration_initialized: bool,
     mean_distance: f32,
     k: usize,
     max_sample_lifespan_us: u64,
@@ -30,6 +31,7 @@ impl<const N: usize> Default for MagCalibrator<N> {
             matrix_filled: Default::default(),
             hard_iron_offset: Vector3::zeros(),
             soft_iron_correction: Matrix3::identity(),
+            calibration_initialized: false,
             mean_distance: Default::default(),
             k: 2, // Works well in testing
             max_sample_lifespan_us: 60 * 60 * 1_000_000,
@@ -182,7 +184,13 @@ impl<const N: usize> MagCalibrator<N> {
         timestamp_us: u64,
     ) -> Result<Vector3<f32>, BadMagCause> {
         self.evaluate_sample_vec(raw_mag, timestamp_us);
-        self.perform_calibration()?;
+        if let Err(error) = self.perform_calibration() {
+            if !self.calibration_initialized
+                || matches!(error, BadCalibration::InsufficientSamples { .. })
+            {
+                return Err(error.into());
+            }
+        }
         let mag = self.soft_iron_correction * (raw_mag - self.hard_iron_offset);
 
         let mag_norm = mag.norm();
@@ -343,6 +351,7 @@ impl<const N: usize> MagCalibrator<N> {
 
         self.hard_iron_offset = offset;
         self.soft_iron_correction = correction;
+        self.calibration_initialized = true;
         Ok(())
     }
 
