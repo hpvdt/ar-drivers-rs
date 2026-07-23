@@ -230,7 +230,7 @@ fn dummy_mag_calibration_long() {
 #[test]
 #[serial]
 fn dummy_mag_calibration_regression() {
-    let fixedSeed: Vec<u64> = vec![934786981548549007];
+    let fixedSeed: Vec<u64> = vec![934786981548549007, 320366629120039532];
 
     let runs: Vec<RunStats> = fixedSeed
         .into_iter()
