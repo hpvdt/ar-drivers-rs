@@ -99,20 +99,24 @@ the solver minimizes the regularized algebraic least-squares objective
 $$
 J(\theta)
 =\frac{1}{2n}\sum_i\left(\phi(u_i)^T\theta-1\right)^2
-+\frac{\lambda}{2}\left\|Q-I\right\|_F^2,
-\qquad \lambda=10^{-4}.
++\frac{\lambda}{2}\left\|Q-cI\right\|_F^2,
+\qquad \lambda=10^{-3},
+\qquad c=2.
 $$
 
-The Frobenius regularization targets the identity shape — the exact fit for
-ideal normalized samples — instead of the non-positive-definite zero matrix,
-biasing candidates away from indefinite shapes while keeping the entire
-objective quadratic. If $R=\operatorname{diag}(1,1,1,2,2,2,0,0,0)$ and
+The Frobenius regularization targets a scaled identity shape instead of the
+non-positive-definite zero matrix, biasing candidates away from indefinite
+shapes while keeping the entire objective quadratic. The target scale $c>1$
+counters the systematic ellipsoid inflation of algebraic fits under noise
+(they underestimate the eigenvalues of $Q$); the identity shape is only the
+exact fit for noise-free ideal normalized samples. If
+$R=\operatorname{diag}(1,1,1,2,2,2,0,0,0)$ and
 $e_d=[1,1,1,0,0,0,0,0,0]^T$, the unique candidate is obtained with one
 direct linear solve:
 
 $$
 \left(\frac{1}{n}\sum_i\phi_i\phi_i^T+\lambda R\right)\theta
-=\frac{1}{n}\sum_i\phi_i+\lambda e_d.
+=\frac{1}{n}\sum_i\phi_i+\lambda c\,e_d.
 $$
 
 There are no alternating sweeps, warm starts, parameter clamps, or convergence

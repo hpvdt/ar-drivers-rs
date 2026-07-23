@@ -3,7 +3,12 @@ use nalgebra::{Matrix3, SMatrix, SMatrixView, SVector, Vector3};
 use super::bad_mag_cause::{BadCalibration, BadMagCause, BadReading};
 
 const CALIBRATION_PARAMETER_COUNT: usize = 9;
-const SHAPE_REGULARIZATION: f32 = 1.0e-4;
+const SHAPE_REGULARIZATION: f32 = 1.0e-3;
+/// Scale of the regularization target shape, in units of the identity.
+/// Algebraic ellipsoid fits under noise systematically inflate the ellipsoid
+/// (underestimate the eigenvalues of the shape matrix), so the prior centers
+/// on a shape larger than the ideal sphere to counter that bias.
+const SHAPE_PRIOR_SCALE: f32 = 2.0;
 const MAX_SAMPLE_CONDITION: f32 = 1.0e2;
 const MAX_CORRECTION_CONDITION: f32 = 1.0e1;
 const MAX_RADIAL_RMS: f32 = 0.1;
@@ -268,16 +273,14 @@ impl<const N: usize> MagCalibrator<N> {
         }
         normal /= sample_count as f32;
         right_hand_side /= sample_count as f32;
-        // Regularize toward the identity shape, the exact fit for ideal
-        // normalized samples, rather than toward the (non-PD) zero matrix.
-        // The quadratic part is unchanged; the linear -λ·tr(Q) term moves
-        // to the right-hand side, biasing candidates away from indefinite
-        // shapes while keeping a single direct solve.
+        // Regularize toward a scaled identity shape rather than toward the
+        // (non-PD) zero matrix. The quadratic part is unchanged; the linear
+        // term moves to the right-hand side, keeping a single direct solve.
         for (index, weight) in [1.0, 1.0, 1.0, 2.0, 2.0, 2.0].into_iter().enumerate() {
             normal[(index, index)] += SHAPE_REGULARIZATION * weight;
         }
         for index in 0..3 {
-            right_hand_side[index] += SHAPE_REGULARIZATION;
+            right_hand_side[index] += SHAPE_REGULARIZATION * SHAPE_PRIOR_SCALE;
         }
 
         let parameters = normal
