@@ -119,9 +119,9 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     /// Evaluates whether the new sample should replace one already in the buffer.
-    pub fn evaluate_sample(&mut self, x: [f32; 3], timestamp_us: u64) {
-        self.evaluate_sample_vec(Vector3::from(x), timestamp_us)
-    }
+    // pub fn evaluate_sample(&mut self, x: [f32; 3], timestamp_us: u64) {
+    //     self.evaluate_sample_vec(Vector3::from(x), timestamp_us)
+    // }
 
     /// Add a sample if it is deemed more useful than the least useful sample.
     pub fn evaluate_sample_vec(&mut self, x: Vector3<f32>, timestamp_us: u64) {
@@ -268,8 +268,16 @@ impl<const N: usize> MagCalibrator<N> {
         }
         normal /= sample_count as f32;
         right_hand_side /= sample_count as f32;
+        // Regularize toward the identity shape, the exact fit for ideal
+        // normalized samples, rather than toward the (non-PD) zero matrix.
+        // The quadratic part is unchanged; the linear -λ·tr(Q) term moves
+        // to the right-hand side, biasing candidates away from indefinite
+        // shapes while keeping a single direct solve.
         for (index, weight) in [1.0, 1.0, 1.0, 2.0, 2.0, 2.0].into_iter().enumerate() {
             normal[(index, index)] += SHAPE_REGULARIZATION * weight;
+        }
+        for index in 0..3 {
+            right_hand_side[index] += SHAPE_REGULARIZATION;
         }
 
         let parameters = normal

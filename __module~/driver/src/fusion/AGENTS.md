@@ -58,8 +58,24 @@ Centering and scaling keep the direct solve independent of the sensor units and
 reduce its numerical condition. A non-finite or zero $r$ is rejected. The
 condition number of the centered sample covariance must not exceed $10^2$.
 
-Let $Q$ be a symmetric ellipsoid shape matrix and $q$ its linear term. The
-normalized samples obey
+Let $Q$ be a symmetric ellipsoid shape matrix and $q$ its linear term.
+Substituting the physical model $x_i=b+Dm_i$ with $A=D^{-1}$ into the
+normalization $u_i=(x_i-\mu)/r$ and expanding $\left\|A(x_i-b)\right\|^2=1$
+shows their physical content:
+
+$$
+Q=\gamma r^2A^2,
+\qquad
+q=-2Qd,
+\qquad
+d=\frac{b-\mu}{r},
+\qquad
+\gamma=1+d^TQd,
+$$
+
+so $Q$ is the squared correction matrix in normalized units, $d$ is the
+normalized hard-iron center, and $\gamma$ the ellipsoid scale. The normalized
+samples obey
 
 $$
 u_i^T Q u_i + q^T u_i = 1.
@@ -83,17 +99,20 @@ the solver minimizes the regularized algebraic least-squares objective
 $$
 J(\theta)
 =\frac{1}{2n}\sum_i\left(\phi(u_i)^T\theta-1\right)^2
-+\frac{\lambda}{2}\left\|Q\right\|_F^2,
++\frac{\lambda}{2}\left\|Q-I\right\|_F^2,
 \qquad \lambda=10^{-4}.
 $$
 
-This retains Frobenius regularization on the soft-iron shape while making the
-entire objective quadratic. If $R=\operatorname{diag}(1,1,1,2,2,2,0,0,0)$,
-the unique candidate is obtained with one direct linear solve:
+The Frobenius regularization targets the identity shape — the exact fit for
+ideal normalized samples — instead of the non-positive-definite zero matrix,
+biasing candidates away from indefinite shapes while keeping the entire
+objective quadratic. If $R=\operatorname{diag}(1,1,1,2,2,2,0,0,0)$ and
+$e_d=[1,1,1,0,0,0,0,0,0]^T$, the unique candidate is obtained with one
+direct linear solve:
 
 $$
 \left(\frac{1}{n}\sum_i\phi_i\phi_i^T+\lambda R\right)\theta
-=\frac{1}{n}\sum_i\phi_i.
+=\frac{1}{n}\sum_i\phi_i+\lambda e_d.
 $$
 
 There are no alternating sweeps, warm starts, parameter clamps, or convergence
