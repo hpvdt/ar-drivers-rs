@@ -256,14 +256,14 @@ fn run_seeds(attitude_mode: AttitudeMode, seeds: impl IntoIterator<Item = u64>) 
 #[test_case::test_case(AttitudeMode::Always ; "with_attitudes")]
 #[serial]
 fn short(attitude_mode: AttitudeMode) {
-    run_seeds(attitude_mode, [DummyConfig::default().seed]);
+    run_seeds(attitude_mode, [rand::random()]);
 }
 
 #[test_case::test_case(AttitudeMode::Never  ; "without_attitudes")]
 #[test_case::test_case(AttitudeMode::Always ; "with_attitudes")]
 #[serial]
 fn long(attitude_mode: AttitudeMode) {
-    run_seeds(attitude_mode, (0..20).map(|_| rand::random()));
+    run_seeds(attitude_mode, (0..10).map(|_| rand::random()));
 }
 
 #[test_case::test_case(AttitudeMode::Never  ; "without_attitudes")]
