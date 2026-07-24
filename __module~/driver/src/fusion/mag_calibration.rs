@@ -1,4 +1,4 @@
-use nalgebra::{Matrix3, SMatrix, SMatrixView, SVector, Vector3};
+use nalgebra::{Matrix3, SMatrix, SMatrixView, SVector, UnitQuaternion, Vector3};
 
 use super::bad_mag_cause::{BadCalibration, BadMagCause, BadReading};
 
@@ -13,11 +13,27 @@ const MAX_SAMPLE_CONDITION: f32 = 1.0e2;
 const MAX_CORRECTION_CONDITION: f32 = 1.0e1;
 const MAX_RADIAL_RMS: f32 = 0.1;
 const MIN_MAG_NORM: f32 = 0.4;
+/// Maximum radial RMS increase the refinement may introduce over the direct
+/// candidate. A large radial sacrifice means the consistency term is fighting
+/// the sample geometry rather than complementing it — the refined fit then
+/// degrades exactly where the ellipsoid objective is informative.
+const MAX_REFINEMENT_RADIAL_RMS_INCREASE: f32 = 0.005;
+/// Levenberg damping of the joint refinement, relative to the normal
+/// matrix diagonal. Keeps the linearized step near the candidate, where
+/// the linear model is valid, and guards against poorly conditioned
+/// directions of the joint objective.
+const REFINEMENT_DAMPING: f32 = 1.0e-2;
 
 /// Direct regularized ellipsoid fit for a hard-iron offset and full SPD
 /// soft-iron correction from a fixed, diverse sample buffer.
+///
+/// Each sample may optionally be tagged with the fused body-to-world
+/// attitude quaternion at sample time. Attitude-tagged samples enable a
+/// one-shot linearized refinement that co-optimizes the radial ellipsoid
+/// objective with world-frame field consistency.
 pub struct MagCalibrator<const N: usize> {
     matrix: SMatrix<f32, N, 3>,
+    sample_attitudes: [Option<UnitQuaternion<f32>>; N],
     sample_timestamps_us: [u64; N],
     matrix_filled: usize,
     hard_iron_offset: Vector3<f32>,
@@ -26,12 +42,14 @@ pub struct MagCalibrator<const N: usize> {
     mean_distance: f32,
     k: usize,
     max_sample_lifespan_us: u64,
+    attitude_weight: f32,
 }
 
 impl<const N: usize> Default for MagCalibrator<N> {
     fn default() -> Self {
         Self {
             matrix: SMatrix::zeros(),
+            sample_attitudes: std::array::from_fn(|_| None),
             sample_timestamps_us: [0; N],
             matrix_filled: Default::default(),
             hard_iron_offset: Vector3::zeros(),
@@ -40,6 +58,11 @@ impl<const N: usize> Default for MagCalibrator<N> {
             mean_distance: Default::default(),
             k: 2, // Works well in testing
             max_sample_lifespan_us: 60 * 60 * 1_000_000,
+            // Small enough to only nudge a well-conditioned radial fit, where
+            // both terms would otherwise fit the same noise twice; large
+            // enough to dominate the step along directions where the radial
+            // objective is flat (partial coverage).
+            attitude_weight: 0.1,
         }
     }
 }
@@ -63,6 +86,16 @@ impl<const N: usize> MagCalibrator<N> {
     pub fn max_sample_lifespan_us(self, max_sample_lifespan_us: u64) -> Self {
         Self {
             max_sample_lifespan_us,
+            ..self
+        }
+    }
+
+    /// Configure the relative weight of the world-frame attitude-consistency
+    /// term in the refinement objective. The default is 0.1; zero disables
+    /// the consistency term.
+    pub fn attitude_weight(self, attitude_weight: f32) -> Self {
+        Self {
+            attitude_weight: attitude_weight.max(0.0),
             ..self
         }
     }
@@ -123,13 +156,20 @@ impl<const N: usize> MagCalibrator<N> {
             .unwrap()
     }
 
-    /// Evaluates whether the new sample should replace one already in the buffer.
     // pub fn evaluate_sample(&mut self, x: [f32; 3], timestamp_us: u64) {
-    //     self.evaluate_sample_vec(Vector3::from(x), timestamp_us)
+    //     self.evaluate_sample_vec(Vector3::from(x), None, timestamp_us)
     // }
 
     /// Add a sample if it is deemed more useful than the least useful sample.
-    pub fn evaluate_sample_vec(&mut self, x: Vector3<f32>, timestamp_us: u64) {
+    ///
+    /// `attitude` is the optional fused body-to-world rotation at sample
+    /// time, used by the joint refinement stage.
+    pub fn evaluate_sample_vec(
+        &mut self,
+        x: Vector3<f32>,
+        attitude: Option<UnitQuaternion<f32>>,
+        timestamp_us: u64,
+    ) {
         let mut retained = 0;
         for index in 0..self.matrix_filled {
             if timestamp_us.saturating_sub(self.sample_timestamps_us[index])
@@ -139,6 +179,7 @@ impl<const N: usize> MagCalibrator<N> {
                     for column in 0..3 {
                         self.matrix[(retained, column)] = self.matrix[(index, column)];
                     }
+                    self.sample_attitudes[retained] = self.sample_attitudes[index];
                     self.sample_timestamps_us[retained] = self.sample_timestamps_us[index];
                 }
                 retained += 1;
@@ -154,7 +195,7 @@ impl<const N: usize> MagCalibrator<N> {
         }
         // Check if buffer is not yet "initialized" with real measurements
         if self.matrix_filled < N {
-            self.add_sample_at(self.matrix_filled, x, timestamp_us);
+            self.add_sample_at(self.matrix_filled, x, attitude, timestamp_us);
             self.matrix_filled += 1;
         }
         // Otherwise check which sample may be best to replace
@@ -162,17 +203,24 @@ impl<const N: usize> MagCalibrator<N> {
             let (low_index, low_mean_dist) = self.lowest_mean_distance_by_index();
             let sample_mean_dist = self.mean_distance_from_single(x.transpose());
             if low_mean_dist < sample_mean_dist {
-                self.add_sample_at(low_index, x, timestamp_us);
+                self.add_sample_at(low_index, x, attitude, timestamp_us);
             }
         }
     }
 
     /// Insert a sample vector into `index` row of buffer matrix.
-    fn add_sample_at(&mut self, index: usize, sample: Vector3<f32>, timestamp_us: u64) {
+    fn add_sample_at(
+        &mut self,
+        index: usize,
+        sample: Vector3<f32>,
+        attitude: Option<UnitQuaternion<f32>>,
+        timestamp_us: u64,
+    ) {
         if index < N {
             self.matrix[(index, 0)] = sample[0];
             self.matrix[(index, 1)] = sample[1];
             self.matrix[(index, 2)] = sample[2];
+            self.sample_attitudes[index] = attitude;
             self.sample_timestamps_us[index] = timestamp_us;
         }
     }
@@ -183,12 +231,17 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     /// Calibrates a magnetometer vector that has already been converted to FRD.
+    ///
+    /// `attitude` is the optional fused body-to-world rotation at sample
+    /// time; when supplied, the buffered attitudes enable joint refinement
+    /// of the ellipsoid fit against world-frame field consistency.
     pub fn evaluate_correct(
         &mut self,
         raw_mag: Vector3<f32>,
+        attitude: Option<UnitQuaternion<f32>>,
         timestamp_us: u64,
     ) -> Result<Vector3<f32>, BadMagCause> {
-        self.evaluate_sample_vec(raw_mag, timestamp_us);
+        self.evaluate_sample_vec(raw_mag, attitude, timestamp_us);
         if let Err(error) = self.perform_calibration() {
             if !self.calibration_initialized
                 || matches!(error, BadCalibration::InsufficientSamples { .. })
@@ -360,10 +413,229 @@ impl<const N: usize> MagCalibrator<N> {
             });
         }
 
+        let (correction, offset) = self.refine_with_attitudes(correction, offset, sample_count);
+
         self.hard_iron_offset = offset;
         self.soft_iron_correction = correction;
         self.calibration_initialized = true;
         Ok(())
+    }
+
+    /// One-shot linearized joint refinement of a validated direct candidate.
+    ///
+    /// Minimizes, over symmetric correction `A`, offset `b`, and world field
+    /// magnitude `alpha`, the joint objective
+    ///
+    /// ```text
+    /// J(A, b, alpha) = sum_i (|A(x_i - b)| - 1)^2
+    ///                + attitude_weight * sum_{i: attitude} |R_i A(x_i - b) - alpha * d|^2
+    /// ```
+    ///
+    /// where `d` is the candidate's mean world field. The world field
+    /// direction is pinned to `d`: with a freely varying world vector, any
+    /// common rotation of the corrected samples is re-absorbed into `h`, and
+    /// under single-axis (yaw-dominated) motion the same holds for any
+    /// correction symmetric about the rotation axis — the objective would
+    /// have a near-flat valley along exactly the heading errors the
+    /// consistency term is meant to penalize. Absolute heading is not
+    /// observable from this data, so nothing is lost by pinning the
+    /// direction; the magnitude stays free because the radial term pins it.
+    ///
+    /// Both terms are linearized around the candidate, giving a single 10x10
+    /// direct solve for [dA (6 symmetric), db (3), d_alpha (1)]. Returns the
+    /// refined pair only when it is finite, SPD, well-conditioned, radially
+    /// valid, and lowers the joint objective; otherwise returns the candidate
+    /// unchanged, so the worst case is exactly the direct-solve behavior.
+    fn refine_with_attitudes(
+        &self,
+        correction: Matrix3<f32>,
+        offset: Vector3<f32>,
+        sample_count: usize,
+    ) -> (Matrix3<f32>, Vector3<f32>) {
+        let attitude_count = (0..sample_count)
+            .filter(|&row| self.sample_attitudes[row].is_some())
+            .count();
+        if attitude_count == 0 {
+            return (correction, offset);
+        }
+
+        let mean_world = (0..sample_count)
+            .filter_map(|row| {
+                self.sample_attitudes[row]
+                    .map(|attitude| attitude * (correction * (self.sample(row) - offset)))
+            })
+            .fold(Vector3::zeros(), |sum, world| sum + world)
+            / attitude_count as f32;
+        if !mean_world.iter().all(|value| value.is_finite())
+            || mean_world.norm_squared() <= f32::EPSILON
+        {
+            return (correction, offset);
+        }
+
+        let weight = self.attitude_weight.sqrt();
+        let mut normal = SMatrix::<f32, 10, 10>::zeros();
+        let mut right_hand_side = SVector::<f32, 10>::zeros();
+        for row in 0..sample_count {
+            let centered = self.sample(row) - offset;
+            let calibrated = correction * centered;
+            let norm = calibrated.norm();
+            if !norm.is_finite() || norm <= f32::EPSILON {
+                return (correction, offset);
+            }
+            // Column `a` is the image of `centered` under the a-th element of
+            // the six-element symmetric basis (e11, e22, e33, e12, e13, e23).
+            let symmetric_basis = SMatrix::<f32, 3, 6>::new(
+                centered.x, 0.0, 0.0, centered.y, centered.z, 0.0, 0.0, centered.y, 0.0,
+                centered.x, 0.0, centered.z, 0.0, 0.0, centered.z, 0.0, centered.x, centered.y,
+            );
+            let direction = calibrated / norm;
+            let mut jacobian = SVector::<f32, 10>::zeros();
+            jacobian
+                .fixed_rows_mut::<6>(0)
+                .copy_from(&(direction.transpose() * symmetric_basis).transpose());
+            jacobian
+                .fixed_rows_mut::<3>(6)
+                .copy_from(&(-(direction.transpose() * correction)).transpose());
+            let residual = norm - 1.0;
+            normal += jacobian * jacobian.transpose();
+            right_hand_side -= jacobian * residual;
+
+            if let Some(attitude) = self.sample_attitudes[row] {
+                let rotation = *attitude.to_rotation_matrix().matrix();
+                let mut jacobian = SMatrix::<f32, 3, 10>::zeros();
+                jacobian
+                    .fixed_columns_mut::<6>(0)
+                    .copy_from(&(rotation * symmetric_basis));
+                jacobian
+                    .fixed_columns_mut::<3>(6)
+                    .copy_from(&(-(rotation * correction)));
+                jacobian.fixed_columns_mut::<1>(9).copy_from(&(-mean_world));
+                let residual = rotation * calibrated - mean_world;
+                let jacobian = jacobian * weight;
+                normal += jacobian.transpose() * jacobian;
+                right_hand_side -= jacobian.transpose() * residual;
+            }
+        }
+
+        for index in 0..10 {
+            normal[(index, index)] *= 1.0 + REFINEMENT_DAMPING;
+        }
+        let delta = match normal.cholesky() {
+            Some(cholesky) => cholesky.solve(&right_hand_side),
+            None => return (correction, offset),
+        };
+        if !delta.iter().all(|value| value.is_finite()) {
+            return (correction, offset);
+        }
+
+        // The linearized model is only valid near the candidate, so the full
+        // Gauss-Newton step can overshoot the true radial objective. Try the
+        // step, then a few halvings, against the true acceptance tests; the
+        // descent direction guarantees a small enough step passes or none
+        // does, in which case the candidate is already a local optimum.
+        let candidate_objective =
+            self.joint_objective(&correction, &offset, sample_count, &mean_world);
+        let candidate_radial_rms = ((0..sample_count)
+            .map(|row| {
+                let residual = (correction * (self.sample(row) - offset)).norm() - 1.0;
+                residual * residual
+            })
+            .sum::<f32>()
+            / sample_count as f32)
+            .sqrt();
+        let mut step = 1.0f32;
+        for _ in 0..4 {
+            let scaled = delta * step;
+            let refined_correction = correction
+                + Matrix3::new(
+                    scaled[0], scaled[3], scaled[4], scaled[3], scaled[1], scaled[5], scaled[4],
+                    scaled[5], scaled[2],
+                );
+            let refined_offset = offset + scaled.fixed_rows::<3>(6);
+            if !refined_correction.iter().all(|value| value.is_finite())
+                || !refined_offset.iter().all(|value| value.is_finite())
+            {
+                step *= 0.5;
+                continue;
+            }
+            if refined_correction.cholesky().is_none() {
+                step *= 0.5;
+                continue;
+            }
+            let refined_condition =
+                Self::condition_number(&refined_correction.symmetric_eigen().eigenvalues);
+            if refined_condition > MAX_CORRECTION_CONDITION {
+                step *= 0.5;
+                continue;
+            }
+            let refined_radial_rms = ((0..sample_count)
+                .map(|row| {
+                    let residual =
+                        (refined_correction * (self.sample(row) - refined_offset)).norm() - 1.0;
+                    residual * residual
+                })
+                .sum::<f32>()
+                / sample_count as f32)
+                .sqrt();
+            if !refined_radial_rms.is_finite()
+                || refined_radial_rms > MAX_RADIAL_RMS
+                || refined_radial_rms > candidate_radial_rms + MAX_REFINEMENT_RADIAL_RMS_INCREASE
+            {
+                step *= 0.5;
+                continue;
+            }
+            if self.joint_objective(
+                &refined_correction,
+                &refined_offset,
+                sample_count,
+                &mean_world,
+            ) < candidate_objective
+            {
+                return (refined_correction, refined_offset);
+            }
+            step *= 0.5;
+        }
+        (correction, offset)
+    }
+
+    /// Joint radial-plus-consistency objective used to compare the direct
+    /// candidate against its refinement. The world field is constrained to
+    /// the fixed `world_direction` (the candidate's mean world field); its
+    /// magnitude is eliminated in closed form as the least-squares optimal
+    /// scale along that direction.
+    fn joint_objective(
+        &self,
+        correction: &Matrix3<f32>,
+        offset: &Vector3<f32>,
+        sample_count: usize,
+        world_direction: &Vector3<f32>,
+    ) -> f32 {
+        let mut radial = 0.0;
+        let mut attitude_count = 0usize;
+        let direction_squared = world_direction.norm_squared();
+        let mut projection_sum = 0.0;
+        for row in 0..sample_count {
+            let calibrated = correction * (self.sample(row) - offset);
+            let residual = calibrated.norm() - 1.0;
+            radial += residual * residual;
+            if let Some(attitude) = self.sample_attitudes[row] {
+                projection_sum += (attitude * calibrated).dot(world_direction);
+                attitude_count += 1;
+            }
+        }
+        if attitude_count == 0 || direction_squared <= f32::EPSILON {
+            return radial;
+        }
+        let scale = projection_sum / (attitude_count as f32 * direction_squared);
+        let mut consistency = 0.0;
+        for row in 0..sample_count {
+            if let Some(attitude) = self.sample_attitudes[row] {
+                consistency += (attitude * (correction * (self.sample(row) - offset))
+                    - scale * world_direction)
+                    .norm_squared();
+            }
+        }
+        radial + self.attitude_weight * consistency
     }
 
     fn sample(&self, row: usize) -> Vector3<f32> {

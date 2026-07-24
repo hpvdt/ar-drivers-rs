@@ -22,8 +22,9 @@ The library uses multiple coordinate reference frames:
 
 ### Magnetometer Calibration (`mag_calibration.rs`)
 
-`MagCalibrator<N>` keeps a cache of finite, nonzero FRD magnetometer samples. Old
-samples expire according to `max_sample_lifespan_us`; after the cache is full, a
+`MagCalibrator<N>` keeps a cache of finite, nonzero FRD magnetometer samples, each
+optionally tagged with the fused body-to-world attitude quaternion at sample time.
+Old samples expire according to `max_sample_lifespan_us`; after the cache is full, a
 k-nearest-neighbor diversity heuristic decides whether a new sample should replace
 an existing one. Calibration requires `N.max(9)` retained samples, which means the
 entire cache must be populated and `N` must be at least 9.
@@ -120,7 +121,7 @@ $$
 $$
 
 There are no alternating sweeps, warm starts, parameter clamps, or convergence
-iterations.
+iterations in the direct solve.
 
 After solving, the normalized hard-iron center and ellipsoid metric are
 
@@ -152,7 +153,56 @@ $$
 must not exceed $0.1$. Before the first successful calibration, failed solves and
 rejected candidates return a specific `BadCalibration`. Later rejected candidates
 leave the persisted calibration unchanged and the reading uses that last accepted
-state. An incomplete sample buffer still returns `InsufficientSamples`. Successful
+state. An incomplete sample buffer still returns `InsufficientSamples`.
+
+### Attitude-based joint refinement
+
+When samples carry attitude tags $R_i$ (body-to-world at sample time), the
+corrected samples must agree in the world frame: $R_iA(x_i-b)=h$ for one constant
+Earth field $h$. A validated direct candidate $(A_0,b_0)$ is therefore refined by
+jointly minimizing, over symmetric $A$, $b$, and world-field scale $\alpha$,
+
+$$
+J(A,b,\alpha)
+=\sum_i\left(\left\|A(x_i-b)\right\|-1\right)^2
++\mu\sum_{i\in T}\left\|R_iA(x_i-b)-\alpha d\right\|^2,
+$$
+
+where $T$ is the attitude-tagged subset, $d$ the candidate's mean world field, and
+$\mu$ the configurable attitude weight (default $0.1$; zero disables the
+consistency term). The world-field direction is pinned to $d$: with a freely
+varying $h$, any common rotation of the corrected samples is re-absorbed into $h$,
+and under single-axis (yaw-dominated) motion the same holds for any correction
+symmetric about the rotation axis — the objective would have a near-flat valley
+along exactly the heading errors the consistency term is meant to penalize.
+Absolute heading is not observable from this data, so nothing is lost by pinning
+the direction; the magnitude stays free because the radial term pins it.
+
+Both terms are linearized around the candidate with $\alpha_0=1$, giving one
+damped $10\times10$ direct solve for
+$\delta=[\delta a\ (6\text{ symmetric}),\delta b\ (3),\delta\alpha\ (1)]^T$. With
+$v_i=x_i-b_0$, $m_i=A_0v_i$, $P(v)$ the $3\times6$ matrix whose columns are the
+images of $v$ under the symmetric basis $(e_{11},e_{22},e_{33},e_{12},e_{13},e_{23})$,
+the per-sample Jacobian rows are
+
+$$
+\hat m_i^T\begin{bmatrix}P(v_i)&-A_0&0\end{bmatrix},
+\qquad
+\sqrt{\mu}\begin{bmatrix}R_iP(v_i)&-R_iA_0&-d\end{bmatrix},
+$$
+
+for the radial residual $\left\|m_i\right\|-1$ and the consistency residual
+$R_im_i-d$. The normal matrix is Levenberg-damped
+($H\leftarrow H+10^{-2}\operatorname{diag}(H)$) to keep the step inside the region
+where the linearization is valid. The full step, then up to three halvings, is
+evaluated against the true (nonlinear) acceptance tests: the refined pair must be
+finite, positive definite, within the same correction condition and radial RMS
+limits, may not increase the radial RMS by more than $0.005$ over the candidate
+(a large radial sacrifice means the consistency term is fighting the sample
+geometry rather than complementing it), and must strictly decrease $J$. Otherwise
+the direct candidate is persisted, so the worst case is exactly the direct-solve
+behavior. This adds one direct solve and $O(n)$ acceptance evaluations per
+calibration — still no convergence iterations. Successful
 calibration persists $b$ and $A$ directly; correcting a reading then requires one
 matrix-vector multiplication:
 

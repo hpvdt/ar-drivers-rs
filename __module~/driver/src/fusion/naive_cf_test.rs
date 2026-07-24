@@ -34,7 +34,7 @@ fn get_calibrated_mag_discards_underconstrained_calibration() {
     let raw_mag = Vector3::new(5.0, 6.0, 7.0);
 
     assert!(matches!(
-        state.mag.evaluate_correct(raw_mag, 0),
+        state.mag.evaluate_correct(raw_mag, None, 0),
         Err(BadMagCause::BadCalibration(
             BadCalibration::InsufficientSamples {
                 samples: 1,
@@ -76,7 +76,8 @@ fn seeded_calibrator(offset: Vector3<f32>, scale: Vector3<f32>) -> MagCalibrator
     let mut calibrator = MagCalibrator::new();
     for i in 0..255 {
         let direction = sample_direction(i);
-        let _ = calibrator.evaluate_correct(offset + scale.component_mul(&direction), i as u64);
+        let _ =
+            calibrator.evaluate_correct(offset + scale.component_mul(&direction), None, i as u64);
     }
     calibrator
 }
@@ -87,6 +88,7 @@ fn nearly_collinear_calibrator() -> MagCalibrator<255> {
         let t = i as f32 * 0.0001;
         let _ = calibrator.evaluate_correct(
             Vector3::new(10.0 + t, -5.0 + 2.0 * t, 3.0 + 0.5 * t),
+            None,
             i as u64,
         );
     }
