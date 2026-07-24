@@ -38,10 +38,7 @@ struct RunStats {
     verified_count: u64,
 }
 
-fn dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_seconds(
-    config: DummyConfig,
-    attitude_mode: AttitudeMode,
-) -> RunStats {
+fn run_calibration(config: DummyConfig, attitude_mode: AttitudeMode) -> RunStats {
     let seed = config.seed;
     let mode_label = match attitude_mode {
         AttitudeMode::Always => "with attitudes",
@@ -240,108 +237,46 @@ fn print_avg_stats(runs: &[RunStats]) {
     );
 }
 
-#[test]
-#[serial]
-fn dummy_mag_calibration_short_without_attitudes() {
-    dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_seconds(
-        DummyConfig::default(),
-        AttitudeMode::Never,
-    );
-}
-
-#[test]
-#[serial]
-fn dummy_mag_calibration_short_with_attitudes() {
-    dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_seconds(
-        DummyConfig::default(),
-        AttitudeMode::Always,
-    );
-}
-
-#[test]
-#[serial]
-fn dummy_mag_calibration_long_without_attitudes() {
-    let runs: Vec<RunStats> = (0..20)
-        .map(|_| {
-            let config = DummyConfig {
-                seed: rand::random(),
-                ..DummyConfig::default()
-            };
-            dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_seconds(
-                config,
-                AttitudeMode::Never,
-            )
-        })
-        .collect();
-    print_avg_stats(&runs);
-}
-
-#[test]
-#[serial]
-fn dummy_mag_calibration_long_with_attitudes() {
-    let runs: Vec<RunStats> = (0..20)
-        .map(|_| {
-            let config = DummyConfig {
-                seed: rand::random(),
-                ..DummyConfig::default()
-            };
-            dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_seconds(
-                config,
-                AttitudeMode::Always,
-            )
-        })
-        .collect();
-    print_avg_stats(&runs);
-}
-
-#[test]
-#[serial]
-fn dummy_mag_calibration_regression_without_attitudes() {
-    let fixed_seed: Vec<u64> = vec![
-        934786981548549007,
-        320366629120039532,
-        800448092538851856,
-        14346460742415463748,
-    ];
-
-    let runs: Vec<RunStats> = fixed_seed
+/// Runs each seed with the given attitude mode, printing average stats.
+fn run_seeds(attitude_mode: AttitudeMode, seeds: impl IntoIterator<Item = u64>) {
+    let runs: Vec<RunStats> = seeds
         .into_iter()
         .map(|seed| {
             let config = DummyConfig {
                 seed,
                 ..DummyConfig::default()
             };
-            dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_seconds(
-                config,
-                AttitudeMode::Never,
-            )
+            run_calibration(config, attitude_mode)
         })
         .collect();
     print_avg_stats(&runs);
 }
 
-#[test]
+#[test_case::test_case(AttitudeMode::Never  ; "without_attitudes")]
+#[test_case::test_case(AttitudeMode::Always ; "with_attitudes")]
 #[serial]
-fn dummy_mag_calibration_regression_with_attitudes() {
-    let fixed_seed: Vec<u64> = vec![
-        934786981548549007,
-        320366629120039532,
-        800448092538851856,
-        14346460742415463748,
-    ];
+fn short(attitude_mode: AttitudeMode) {
+    run_seeds(attitude_mode, [DummyConfig::default().seed]);
+}
 
-    let runs: Vec<RunStats> = fixed_seed
-        .into_iter()
-        .map(|seed| {
-            let config = DummyConfig {
-                seed,
-                ..DummyConfig::default()
-            };
-            dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_seconds(
-                config,
-                AttitudeMode::Always,
-            )
-        })
-        .collect();
-    print_avg_stats(&runs);
+#[test_case::test_case(AttitudeMode::Never  ; "without_attitudes")]
+#[test_case::test_case(AttitudeMode::Always ; "with_attitudes")]
+#[serial]
+fn long(attitude_mode: AttitudeMode) {
+    run_seeds(attitude_mode, (0..20).map(|_| rand::random()));
+}
+
+#[test_case::test_case(AttitudeMode::Never  ; "without_attitudes")]
+#[test_case::test_case(AttitudeMode::Always ; "with_attitudes")]
+#[serial]
+fn regression(attitude_mode: AttitudeMode) {
+    run_seeds(
+        attitude_mode,
+        [
+            934786981548549007,
+            320366629120039532,
+            800448092538851856,
+            14346460742415463748,
+        ],
+    );
 }
