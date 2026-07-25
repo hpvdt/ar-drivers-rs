@@ -151,7 +151,12 @@ pub struct FusionState {
     pub corrections: NineAxis<Correction>,
 
     // mag calibration state, will be used by all Fusion impls
-    pub mag: MagCalibrator<255>,
+    // The buffer must outlast a single motion pattern: with too few samples
+    // it only spans one rotation segment, the retained readings cover a
+    // near-planar circle on the sphere, and the ellipsoid fit is free to
+    // drift along the unobserved axis (seen as >20 deg worst-case heading
+    // error in the dummy integration test with 255 samples).
+    pub mag: MagCalibrator<1023>,
 }
 
 impl FusionState {

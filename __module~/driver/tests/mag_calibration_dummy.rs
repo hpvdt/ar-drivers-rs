@@ -133,8 +133,8 @@ fn run_calibration(config: DummyConfig, attitude_mode: AttitudeMode) -> RunStats
         }
         let angle_degrees = angle_degrees.unwrap();
         assert!(
-            angle_degrees <= 20.0,
-            "corrected magnetometer exceeded 20 degrees at timestamp={timestamp}: angle_degrees={angle_degrees}"
+            angle_degrees <= 18.0,
+            "corrected magnetometer exceeded 18 degrees at timestamp={timestamp}: angle_degrees={angle_degrees}"
         );
         validation_error_sum_degrees += f64::from(angle_degrees);
         validation_error_count += 1;
