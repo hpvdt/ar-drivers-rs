@@ -38,7 +38,7 @@ fn get_calibrated_mag_discards_underconstrained_calibration() {
         Err(BadMagCause::BadCalibration(
             BadCalibration::InsufficientSamples {
                 samples: 1,
-                required: 255
+                required: 1023
             }
         ))
     ));
@@ -72,18 +72,18 @@ fn update_mag_discards_ill_conditioned_calibration() {
 //     ));
 // }
 
-fn seeded_calibrator(offset: Vector3<f32>, scale: Vector3<f32>) -> MagCalibrator<255> {
+fn seeded_calibrator(offset: Vector3<f32>, scale: Vector3<f32>) -> MagCalibrator<1023> {
     let mut calibrator = MagCalibrator::new();
-    for i in 0..255 {
+    for i in 0..1023 {
         let direction = sample_direction(i);
         let _ = calibrator.evaluate_correct(offset + scale.component_mul(&direction), i as u64);
     }
     calibrator
 }
 
-fn nearly_collinear_calibrator() -> MagCalibrator<255> {
+fn nearly_collinear_calibrator() -> MagCalibrator<1023> {
     let mut calibrator = MagCalibrator::new();
-    for i in 0..255 {
+    for i in 0..1023 {
         let t = i as f32 * 0.0001;
         let _ = calibrator.evaluate_correct(
             Vector3::new(10.0 + t, -5.0 + 2.0 * t, 3.0 + 0.5 * t),
@@ -95,7 +95,7 @@ fn nearly_collinear_calibrator() -> MagCalibrator<255> {
 
 fn sample_direction(i: usize) -> Vector3<f32> {
     let theta = 0.37 + i as f32 * 1.21;
-    let z = -0.8 + 1.6 * i as f32 / 254.0;
+    let z = -0.8 + 1.6 * i as f32 / 1022.0;
     let radius = (1.0 - z * z).sqrt();
     Vector3::new(radius * theta.cos(), radius * theta.sin(), z)
 }

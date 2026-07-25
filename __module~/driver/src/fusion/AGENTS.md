@@ -28,6 +28,15 @@ k-nearest-neighbor diversity heuristic decides whether a new sample should repla
 an existing one. Calibration requires `N.max(9)` retained samples, which means the
 entire cache must be populated and `N` must be at least 9.
 
+The cache size `N` must outlast a single motion pattern, not just the solver
+parameter count. If the retained samples span only one rotation segment, they
+cover a near-planar circle on the sphere, the covariance condition check still
+passes, and the ellipsoid fit is free to drift along the unobserved axis —
+visible as worst-case heading errors above 20 degrees in the dummy integration
+test with `N = 255` (roughly one 10-second motion segment at the dummy event
+rate). `FusionState` therefore uses `N = 1023`, which spans several segments
+and keeps the worst-case error near 9 degrees.
+
 Let $b$ denote the hard-iron offset, $D$ the symmetric positive-definite
 soft-iron distortion matrix, $A$ the corresponding soft-iron correction matrix,
 and $m_i$ an ideal unit-length magnetic-field sample. Their physical relationship
