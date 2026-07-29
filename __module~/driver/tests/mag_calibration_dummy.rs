@@ -2,26 +2,14 @@ use std::time::{Duration, Instant};
 
 use ar_drivers::fusion::{rub_to_frd, FusionState};
 use ar_drivers::{ARGlasses, Dummy, DummyConfig, GlassesEvent};
-use nalgebra::{Matrix3, Rotation3, UnitQuaternion, Vector3};
+use nalgebra::Vector3;
 use serial_test::serial;
 
-/// Whether the calibrator is fed the ground-truth attitude with each sample.
+/// Whether the calibrator is fed the ground-truth gravity direction with each sample.
 #[derive(Clone, Copy)]
 enum AttitudeMode {
-    // Always,
+    Always,
     Never,
-}
-
-/// Converts the dummy ground-truth attitude (body-RUB to world-RUB) into the
-/// body-FRD to world-FRD rotation the calibrator expects, by conjugating with
-/// the `rub_to_frd` change of basis.
-fn frd_attitude(rub_attitude: &UnitQuaternion<f32>) -> UnitQuaternion<f32> {
-    // Columns are the FRD images of the RUB basis vectors, matching
-    // `rub_to_frd(v) = (-v.z, v.x, -v.y)`.
-    let rub_to_frd = UnitQuaternion::from_rotation_matrix(&Rotation3::from_matrix_unchecked(
-        Matrix3::new(0.0, 1.0, 0.0, 0.0, 0.0, -1.0, -1.0, 0.0, 0.0),
-    ));
-    rub_to_frd * rub_attitude * rub_to_frd.inverse()
 }
 
 struct RunStats {
@@ -29,6 +17,8 @@ struct RunStats {
     eval_count: u64,
     error_sum_degrees: f64,
     error_count: u64,
+    validation_error_sum_degrees: f64,
+    validation_error_count: u64,
     total_time: Duration,
     time_until_first_success: Duration,
     count_until_first_success: u64,
@@ -41,8 +31,8 @@ struct RunStats {
 fn run_calibration(config: DummyConfig, attitude_mode: AttitudeMode) -> RunStats {
     let seed = config.seed;
     let mode_label = match attitude_mode {
-        // AttitudeMode::Always => "with attitudes",
-        AttitudeMode::Never => "without attitudes",
+        AttitudeMode::Always => "with gravity",
+        AttitudeMode::Never => "without gravity",
     };
     println!("# Starting benchmark - PRNG seed: {seed}, {mode_label}");
 
@@ -95,8 +85,15 @@ fn run_calibration(config: DummyConfig, attitude_mode: AttitudeMode) -> RunStats
         let raw_frd = rub_to_frd(&magnetometer);
 
         let eval_start = Instant::now();
-
-        let result = fusion.mag.evaluate_correct(raw_frd, timestamp);
+        let gravity_direction = match attitude_mode {
+            AttitudeMode::Always => Some(rub_to_frd(
+                &(ground_truth.attitude.inverse() * Vector3::new(0.0, -1.0, 0.0)),
+            )),
+            AttitudeMode::Never => None,
+        };
+        let result = fusion
+            .mag
+            .evaluate_correct(raw_frd, gravity_direction, timestamp);
         eval_time += eval_start.elapsed();
         eval_count += 1;
         let angle_degrees = result
@@ -178,6 +175,8 @@ fn run_calibration(config: DummyConfig, attitude_mode: AttitudeMode) -> RunStats
         eval_count,
         error_sum_degrees,
         error_count,
+        validation_error_sum_degrees,
+        validation_error_count,
         total_time,
         time_until_first_success,
         count_until_first_success,
@@ -199,6 +198,8 @@ fn print_avg_stats(runs: &[RunStats]) {
     let total_eval_count: u64 = runs.iter().map(|r| r.eval_count).sum();
     let total_error_sum: f64 = runs.iter().map(|r| r.error_sum_degrees).sum();
     let total_error_count: u64 = runs.iter().map(|r| r.error_count).sum();
+    let total_validation_error_sum: f64 = runs.iter().map(|r| r.validation_error_sum_degrees).sum();
+    let total_validation_error_count: u64 = runs.iter().map(|r| r.validation_error_count).sum();
 
     println!("# Average stats over {} runs", runs.len());
     println!("- evaluate_correct");
@@ -211,6 +212,11 @@ fn print_avg_stats(runs: &[RunStats]) {
         "  - avg error: {:.3} deg over {} successful calls",
         total_error_sum / total_error_count as f64,
         avg_count(|r| r.error_count),
+    );
+    println!(
+        "  - avg post-warmup error: {:.3} deg over {} calls",
+        total_validation_error_sum / total_validation_error_count as f64,
+        avg_count(|r| r.validation_error_count),
     );
     println!(
         "- total: {:.2?} / {} iterations",
@@ -249,22 +255,22 @@ fn run_seeds(attitude_mode: AttitudeMode, seeds: impl IntoIterator<Item = u64>) 
     print_avg_stats(&runs);
 }
 
-#[test_case::test_case(AttitudeMode::Never  ; "without_attitudes")]
-// #[test_case::test_case(AttitudeMode::Always ; "with_attitudes")]
+#[test_case::test_case(AttitudeMode::Never  ; "without_gravity")]
+#[test_case::test_case(AttitudeMode::Always ; "with_gravity")]
 #[serial]
 fn short(attitude_mode: AttitudeMode) {
     run_seeds(attitude_mode, [rand::random()]);
 }
 
-#[test_case::test_case(AttitudeMode::Never  ; "without_attitudes")]
-// #[test_case::test_case(AttitudeMode::Always ; "with_attitudes")]
+#[test_case::test_case(AttitudeMode::Never  ; "without_gravity")]
+#[test_case::test_case(AttitudeMode::Always ; "with_gravity")]
 #[serial]
 fn long(attitude_mode: AttitudeMode) {
     run_seeds(attitude_mode, (0..10).map(|_| rand::random()));
 }
 
-#[test_case::test_case(AttitudeMode::Never  ; "without_attitudes")]
-// #[test_case::test_case(AttitudeMode::Always ; "with_attitudes")]
+#[test_case::test_case(AttitudeMode::Never  ; "without_gravity")]
+#[test_case::test_case(AttitudeMode::Always ; "with_gravity")]
 #[serial]
 fn regression(attitude_mode: AttitudeMode) {
     run_seeds(

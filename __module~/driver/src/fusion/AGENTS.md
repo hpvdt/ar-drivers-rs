@@ -128,8 +128,8 @@ $$
 =\frac{1}{n}\sum_i\phi_i+\lambda c\,e_d.
 $$
 
-There are no alternating sweeps, warm starts, parameter clamps, or convergence
-iterations.
+The direct ellipsoid fit has no alternating sweeps, warm starts, parameter
+clamps, or convergence iterations.
 
 After solving, the normalized hard-iron center and ellipsoid metric are
 
@@ -169,6 +169,52 @@ $$
 m=A(x-b).
 $$
 
+Each retained magnetometer sample may also contain an optional co-timestamped
+body-frame FRD gravity direction. The direction is normalized when inserted;
+non-finite and zero directions are ignored without rejecting the magnetometer
+sample. Magnetometer-only samples and calibrators configured with zero gravity
+weight retain the direct-fit behavior.
+
+After validating the direct ellipsoid candidate, gravity-tagged samples enable
+one damped affine refinement. In normalized sample coordinates, write
+
+$$
+m_i=C u_i+a,
+\qquad
+C=rA,
+\qquad
+a=A(\mu-b).
+$$
+
+The six independent coordinates of symmetric $C$ and the three coordinates of
+$a$ form another nine-parameter vector. For unit gravity $g_i$, magnetic dip
+implies that $s_i=g_i^Tm_i$ is constant. The unknown constant is eliminated by
+centering the residuals, $e_i=s_i-\bar{s}$. This gravity residual is exactly
+linear in the affine parameters. It is combined with a first-order radial
+residual and Levenberg damping in one additional $9\times9$ normal solve:
+
+$$
+J(\delta)
+=\frac{1}{n}\sum_i(e_{r,i}+J_{r,i}\delta)^2
++\frac{w_g}{n_g}\sum_{i:\,g_i}(e_i+J_{g,i}\delta)^2
++\lambda\|\delta\|^2.
+$$
+
+The refinement is accepted only when the correction remains finite, symmetric
+positive-definite, within the condition limit, lowers the full
+radial-plus-gravity objective, and increases radial RMS by no more than $0.005$.
+A bounded half-step search handles linearization overshoot. Otherwise the
+validated direct candidate is retained. The refined sensor-unit parameters are
+recovered as
+
+$$
+A=C/r,
+\qquad
+b=\mu-rC^{-1}a.
+$$
+
 Accumulating the fixed $9\times9$ normal system and validating the candidate take
 $O(n)$ time per calibration and $O(1)$ auxiliary space. This excludes maintenance
-of the sample cache and its k-nearest-neighbor replacement heuristic.
+of the sample cache and its k-nearest-neighbor replacement heuristic. Gravity
+refinement adds another $O(n)$ pass and fixed $9\times9$ solve when at least two
+retained samples contain gravity.

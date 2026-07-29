@@ -1,4 +1,4 @@
-use nalgebra::{Matrix3, Vector3};
+use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 
 use super::bad_mag_cause::{BadCalibration, BadMagCause};
 use super::mag_calibration::MagCalibrator;
@@ -19,7 +19,7 @@ fn mag_calibrator_corrects_synthetic_full_spd_distortion() {
     .enumerate()
     {
         let corrected = calibrator
-            .evaluate_correct(offset + distortion * expected, timestamp_us as u64)
+            .evaluate_correct(offset + distortion * expected, None, timestamp_us as u64)
             .unwrap();
         assert_vec_close(corrected, expected, 0.05);
     }
@@ -35,12 +35,12 @@ fn mag_calibrator_corrects_asymmetrically_sampled_distortion() {
         let z = -0.1 + i as f32 / 62.0;
         let radius = (1.0 - z * z).sqrt();
         let direction = Vector3::new(radius * theta.cos(), radius * theta.sin(), z);
-        let _ = calibrator.evaluate_correct(offset + distortion * direction, i as u64);
+        let _ = calibrator.evaluate_correct(offset + distortion * direction, None, i as u64);
     }
 
     let expected = Vector3::new(1.0, -2.0, -1.0).normalize();
     let corrected = calibrator
-        .evaluate_correct(offset + distortion * expected, 64)
+        .evaluate_correct(offset + distortion * expected, None, 64)
         .unwrap();
 
     assert_vec_close(corrected, expected, 0.05);
@@ -54,8 +54,8 @@ fn mag_calibrator_returns_stable_direct_corrections() {
     let expected = Vector3::new(1.0, -2.0, 3.0).normalize();
     let raw = offset + distortion * expected;
 
-    let first = calibrator.evaluate_correct(raw, 1).unwrap();
-    let second = calibrator.evaluate_correct(raw, 2).unwrap();
+    let first = calibrator.evaluate_correct(raw, None, 1).unwrap();
+    let second = calibrator.evaluate_correct(raw, None, 2).unwrap();
 
     assert_vec_close(second, first, 0.01);
 }
@@ -64,7 +64,9 @@ fn mag_calibrator_returns_stable_direct_corrections() {
 fn mag_calibrator_rejects_degenerate_data() {
     let mut calibrator = MagCalibrator::<9>::new();
     let result = (0..9)
-        .map(|timestamp_us| calibrator.evaluate_correct(Vector3::new(5.0, 6.0, 7.0), timestamp_us))
+        .map(|timestamp_us| {
+            calibrator.evaluate_correct(Vector3::new(5.0, 6.0, 7.0), None, timestamp_us)
+        })
         .last()
         .unwrap();
 
@@ -81,8 +83,11 @@ fn mag_calibrator_waits_for_the_full_buffer_after_reaching_the_model_minimum() {
     let mut calibrator = MagCalibrator::<12>::new();
     let mut result = None;
     for i in 0..9 {
-        result =
-            Some(calibrator.evaluate_correct(Vector3::new(5.0 + i as f32, 6.0, 7.0), i as u64));
+        result = Some(calibrator.evaluate_correct(
+            Vector3::new(5.0 + i as f32, 6.0, 7.0),
+            None,
+            i as u64,
+        ));
     }
 
     assert!(matches!(
@@ -104,6 +109,7 @@ fn mag_calibrator_rejects_nearly_collinear_samples() {
         let t = i as f32 * 0.0001;
         result = Some(calibrator.evaluate_correct(
             Vector3::new(10.0 + t, -5.0 + 2.0 * t, 3.0 + 0.5 * t),
+            None,
             i as u64,
         ));
     }
@@ -126,7 +132,7 @@ fn mag_calibrator_keeps_last_correction_after_rejected_refit() {
     let raw = offset + distortion * expected;
 
     for _ in 0..12 {
-        result = Some(calibrator.evaluate_correct(raw, 1));
+        result = Some(calibrator.evaluate_correct(raw, None, 1));
     }
 
     assert_vec_close(result.unwrap().unwrap(), expected, 0.05);
@@ -141,7 +147,7 @@ fn mag_calibrator_clamps_neighbor_count_through_public_result() {
     for k in [0, 99] {
         let mut calibrator = seeded_calibrator::<63>(offset, distortion).num_neighbors(k);
         let corrected = calibrator
-            .evaluate_correct(offset + distortion * expected, 1)
+            .evaluate_correct(offset + distortion * expected, None, 1)
             .unwrap();
         assert_vec_close(corrected, expected, 0.05);
     }
@@ -159,7 +165,7 @@ fn mag_calibrator_accepts_zero_components_and_rejects_bad_vectors() {
     .into_iter()
     .enumerate()
     {
-        let result = calibrator.evaluate_correct(sample, timestamp_us as u64);
+        let result = calibrator.evaluate_correct(sample, None, timestamp_us as u64);
         assert!(matches!(
             result,
             Err(BadMagCause::BadCalibration(
@@ -178,8 +184,11 @@ fn mag_calibrator_defaults_sample_lifespan_to_one_hour() {
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
     let mut calibrator = seeded_calibrator::<12>(offset, distortion);
 
-    let result =
-        calibrator.evaluate_correct(Vector3::new(20.0, 30.0, 40.0), 60 * 60 * 1_000_000 + 1);
+    let result = calibrator.evaluate_correct(
+        Vector3::new(20.0, 30.0, 40.0),
+        None,
+        60 * 60 * 1_000_000 + 1,
+    );
 
     assert!(matches!(
         result,
@@ -198,7 +207,7 @@ fn mag_calibrator_uses_configured_sample_lifespan() {
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
     let mut calibrator = seeded_calibrator::<12>(offset, distortion).max_sample_lifespan_us(10);
 
-    let result = calibrator.evaluate_correct(Vector3::new(20.0, 30.0, 40.0), 11);
+    let result = calibrator.evaluate_correct(Vector3::new(20.0, 30.0, 40.0), None, 11);
 
     assert!(matches!(
         result,
@@ -211,6 +220,85 @@ fn mag_calibrator_uses_configured_sample_lifespan() {
     ));
 }
 
+#[test]
+fn mag_calibrator_improves_with_consistent_gravity() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+    let world_mag = Vector3::new(0.8, 0.1, 0.5).normalize();
+    let world_gravity = Vector3::z();
+    let mut plain = MagCalibrator::<63>::new();
+    let mut gravity_refined = MagCalibrator::<63>::new();
+
+    for i in 0..63 {
+        let attitude = UnitQuaternion::from_euler_angles(
+            0.25 * (i as f32 * 0.7).sin(),
+            0.35 * (i as f32 * 1.7).sin(),
+            i as f32 * 2.4,
+        );
+        let body_mag = attitude.inverse() * world_mag;
+        let body_gravity = attitude.inverse() * world_gravity;
+        let raw = offset + distortion * body_mag;
+        let _ = plain.evaluate_correct(raw, None, i as u64);
+        let _ = gravity_refined.evaluate_correct(raw, Some(body_gravity), i as u64);
+    }
+
+    let probes = [
+        Vector3::x(),
+        Vector3::y(),
+        Vector3::z(),
+        Vector3::new(1.0, -2.0, 3.0).normalize(),
+    ];
+    let plain_error: f32 = probes
+        .iter()
+        .map(|&expected| {
+            (plain
+                .evaluate_correct(offset + distortion * expected, None, 100)
+                .unwrap()
+                - expected)
+                .norm()
+        })
+        .sum();
+    let refined_error: f32 = probes
+        .iter()
+        .map(|&expected| {
+            (gravity_refined
+                .evaluate_correct(offset + distortion * expected, None, 100)
+                .unwrap()
+                - expected)
+                .norm()
+        })
+        .sum();
+
+    assert!(
+        refined_error < plain_error,
+        "plain_error={plain_error} refined_error={refined_error}"
+    );
+}
+
+#[test]
+fn mag_calibrator_ignores_invalid_gravity() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+    let mut plain = MagCalibrator::<12>::new();
+    let mut invalid = MagCalibrator::<12>::new();
+    for i in 0..12 {
+        let raw = offset + distortion * sample_direction(i, 12);
+        let _ = plain.evaluate_correct(raw, None, i as u64);
+        let gravity = match i % 3 {
+            0 => Vector3::repeat(f32::NAN),
+            1 => Vector3::repeat(f32::MAX),
+            _ => Vector3::zeros(),
+        };
+        let _ = invalid.evaluate_correct(raw, Some(gravity), i as u64);
+    }
+
+    let expected = Vector3::new(1.0, -2.0, 3.0).normalize();
+    let raw = offset + distortion * expected;
+    let plain = plain.evaluate_correct(raw, None, 100).unwrap();
+    let invalid = invalid.evaluate_correct(raw, None, 100).unwrap();
+    assert_vec_close(invalid, plain, 1.0e-6);
+}
+
 fn seeded_calibrator<const N: usize>(
     offset: Vector3<f32>,
     distortion: Matrix3<f32>,
@@ -218,7 +306,7 @@ fn seeded_calibrator<const N: usize>(
     let mut calibrator = MagCalibrator::new();
     for i in 0..N {
         let direction = sample_direction(i, N);
-        let _ = calibrator.evaluate_correct(offset + distortion * direction, 0);
+        let _ = calibrator.evaluate_correct(offset + distortion * direction, None, 0);
     }
     calibrator
 }
