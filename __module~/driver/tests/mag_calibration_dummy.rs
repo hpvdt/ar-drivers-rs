@@ -2,8 +2,27 @@ use std::time::{Duration, Instant};
 
 use ar_drivers::fusion::{rub_to_frd, FusionState};
 use ar_drivers::{ARGlasses, Dummy, DummyConfig, GlassesEvent};
-use nalgebra::Vector3;
+use nalgebra::{Matrix3, Rotation3, UnitQuaternion, Vector3};
 use serial_test::serial;
+
+/// Whether the calibrator is fed the ground-truth attitude with each sample.
+#[derive(Clone, Copy)]
+enum AttitudeMode {
+    // Always,
+    Never,
+}
+
+/// Converts the dummy ground-truth attitude (body-RUB to world-RUB) into the
+/// body-FRD to world-FRD rotation the calibrator expects, by conjugating with
+/// the `rub_to_frd` change of basis.
+fn frd_attitude(rub_attitude: &UnitQuaternion<f32>) -> UnitQuaternion<f32> {
+    // Columns are the FRD images of the RUB basis vectors, matching
+    // `rub_to_frd(v) = (-v.z, v.x, -v.y)`.
+    let rub_to_frd = UnitQuaternion::from_rotation_matrix(&Rotation3::from_matrix_unchecked(
+        Matrix3::new(0.0, 1.0, 0.0, 0.0, 0.0, -1.0, -1.0, 0.0, 0.0),
+    ));
+    rub_to_frd * rub_attitude * rub_to_frd.inverse()
+}
 
 struct RunStats {
     eval_time: Duration,
@@ -19,11 +38,13 @@ struct RunStats {
     verified_count: u64,
 }
 
-fn dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_seconds(
-    config: DummyConfig,
-) -> RunStats {
+fn run_calibration(config: DummyConfig, attitude_mode: AttitudeMode) -> RunStats {
     let seed = config.seed;
-    println!("# Starting benchmark - PRNG seed: {seed}");
+    let mode_label = match attitude_mode {
+        // AttitudeMode::Always => "with attitudes",
+        AttitudeMode::Never => "without attitudes",
+    };
+    println!("# Starting benchmark - PRNG seed: {seed}, {mode_label}");
 
     let dip = config
         .magnetic_dip_rad
@@ -44,6 +65,8 @@ fn dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_sec
     let mut eval_time = Duration::ZERO;
     let mut error_sum_degrees = 0.0f64;
     let mut error_count = 0u64;
+    let mut validation_error_sum_degrees = 0.0f64;
+    let mut validation_error_count = 0u64;
     let mut until_first_success: Option<(Duration, u64)> = None;
     let mut warmup_span: Option<(Duration, u64)> = None;
 
@@ -72,6 +95,7 @@ fn dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_sec
         let raw_frd = rub_to_frd(&magnetometer);
 
         let eval_start = Instant::now();
+
         let result = fusion.mag.evaluate_correct(raw_frd, timestamp);
         eval_time += eval_start.elapsed();
         eval_count += 1;
@@ -106,9 +130,11 @@ fn dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_sec
         }
         let angle_degrees = angle_degrees.unwrap();
         assert!(
-            angle_degrees <= 20.0,
-            "corrected magnetometer exceeded 20 degrees at timestamp={timestamp}: angle_degrees={angle_degrees}"
+            angle_degrees <= 18.0,
+            "corrected magnetometer exceeded 18 degrees at timestamp={timestamp}: angle_degrees={angle_degrees}"
         );
+        validation_error_sum_degrees += f64::from(angle_degrees);
+        validation_error_count += 1;
         let start = *validation_start.get_or_insert_with(Instant::now);
         worst_angle_degrees = worst_angle_degrees.max(angle_degrees);
         if start.elapsed() >= required_validation_duration {
@@ -136,6 +162,10 @@ fn dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_sec
     println!(
         "  - avg error: {:.3} deg over {error_count} successful calls",
         error_sum_degrees / error_count as f64,
+    );
+    println!(
+        "  - avg post-warmup error: {:.3} deg over {validation_error_count} calls",
+        validation_error_sum_degrees / validation_error_count.max(1) as f64,
     );
     println!("- total: {total_time:.2?} / {eval_count} iterations");
     println!(
@@ -204,43 +234,46 @@ fn print_avg_stats(runs: &[RunStats]) {
     );
 }
 
-#[test]
-#[serial]
-fn dummy_mag_calibration_short() {
-    dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_seconds(
-        DummyConfig::default(),
-    );
-}
-
-#[test]
-#[serial]
-fn dummy_mag_calibration_long() {
-    let runs: Vec<RunStats> = (0..20)
-        .map(|_| {
-            let mut config = DummyConfig::default();
-            config.seed = rand::random();
-            dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_seconds(
-                config,
-            )
-        })
-        .collect();
-    print_avg_stats(&runs);
-}
-
-#[test]
-#[serial]
-fn dummy_mag_calibration_regression() {
-    let fixedSeed: Vec<u64> = vec![934786981548549007, 320366629120039532, 800448092538851856];
-
-    let runs: Vec<RunStats> = fixedSeed
+/// Runs each seed with the given attitude mode, printing average stats.
+fn run_seeds(attitude_mode: AttitudeMode, seeds: impl IntoIterator<Item = u64>) {
+    let runs: Vec<RunStats> = seeds
         .into_iter()
         .map(|seed| {
-            let mut config = DummyConfig::default();
-            config.seed = seed;
-            dummy_magnetometer_calibration_stabilizes_and_remains_accurate_for_twenty_seconds(
-                config,
-            )
+            let config = DummyConfig {
+                seed,
+                ..DummyConfig::default()
+            };
+            run_calibration(config, attitude_mode)
         })
         .collect();
     print_avg_stats(&runs);
+}
+
+#[test_case::test_case(AttitudeMode::Never  ; "without_attitudes")]
+// #[test_case::test_case(AttitudeMode::Always ; "with_attitudes")]
+#[serial]
+fn short(attitude_mode: AttitudeMode) {
+    run_seeds(attitude_mode, [rand::random()]);
+}
+
+#[test_case::test_case(AttitudeMode::Never  ; "without_attitudes")]
+// #[test_case::test_case(AttitudeMode::Always ; "with_attitudes")]
+#[serial]
+fn long(attitude_mode: AttitudeMode) {
+    run_seeds(attitude_mode, (0..10).map(|_| rand::random()));
+}
+
+#[test_case::test_case(AttitudeMode::Never  ; "without_attitudes")]
+// #[test_case::test_case(AttitudeMode::Always ; "with_attitudes")]
+#[serial]
+fn regression(attitude_mode: AttitudeMode) {
+    run_seeds(
+        attitude_mode,
+        [
+            934786981548549007,
+            320366629120039532,
+            800448092538851856,
+            14346460742415463748,
+        ],
+    );
 }
