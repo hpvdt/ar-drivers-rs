@@ -1,124 +1,5 @@
 ## High severity
 
-- [ ]  Fit the full soft-iron model emitted by the simulator
-
-    - **Summary:** The calibrator fits only an axis-aligned ellipsoid even though the dummy deliberately emits
-      cross-axis soft-iron coupling.
-    - **Affected module:** `src/fusion/mag_calibration.rs`
-    - **Severity:** High
-    - **Description:** The current design has no `xy`, `xz`, or `yz` terms and returns three component-wise scales:
-
-      ```rust
-      mag[3] = -mag[1] * mag[1];  
-      mag[4] = -mag[2] * mag[2];  
-
-      let scale = Vector3::new(temp.sqrt(), (temp / x[3]).sqrt(), (temp / x[4]).sqrt());
-      ```
-
-      By contrast, `sample_soft_iron` constructs a generally rotated symmetric positive-definite matrix:
-
-      ```rust
-      let scaled_eigenvectors = Matrix3::from_columns(&vectors);
-      scaled_eigenvectors * scaled_eigenvectors.transpose()
-      ```
-
-      A diagonal correction cannot undo the resulting cross-axis coupling, so even otherwise good simulated samples do
-      not lie on the axis-aligned ellipsoid assumed by `perform_calibration`.
-    - **Recommended fix:** Replace the diagonal `(offset, scale)` fit with a hard-iron offset `b` and an SPD 3x3
-      correction `A = L^T L`, with a positive-diagonal parameterization for `L`. Minimize robust radial residuals
-      `||A (x_i - b)|| - 1` by alternating block-coordinate descent: optimize `b` with `L` fixed, then optimize `L`
-      with `b` fixed. Initialize from a valid full-ellipsoid fit, fix the unit-radius scale gauge, accept only
-      objective-decreasing updates, and reject ill-conditioned, non-converged, or high-residual results.
-    - **Resolution:** Accepted, updating `b` and `L` must be in 2 different private functions.
-
-- [ ]  Require redundant samples and three-dimensional coverage before solving
-
-    - **Summary:** Six accepted samples make the six-parameter algebraic system square, but do not make it
-      noise-tolerant or prove that the samples cover a three-dimensional ellipsoid.
-    - **Affected module:** `src/fusion/mag_calibration.rs`
-    - **Severity:** High
-    - **Description:** Readiness is currently only a row-count check, and the first `N` finite samples are inserted
-      unconditionally:
-
-      ```rust
-      const DESIGN_MATRIX_COLUMNS: usize = 6;
-
-      if sample_count < DESIGN_MATRIX_COLUMNS {
-          return Err(BadMagDataCause::Calibration_InsufficientSamples {
-              samples: sample_count,
-              required: DESIGN_MATRIX_COLUMNS,
-          });
-      }
-
-      if self.matrix_filled < N {
-          self.add_sample_at(self.matrix_filled, x);
-          self.matrix_filled += 1;
-      }
-      ```
-
-      In the default dummy stream, the sixth magnetometer sample arrives after only about 0.1 seconds of virtual motion,
-      far too early for the current trajectory to provide useful spatial coverage.
-    - **Recommended fix:** Gate calibration on an overdetermined sample count and a geometric coverage test such as
-      per-axis span plus a lower bound on the smallest eigenvalue of the centered sample covariance.
-    - **Resolution:** Accepted, set the calibrator to do no correction until the buffer is fully filled
-- [ ]  Reject non-ellipsoid solutions before computing scale
-
-    - **Summary:** A fit can pass the design-matrix condition check even when its coefficients do not describe a real
-      ellipsoid, making `Calibration_DegenerateScale` a late and imprecise symptom.
-    - **Affected module:** `src/fusion/mag_calibration.rs`
-    - **Severity:** High
-    - **Description:** `x[3]`, `x[4]`, or `temp` can be non-positive, but the current code takes square roots and
-      divides
-      first, then notices only the resulting `NaN` or infinity:
-
-      ```rust
-      let offset = Vector3::new(x[0] / 2., x[1] / (2. * x[3]), x[2] / (2. * x[4]));
-      let temp = x[5]
-          + offset[0] * offset[0]
-          + x[3] * offset[1] * offset[1]
-          + x[4] * offset[2] * offset[2];
-      let scale = Vector3::new(temp.sqrt(), (temp / x[3]).sqrt(), (temp / x[4]).sqrt());
-
-      for component in offset.iter().chain(scale.iter()) {
-          if !component.is_finite() {
-              return Err(BadMagDataCause::Calibration_DegenerateScale { offset, scale });
-          }
-      }
-      ```
-
-      A well-conditioned least-squares system can still yield negative shape coefficients or excessive residual error,
-      especially when its input covers only a noisy plane.
-    - **Recommended fix:** Replace hard-boundary rejection with soft-boundary regularisation in the least-squares
-      objective. Add a penalty term (e.g. log-barrier or Tikhonov-style ridge on the shape coefficients) that
-      discourages negative or near-zero eigenvalues of the soft-iron matrix, so the solver naturally favours
-      physically valid ellipsoid parameters. Reject only when the regularised residual still exceeds a bound, returning
-      the specific coefficients that were rejected.
-
-- [ ]  Stop treating every isolated calibration sample as useful
-
-    - **Summary:** The diversity-only eviction policy preferentially retains isolated sensor outliers, which can drive
-      the algebraic fit toward negative shape coefficients.
-    - **Affected module:** `src/fusion/mag_calibration.rs`
-    - **Severity:** High
-    - **Description:** Any finite nonzero sample is accepted, and a candidate replaces the least-isolated buffered point
-      whenever its KNN score is larger:
-
-      ```rust
-      if !x.iter().all(|e| e.is_finite()) || x.norm_squared() <= f32::EPSILON {
-          return;
-      }
-    
-      if low_mean_dist < sample_mean_dist {
-          self.add_sample_at(low_index, x);
-      }
-      ```
-
-      This policy cannot distinguish useful orientation coverage from Gaussian noise tails or magnetic interference, so
-      a long-running buffer can become increasingly dominated by extreme points.
-    - **Recommended fix:** Use a robust loss for the initial full-buffer fit. Once a provisional fit exists, reject
-      samples by a robust radial-residual threshold before applying KNN diversity eviction. Do not impose a fixed raw
-      magnitude range while the hard-iron center is unknown; use explicit sensor saturation limits only when available.
-
 ## Medium severity
 
 - [ ]  Score replacement candidates in their post-replacement buffer
@@ -143,26 +24,32 @@
       score the inserted candidate while skipping its zero self-distance. Commit the replacement only when that score
       exceeds the saved row's score; otherwise restore the complete row. Recompute cached aggregate distance after a
       committed replacement.
-- [ ]  Add sample age or calibration epochs to the buffer
+- [ ]  Replace full-buffer k-NN rescan with an incremental neighbor cache
 
-    - **Summary:** The calibrator fits one static offset to a timeless buffer, so historical samples remain mixed with
-      current samples when hard-iron bias changes.
+    - **Summary:** Each new sample triggers an O(N^2 log N) all-pairs k-NN rescan; caching per-row neighbor sets
+      makes the diversity heuristic expected O(N) per sample.
     - **Affected module:** `src/fusion/mag_calibration.rs`
     - **Severity:** Medium
-    - **Description:** `MagCalibrator` stores coordinates but no timestamp, age, or calibration epoch:
+    - **Description:** Once the buffer is full, `evaluate_sample_vec` calls `lowest_mean_distance_by_index`, which
+      runs `mean_distance_from_all`: N invocations of `mean_distance_from_single`, each computing N distances and
+      fully sorting them:
 
       ```rust
-      pub struct MagCalibrator<const N: usize> {
-          matrix: SMatrix<f32, N, 6>,
-          matrix_filled: usize,
-          mean_distance: f32,
-          pre_scaler: f32,
-          k: usize,
-      }
+      squared_dists.sort_unstable_by(|a, b| a.total_cmp(b));
+
+      let (low_index, low_mean_dist) = self.lowest_mean_distance_by_index();
       ```
-      Spatial-diversity eviction can retain old extreme points indefinitely, so measurements generated around different
-      ellipsoid centers can be combined into one non-physical fit.
-    - **Recommended fix:** Add an explicit reset, bounded-age window, or calibration-epoch policy so stale samples
-      cannot remain in the fit solely because they are spatially isolated. Apply spatial-diversity eviction only within
-      the currently eligible sample set.
-    - **Resolution:** Accepted, add a maximum sample lifespan setting, with default value set to 1 hour.
+
+      That is N x O(N log N) = O(N^2 log N) per new sample (about 10^7 comparisons at the production N = 1023),
+      paid even when the candidate is ultimately rejected. All other per-sample work (expiry compaction, the direct
+      ellipsoid fit, and gravity refinement) is O(N) with fixed 9x9 solves, so this heuristic dominates calibrator
+      CPU cost.
+    - **Recommended fix:** Cache per-row k-NN state (the k smallest distances plus a small overshoot pad) alongside
+      each row. On append or replace, compute distances from the new point to all rows once (O(N)), update each
+      row's cached set in amortized O(k), rescanning a row only when its pad is exhausted, and rebuild the replaced
+      row's own set with `select_nth_unstable_by` (O(N)). During expiry compaction, remap cached neighbor indices
+      using the retained-index mapping and mark rows that referenced expired samples dirty. Derive each row's mean
+      distance and the buffer-wide argmin from the cache, giving expected O(N) per new sample (worst case O(N^2)
+      only under degenerate neighbor churn). While touching this code, defer `sqrt` until after selection and skip
+      the self-entry by index instead of `skip(1)`. A k-d tree with reverse-k-NN tracking and an argmin heap would
+      reach O(k log N) expected but is not required to get under the O(N log N) bound.
