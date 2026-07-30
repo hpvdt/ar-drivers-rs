@@ -5,7 +5,7 @@ use ar_drivers::{ARGlasses, Dummy, DummyConfig, GlassesEvent};
 use nalgebra::Vector3;
 use serial_test::serial;
 
-/// Whether the calibrator is fed the ground-truth gravity direction with each sample.
+/// Whether the calibrator is fed a co-timestamped simulated accelerometer reading with each sample.
 #[derive(Clone, Copy)]
 enum AttitudeMode {
     Always,
@@ -31,7 +31,7 @@ struct RunStats {
 fn run_calibration(config: DummyConfig, attitude_mode: AttitudeMode) -> RunStats {
     let seed = config.seed;
     let mode_label = match attitude_mode {
-        AttitudeMode::Always => "with gravity",
+        AttitudeMode::Always => "with accelerometer gravity",
         AttitudeMode::Never => "without gravity",
     };
     println!("# Starting benchmark - PRNG seed: {seed}, {mode_label}");
@@ -59,7 +59,6 @@ fn run_calibration(config: DummyConfig, attitude_mode: AttitudeMode) -> RunStats
     let mut validation_error_count = 0u64;
     let mut until_first_success: Option<(Duration, u64)> = None;
     let mut warmup_span: Option<(Duration, u64)> = None;
-
     let test_start = Instant::now();
     loop {
         assert!(
@@ -70,13 +69,16 @@ fn run_calibration(config: DummyConfig, attitude_mode: AttitudeMode) -> RunStats
             break;
         }
         let ground_truth = dummy.snapshot();
+        let accelerometer_frd = (!ground_truth.next_event_is_acc_gyro)
+            .then(|| rub_to_frd(&dummy.accelerometer_reading()));
         let event = dummy.read_event().unwrap();
-        let GlassesEvent::Magnetometer {
-            magnetometer,
-            timestamp,
-        } = event
-        else {
-            continue;
+        let (magnetometer, timestamp) = match event {
+            GlassesEvent::AccGyro { .. } => continue,
+            GlassesEvent::Magnetometer {
+                magnetometer,
+                timestamp,
+            } => (magnetometer, timestamp),
+            _ => continue,
         };
 
         assert_eq!(timestamp, ground_truth.timestamp_us);
@@ -86,9 +88,10 @@ fn run_calibration(config: DummyConfig, attitude_mode: AttitudeMode) -> RunStats
 
         let eval_start = Instant::now();
         let gravity_direction = match attitude_mode {
-            AttitudeMode::Always => Some(rub_to_frd(
-                &(ground_truth.attitude.inverse() * Vector3::new(0.0, -1.0, 0.0)),
-            )),
+            AttitudeMode::Always => Some(
+                accelerometer_frd
+                    .expect("dummy magnetometer event did not have an accelerometer sample"),
+            ),
             AttitudeMode::Never => None,
         };
         let result = fusion

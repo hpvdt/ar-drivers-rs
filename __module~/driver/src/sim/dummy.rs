@@ -255,7 +255,9 @@ impl Dummy {
         self.position += self.velocity * dt;
     }
 
-    fn accelerometer_reading(&mut self) -> Vector3<f32> {
+    /// Samples the noisy accelerometer at the current state without advancing
+    /// virtual time. Repeated calls consume new sensor noise samples.
+    pub fn accelerometer_reading(&mut self) -> Vector3<f32> {
         let felt_acceleration = GRAVITY_UP + self.acceleration;
         let body_acceleration = self.attitude.inverse() * felt_acceleration;
         body_acceleration + self.sample_noise_vec(self.config.acc_noise_std_dev)
