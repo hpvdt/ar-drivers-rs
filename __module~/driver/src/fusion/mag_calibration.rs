@@ -1,4 +1,4 @@
-use nalgebra::{Matrix3, SMatrix, SMatrixView, SVector, Vector3};
+use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
 
 use super::bad_mag_cause::{BadCalibration, BadMagCause, BadReading};
 
@@ -15,6 +15,28 @@ const MAX_RADIAL_RMS: f32 = 0.1;
 const MIN_MAG_NORM: f32 = 0.4;
 const MAX_REFINEMENT_RADIAL_RMS_INCREASE: f32 = 0.005;
 const REFINEMENT_DAMPING: f32 = 1.0e-2;
+/// Number of neighbor entries cached per buffered sample row: the `k` nearest
+/// squared distances plus an overshoot pad that absorbs neighbor churn before
+/// an O(N) row rescan becomes necessary. Configurations with `num_neighbors`
+/// above this capacity bypass the cache and scan rows directly.
+const NEIGHBOR_CACHE_CAPACITY: usize = 8;
+
+/// Squared distance from one buffered sample row to another, addressed by row
+/// index.
+#[derive(Clone, Copy)]
+struct NeighborEntry {
+    squared_distance: f32,
+    row: u32,
+}
+
+impl NeighborEntry {
+    /// Placeholder for cache slots past the row's trusted prefix length; such
+    /// slots are never read.
+    const EMPTY: Self = Self {
+        squared_distance: f32::INFINITY,
+        row: 0,
+    };
+}
 
 /// Direct regularized ellipsoid fit for a hard-iron offset and full SPD
 /// soft-iron correction from a fixed, diverse sample buffer.
@@ -27,6 +49,16 @@ pub struct MagCalibrator<const N: usize> {
     soft_iron_correction: Matrix3<f32>,
     calibration_initialized: bool,
     mean_distance: f32,
+    /// Per-row incremental k-nearest-neighbor cache for the diversity
+    /// heuristic. Invariant: `neighbor_cache[i][..neighbor_cache_len[i]]`
+    /// lists, in ascending squared distance, the true nearest other buffered
+    /// rows of row `i` (the row itself is excluded by index), and every
+    /// buffered row not listed is at least as far as the last listed entry.
+    /// The trusted prefix is updated in place on append and replace, remapped
+    /// on expiry compaction, and rebuilt with an O(N) scan once it shrinks
+    /// below `k`.
+    neighbor_cache: [[NeighborEntry; NEIGHBOR_CACHE_CAPACITY]; N],
+    neighbor_cache_len: [u8; N],
     k: usize,
     max_sample_lifespan_us: u64,
     gravity_weight: f32,
@@ -43,6 +75,8 @@ impl<const N: usize> Default for MagCalibrator<N> {
             soft_iron_correction: Matrix3::identity(),
             calibration_initialized: false,
             mean_distance: Default::default(),
+            neighbor_cache: [[NeighborEntry::EMPTY; NEIGHBOR_CACHE_CAPACITY]; N],
+            neighbor_cache_len: [0; N],
             k: 2, // Works well in testing
             max_sample_lifespan_us: 60 * 60 * 1_000_000,
             gravity_weight: 0.1,
@@ -86,49 +120,172 @@ impl<const N: usize> MagCalibrator<N> {
         }
     }
 
-    /// Calculates mean distance to the `k` nearest neighbors.
-    /// A smaller number means the point is "similar" to its neighbors.
-    fn mean_distance_from_single(&self, vec: SMatrix<f32, 1, 3>) -> f32 {
-        let matrix_view: SMatrixView<f32, N, 3> = self.matrix.fixed_columns::<3>(0);
+    /// Computes squared distances from `x` to the first `count` rows of the
+    /// sample buffer. Entries at and beyond `count` are set to infinity so
+    /// selection never picks them.
+    fn squared_distances_to(&self, x: Vector3<f32>, count: usize) -> [f32; N] {
+        let mut squared_dists = [f32::INFINITY; N];
+        for (j, dist) in squared_dists.iter_mut().enumerate().take(count) {
+            let diff = x - self.sample(j);
+            *dist = diff.dot(&diff);
+        }
+        squared_dists
+    }
 
-        // Distance to every other point
-        let mut squared_dists: [f32; N] = [0.; N];
-        matrix_view.row_iter().enumerate().for_each(|(j, cmp)| {
-            let diff = vec - cmp;
-            squared_dists[j] = diff.dot(&diff).sqrt(); // ?
-        });
-
-        // Sort floats and return mean distance to nearest neighbors
-        squared_dists.sort_unstable_by(|a, b| a.total_cmp(b));
-        let k = self.k.min(N.saturating_sub(1));
+    /// Mean distance over the `k` smallest entries of `squared`, selected in
+    /// O(n) with a partial sort; `squared` is reordered in the process. The
+    /// square root is deferred until after selection, so only the `k`
+    /// selected entries are sqrt'd. Returns infinity for `k == 0`.
+    fn mean_of_smallest(squared: &mut [f32], k: usize) -> f32 {
         if k == 0 {
             return f32::INFINITY;
         }
-        squared_dists
-            .iter()
-            .skip(1)
-            .take(k)
-            .rfold(0., |a, &b| a + b)
+        squared.select_nth_unstable_by(k - 1, |a, b| a.total_cmp(b));
+        let smallest = &mut squared[..k];
+        smallest.sort_unstable_by(|a, b| a.total_cmp(b));
+        smallest.iter().rev().fold(0., |acc, &d| acc + d.sqrt()) / k as f32
+    }
+
+    /// Inserts `entry` into a row's neighbor cache, keeping it sorted and
+    /// bounded by the capacity. An entry ranking beyond the trusted prefix is
+    /// only appended when the cache currently covers every other buffered row
+    /// (`complete`); otherwise it is dropped, because an uncached row may
+    /// legitimately be closer and would silently break the prefix invariant.
+    fn cache_insert(
+        cache: &mut [NeighborEntry; NEIGHBOR_CACHE_CAPACITY],
+        len: &mut u8,
+        entry: NeighborEntry,
+        complete: bool,
+    ) {
+        let count = *len as usize;
+        let rank = cache[..count].partition_point(|e| e.squared_distance < entry.squared_distance);
+        if rank < count {
+            let shift_end = count.min(NEIGHBOR_CACHE_CAPACITY - 1);
+            cache.copy_within(rank..shift_end, rank + 1);
+            cache[rank] = entry;
+            if count < NEIGHBOR_CACHE_CAPACITY {
+                *len += 1;
+            }
+        } else if complete && count < NEIGHBOR_CACHE_CAPACITY {
+            cache[count] = entry;
+            *len += 1;
+        }
+    }
+
+    /// Removes the entry referencing `row` from a neighbor cache, if present.
+    /// Dropping an entry keeps the remaining prefix trusted.
+    fn cache_remove(cache: &mut [NeighborEntry; NEIGHBOR_CACHE_CAPACITY], len: &mut u8, row: u32) {
+        let count = *len as usize;
+        if let Some(position) = cache[..count].iter().position(|e| e.row == row) {
+            cache.copy_within(position + 1..count, position);
+            *len -= 1;
+        }
+    }
+
+    /// Rebuilds a row's neighbor cache from scratch: the
+    /// `NEIGHBOR_CACHE_CAPACITY` smallest squared distances among rows
+    /// `0..count`, skipping the row's own entry by index. O(N).
+    fn reset_row_cache(&mut self, row: usize, squared_dists: &[f32; N], count: usize) {
+        let mut entries = [NeighborEntry::EMPTY; N];
+        let mut entry_count = 0;
+        for (j, &squared_distance) in squared_dists.iter().enumerate().take(count) {
+            if j == row {
+                continue;
+            }
+            entries[entry_count] = NeighborEntry {
+                squared_distance,
+                row: j as u32,
+            };
+            entry_count += 1;
+        }
+        let take = NEIGHBOR_CACHE_CAPACITY.min(entry_count);
+        if take > 0 {
+            entries[..entry_count].select_nth_unstable_by(take - 1, |a, b| {
+                a.squared_distance.total_cmp(&b.squared_distance)
+            });
+            entries[..take]
+                .sort_unstable_by(|a, b| a.squared_distance.total_cmp(&b.squared_distance));
+        }
+        self.neighbor_cache[row][..take].copy_from_slice(&entries[..take]);
+        self.neighbor_cache_len[row] = take as u8;
+    }
+
+    /// Recomputes a row's neighbor cache when its trusted prefix has shrunk
+    /// below `k`. Only called with a full buffer.
+    fn rebuild_row_cache(&mut self, row: usize) {
+        let squared_dists = self.squared_distances_to(self.sample(row), N);
+        self.reset_row_cache(row, &squared_dists, N);
+    }
+
+    /// Mean distance of a buffered row to its `k` nearest other rows, served
+    /// from the incremental neighbor cache. A smaller number means the point
+    /// is "similar" to its neighbors. Rows whose trusted prefix has shrunk
+    /// below `k` are rescanned in O(N) first; configurations with `k` above
+    /// the cache capacity always scan directly.
+    fn row_mean_distance(&mut self, row: usize, k: usize) -> f32 {
+        if k == 0 {
+            return f32::INFINITY;
+        }
+        if k > NEIGHBOR_CACHE_CAPACITY {
+            return self.mean_distance_uncached(row, k);
+        }
+        if (self.neighbor_cache_len[row] as usize) < k {
+            self.rebuild_row_cache(row);
+        }
+        let cache = &self.neighbor_cache[row];
+        (0..k)
+            .rev()
+            .fold(0., |acc, i| acc + cache[i].squared_distance.sqrt())
             / k as f32
     }
 
-    /// Calculates mean squared distance to the `k` nearest neighbors
-    /// between all `N` row vectors in the internal buffer.
-    /// A smaller number means a point is "similar" to its neighbors.
-    fn mean_distance_from_all(&self) -> [f32; N] {
-        let mut mean_dist: [f32; N] = [0.; N];
-
-        let matrix_view: SMatrixView<f32, N, 3> = self.matrix.fixed_columns::<3>(0);
-        matrix_view.row_iter().enumerate().for_each(|(i, row)| {
-            mean_dist[i] = self.mean_distance_from_single(row.into());
-        });
-        mean_dist
+    /// Direct O(N) computation of a row's mean distance to its `k` nearest
+    /// other rows, used when `k` exceeds the neighbor cache capacity.
+    fn mean_distance_uncached(&self, row: usize, k: usize) -> f32 {
+        let mut squared_dists = self.squared_distances_to(self.sample(row), N);
+        // Skip the self-entry by index instead of dropping the smallest value.
+        squared_dists[row] = f32::INFINITY;
+        Self::mean_of_smallest(&mut squared_dists, k)
     }
 
-    /// Returns index of vector with the lowest squared distance
+    /// Remaps cached neighbor row indices through `index_map` (`u32::MAX` =
+    /// expired) after expiry compaction, shrinking trusted prefixes that
+    /// referenced expired rows. Slots at and beyond the retained count keep
+    /// stale values; they are reset on append before they can be read again.
+    fn remap_neighbor_cache(&mut self, index_map: &[u32; N]) {
+        for old_index in 0..N {
+            let new_index = index_map[old_index];
+            if new_index == u32::MAX {
+                continue;
+            }
+            let mut cache = self.neighbor_cache[old_index];
+            let count = self.neighbor_cache_len[old_index] as usize;
+            let mut retained = 0;
+            for i in 0..count {
+                let entry = cache[i];
+                let mapped = index_map[entry.row as usize];
+                if mapped != u32::MAX {
+                    cache[retained] = NeighborEntry {
+                        squared_distance: entry.squared_distance,
+                        row: mapped,
+                    };
+                    retained += 1;
+                }
+            }
+            self.neighbor_cache[new_index as usize] = cache;
+            self.neighbor_cache_len[new_index as usize] = retained as u8;
+        }
+    }
+
+    /// Returns index of the buffered row with the lowest mean distance to its
+    /// `k` nearest neighbors, derived from the incremental neighbor cache.
     /// Is used when replacing the least useful value in the array.
     fn lowest_mean_distance_by_index(&mut self) -> (usize, f32) {
-        let mean_dist = self.mean_distance_from_all();
+        let k = self.k.min(N.saturating_sub(1));
+        let mut mean_dist: [f32; N] = [0.; N];
+        for (i, mean) in mean_dist.iter_mut().enumerate() {
+            *mean = self.row_mean_distance(i, k);
+        }
 
         // Set mean distance now that we are at it
         self.mean_distance = mean_dist.iter().rfold(0., |a, &b| a + b) / N as f32;
@@ -152,11 +309,13 @@ impl<const N: usize> MagCalibrator<N> {
         gravity_direction: Option<Vector3<f32>>,
         timestamp_us: u64,
     ) {
+        let mut index_map = [u32::MAX; N];
         let mut retained = 0;
-        for index in 0..self.matrix_filled {
+        for (index, map_slot) in index_map.iter_mut().enumerate().take(self.matrix_filled) {
             if timestamp_us.saturating_sub(self.sample_timestamps_us[index])
                 <= self.max_sample_lifespan_us
             {
+                *map_slot = retained as u32;
                 if retained != index {
                     for column in 0..3 {
                         self.matrix[(retained, column)] = self.matrix[(index, column)];
@@ -170,6 +329,7 @@ impl<const N: usize> MagCalibrator<N> {
         if retained != self.matrix_filled {
             self.matrix_filled = retained;
             self.mean_distance = 0.0;
+            self.remap_neighbor_cache(&index_map);
         }
 
         if !x.iter().all(|e| e.is_finite()) || x.norm_squared() <= f32::EPSILON {
@@ -188,15 +348,69 @@ impl<const N: usize> MagCalibrator<N> {
         });
         // Check if buffer is not yet "initialized" with real measurements
         if self.matrix_filled < N {
-            self.add_sample_at(self.matrix_filled, x, gravity_direction, timestamp_us);
+            let count = self.matrix_filled;
+            let squared_dists = self.squared_distances_to(x, count);
+            for ((cache, len), &squared_distance) in self
+                .neighbor_cache
+                .iter_mut()
+                .zip(self.neighbor_cache_len.iter_mut())
+                .zip(squared_dists.iter())
+                .take(count)
+            {
+                // The cache covers every other row only if it was built up
+                // without ever hitting the capacity or losing entries.
+                let complete = *len as usize == count - 1;
+                Self::cache_insert(
+                    cache,
+                    len,
+                    NeighborEntry {
+                        squared_distance,
+                        row: count as u32,
+                    },
+                    complete,
+                );
+            }
+            self.add_sample_at(count, x, gravity_direction, timestamp_us);
+            self.reset_row_cache(count, &squared_dists, count);
             self.matrix_filled += 1;
         }
         // Otherwise check which sample may be best to replace
         else {
+            let k = self.k.min(N.saturating_sub(1));
             let (low_index, low_mean_dist) = self.lowest_mean_distance_by_index();
-            let sample_mean_dist = self.mean_distance_from_single(x.transpose());
+            let squared_dists = self.squared_distances_to(x, N);
+            // The candidate has no self-entry in the buffer, so its mean
+            // distance covers the true k nearest buffered rows.
+            let mut scratch = squared_dists;
+            let sample_mean_dist = Self::mean_of_smallest(&mut scratch, k);
             if low_mean_dist < sample_mean_dist {
+                for (row, ((cache, len), &squared_distance)) in self
+                    .neighbor_cache
+                    .iter_mut()
+                    .zip(self.neighbor_cache_len.iter_mut())
+                    .zip(squared_dists.iter())
+                    .enumerate()
+                {
+                    if row == low_index {
+                        continue;
+                    }
+                    Self::cache_remove(cache, len, low_index as u32);
+                    // After removal the cache covers every row besides the
+                    // row itself and the replaced one only if nothing was
+                    // ever evicted from it.
+                    let complete = *len as usize == N.saturating_sub(2);
+                    Self::cache_insert(
+                        cache,
+                        len,
+                        NeighborEntry {
+                            squared_distance,
+                            row: low_index as u32,
+                        },
+                        complete,
+                    );
+                }
                 self.add_sample_at(low_index, x, gravity_direction, timestamp_us);
+                self.reset_row_cache(low_index, &squared_dists, N);
             }
         }
     }
@@ -616,5 +830,52 @@ impl<const N: usize> MagCalibrator<N> {
         } else {
             max / min
         }
+    }
+
+    /// Verifies the neighbor-cache invariant against the current buffer
+    /// contents: for every buffered row, the cached entries must reference
+    /// distinct live rows with exactly matching squared distances, be sorted
+    /// ascending, and their distance values must equal the `len` smallest
+    /// true distances to the row's other buffered rows. Read-only; used by
+    /// tests to cross-check the incremental cache maintenance.
+    #[cfg(test)]
+    pub(super) fn check_neighbor_cache(&self) -> Result<(), String> {
+        for row in 0..self.matrix_filled {
+            let len = self.neighbor_cache_len[row] as usize;
+            let cache = &self.neighbor_cache[row][..len];
+            let mut true_dists: Vec<f32> = (0..self.matrix_filled)
+                .filter(|&j| j != row)
+                .map(|j| {
+                    let diff = self.sample(row) - self.sample(j);
+                    diff.dot(&diff)
+                })
+                .collect();
+            true_dists.sort_unstable_by(|a, b| a.total_cmp(b));
+            for (i, entry) in cache.iter().enumerate() {
+                if entry.row as usize >= self.matrix_filled || entry.row as usize == row {
+                    return Err(format!("row {row}: entry {i} references row {}", entry.row));
+                }
+                if i > 0 && cache[i - 1].squared_distance > entry.squared_distance {
+                    return Err(format!("row {row}: entry {i} out of order"));
+                }
+                if cache[..i].iter().any(|e| e.row == entry.row) {
+                    return Err(format!("row {row}: duplicate entry for row {}", entry.row));
+                }
+                let diff = self.sample(row) - self.sample(entry.row as usize);
+                if diff.dot(&diff) != entry.squared_distance {
+                    return Err(format!("row {row}: stale distance for row {}", entry.row));
+                }
+                if true_dists.get(i) != cache.get(i).map(|e| &e.squared_distance) {
+                    return Err(format!(
+                        "row {row}: entry {i} is not the true {}-nearest neighbor",
+                        i + 1
+                    ));
+                }
+            }
+            if len > true_dists.len() {
+                return Err(format!("row {row}: cache longer than the neighbor pool"));
+            }
+        }
+        Ok(())
     }
 }

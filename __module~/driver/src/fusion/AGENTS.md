@@ -214,7 +214,16 @@ b=\mu-rC^{-1}a.
 $$
 
 Accumulating the fixed $9\times9$ normal system and validating the candidate take
-$O(n)$ time per calibration and $O(1)$ auxiliary space. This excludes maintenance
-of the sample cache and its k-nearest-neighbor replacement heuristic. Gravity
-refinement adds another $O(n)$ pass and fixed $9\times9$ solve when at least two
-retained samples contain gravity.
+$O(n)$ time per calibration and $O(1)$ auxiliary space. Gravity refinement adds
+another $O(n)$ pass and fixed $9\times9$ solve when at least two retained samples
+contain gravity.
+
+The k-nearest-neighbor diversity heuristic keeps a per-row incremental neighbor
+cache: each row stores its nearest other rows' squared distances as a sorted
+trusted prefix of $k$ entries plus a small overshoot pad, updated in amortized
+$O(k)$ per row on append or replace and remapped on expiry compaction, with an
+$O(n)$ rescan of a row only when its pad is exhausted. A new sample therefore
+costs expected $O(n)$ neighbor work and $O(nk)$ auxiliary space with a small
+constant instead of an $O(n^2\log n)$ all-pairs rescan, and the square root is
+deferred until after selection. Configurations with $k$ above the per-row cache
+capacity bypass the cache and scan rows directly.

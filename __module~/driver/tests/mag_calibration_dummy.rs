@@ -204,6 +204,7 @@ fn print_avg_stats(runs: &[RunStats]) {
     let total_validation_error_sum: f64 = runs.iter().map(|r| r.validation_error_sum_degrees).sum();
     let total_validation_error_count: u64 = runs.iter().map(|r| r.validation_error_count).sum();
 
+    println!("  ======================================================================  ");
     println!("# Average stats over {} runs", runs.len());
     println!("- evaluate_correct");
     println!(

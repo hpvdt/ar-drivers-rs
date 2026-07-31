@@ -299,6 +299,43 @@ fn mag_calibrator_ignores_invalid_gravity() {
     assert_vec_close(invalid, plain, 1.0e-6);
 }
 
+#[test]
+fn mag_calibrator_neighbor_cache_matches_naive_rescan() {
+    // Deterministic xorshift64 PRNG.
+    let mut prng_state = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || {
+        prng_state ^= prng_state << 13;
+        prng_state ^= prng_state >> 7;
+        prng_state ^= prng_state << 17;
+        prng_state
+    };
+
+    // N - 1 = 11 exceeds the neighbor cache capacity of 8, so caches are
+    // incomplete and inserts are dropped once the pad is exhausted; k = 10
+    // additionally exercises the above-capacity direct-scan fallback. The
+    // short lifespan keeps expiry compaction and buffer refills in the mix.
+    for k in [2, 3, 10] {
+        let mut calibrator = MagCalibrator::<12>::new()
+            .num_neighbors(k)
+            .max_sample_lifespan_us(25);
+        let mut timestamp_us = 0;
+        for _ in 0..4000 {
+            timestamp_us += 1 + next() % 3;
+            // Quantized directions with jitter: new samples frequently land
+            // near buffered ones, provoking replacements.
+            let theta = (next() % 8) as f32 * 0.785 + (next() % 100) as f32 / 500.0;
+            let z = (next() % 5) as f32 / 2.5 - 1.0 + (next() % 100) as f32 / 500.0;
+            let radius = (1.0 - z * z).max(0.0).sqrt();
+            let direction = Vector3::new(radius * theta.cos(), radius * theta.sin(), z);
+            let sample = Vector3::new(11.0, -7.0, 5.0) + 40.0 * direction;
+            calibrator.evaluate_sample_vec(sample, None, timestamp_us);
+            calibrator
+                .check_neighbor_cache()
+                .unwrap_or_else(|message| panic!("k={k} timestamp_us={timestamp_us}: {message}"));
+        }
+    }
+}
+
 fn seeded_calibrator<const N: usize>(
     offset: Vector3<f32>,
     distortion: Matrix3<f32>,
