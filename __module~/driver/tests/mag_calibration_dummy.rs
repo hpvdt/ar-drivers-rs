@@ -17,8 +17,10 @@ struct RunStats {
     eval_count: u64,
     error_sum_degrees: f64,
     error_count: u64,
+    worst_error_degrees: f32,
     validation_error_sum_degrees: f64,
     validation_error_count: u64,
+    worst_validation_error_degrees: f32,
     total_time: Duration,
     time_until_first_success: Duration,
     count_until_first_success: u64,
@@ -50,6 +52,7 @@ fn run_calibration(config: DummyConfig, attitude_mode: AttitudeMode) -> RunStats
     let mut validation_start = None;
     let mut completed_required_validation = false;
     let mut worst_angle_degrees = 0.0f32;
+    let mut worst_error_degrees = 0.0f32;
 
     let mut eval_count = 0u64;
     let mut eval_time = Duration::ZERO;
@@ -106,6 +109,7 @@ fn run_calibration(config: DummyConfig, attitude_mode: AttitudeMode) -> RunStats
         if let Some(angle_degrees) = angle_degrees {
             error_sum_degrees += f64::from(angle_degrees);
             error_count += 1;
+            worst_error_degrees = worst_error_degrees.max(angle_degrees);
         }
 
         let warmed_up =
@@ -163,10 +167,12 @@ fn run_calibration(config: DummyConfig, attitude_mode: AttitudeMode) -> RunStats
         "  - avg error: {:.3} deg over {error_count} successful calls",
         error_sum_degrees / error_count as f64,
     );
+    println!("  - worst error: {worst_error_degrees:.3} deg");
     println!(
         "  - avg post-warmup error: {:.3} deg over {validation_error_count} calls",
         validation_error_sum_degrees / validation_error_count.max(1) as f64,
     );
+    println!("  - worst post-warmup error: {worst_angle_degrees:.3} deg");
     println!("- total: {total_time:.2?} / {eval_count} iterations");
     println!(
         "  - until first successful correction: {time_until_first_success:.2?} / {count_until_first_success} iterations"
@@ -178,8 +184,10 @@ fn run_calibration(config: DummyConfig, attitude_mode: AttitudeMode) -> RunStats
         eval_count,
         error_sum_degrees,
         error_count,
+        worst_error_degrees,
         validation_error_sum_degrees,
         validation_error_count,
+        worst_validation_error_degrees: worst_angle_degrees,
         total_time,
         time_until_first_success,
         count_until_first_success,
@@ -203,6 +211,14 @@ fn print_avg_stats(runs: &[RunStats]) {
     let total_error_count: u64 = runs.iter().map(|r| r.error_count).sum();
     let total_validation_error_sum: f64 = runs.iter().map(|r| r.validation_error_sum_degrees).sum();
     let total_validation_error_count: u64 = runs.iter().map(|r| r.validation_error_count).sum();
+    let worst_error_degrees: f32 = runs
+        .iter()
+        .map(|r| r.worst_error_degrees)
+        .fold(0.0, f32::max);
+    let worst_validation_error_degrees: f32 = runs
+        .iter()
+        .map(|r| r.worst_validation_error_degrees)
+        .fold(0.0, f32::max);
 
     println!("  ======================================================================  ");
     println!("# Average stats over {} runs", runs.len());
@@ -217,11 +233,13 @@ fn print_avg_stats(runs: &[RunStats]) {
         total_error_sum / total_error_count as f64,
         avg_count(|r| r.error_count),
     );
+    println!("  - worst error: {worst_error_degrees:.3} deg");
     println!(
         "  - avg post-warmup error: {:.3} deg over {} calls",
         total_validation_error_sum / total_validation_error_count as f64,
         avg_count(|r| r.validation_error_count),
     );
+    println!("  - worst post-warmup error: {worst_validation_error_degrees:.3} deg");
     println!(
         "- total: {:.2?} / {} iterations",
         avg_dur(|r| r.total_time),
