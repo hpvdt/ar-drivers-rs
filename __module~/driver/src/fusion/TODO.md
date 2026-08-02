@@ -22,7 +22,7 @@
 
     - **Summary:** The planned convex gravity residual is exact for the ellipsoid normal, but only approximates
       constant physical magnetic dip when the soft-iron correction is anisotropic.
-    - **Affected module:** `src/fusion/mag_calibration.rs`
+    - **Affected module:** `src/fusion/mag_calibrator.rs`
     - **Severity:** High
     - **Description:** The online objective uses the linear normal projection
       `g_i^T (Q u_i + q / 2)`. From the physical model,
@@ -44,7 +44,7 @@
 - [ ] Bound stale optimizer influence after sample expiry
 
     - **Summary:** Persistent SGD parameters remember gradients from rows that no longer satisfy the cache lifespan.
-    - **Affected module:** `src/fusion/mag_calibration.rs`
+    - **Affected module:** `src/fusion/mag_calibrator.rs`
     - **Severity:** High
     - **Description:** The direct solver is exactly a function of the current retained rows. An online optimizer keeps
       historical parameter updates after a row is replaced or expires, so `max_sample_lifespan_us` no longer strictly
@@ -59,27 +59,35 @@
     - **Summary:** Cached samples are continuously renormalized to the drifting cache mean and radius; unusable
       rebases wipe the working optimizer state and the running RMS fitness statistics, producing block-long dips to
       zero.
-    - **Affected module:** `src/fusion/mag_calibration.rs`
+    - **Affected module:** `src/fusion/mag_calibrator.rs`
     - **Severity:** High
     - **Description:** Every append, replacement, and expiry shifts `mu` and `r`, so each retained row is renormalized
       as `u = (x - mu) / r` and the persistent coefficients are analytically rebased. When a radius or the rebase
       scalar `h = 1 - t^T Q t - q^T t` is unusable, unpublished working state resets to `Q = 2 I`, which also resets
       the radial and gravity RMS statistics. The Air 1 replay then reports fitness ramping from zero back up over a
       block of evaluations several times per cycle even though the decoded data is stable. These dips are a
-      normalization-lifecycle artifact, not a data or convergence problem, and they force downstream verification to
+      normalization-lifecycle artifact, not a data or converg'ence problem, and they force downstream verification to
       tolerate long streaks of near-zero post-warm-up fitness.
     - **Recommended fix:** Store magnetometer readings directly and fit the ellipsoid in raw sample coordinates.
       Update cached mean, radius, and scale on append, replacement, and expiry by recomputing them from the stored
       raw rows instead of rebasing persistent coefficients; keep the radial and gravity running statistics keyed to a
       stable normalization rather than the drifting one. Verify the replay report no longer shows block-long
       post-warm-up dips to zero before retiring the streak-tolerance in `tests/xreal_air_replay.rs`.
+    - **Verification:** run the regression benchmark before the change to record this host's baseline
+      (`cargo test --package ar-drivers --no-default-features --test mag_calibrator_sim_motion regression --
+      --nocapture`); move the unit-test fixtures from unit-sphere to microtesla scale. Acceptance: the Air 1 replay
+      report no longer shows block-long post-warm-up dips to zero, after which the streak tolerance
+      (`MIN_STABLE_STREAK` over `FITNESS_FLOOR`) in `tests/xreal_air_replay.rs` is retired in favor of a constant
+      post-warm-up fitness floor. Record a new chronological stage in `MAG_CALIBRATION_BENCHMARK.md` with before and
+      after tables. Scope: do not bundle the stale-optimizer-influence item; rebasing will no longer exist, so
+      adjust that item's wording separately.
 
 ## Medium severity
 
 - [ ] Score replacement candidates in their post-replacement buffer
 
     - **Summary:** Candidate and victim diversity scores currently use different neighbor pools.
-    - **Affected module:** `src/fusion/mag_calibration.rs`
+    - **Affected module:** `src/fusion/mag_calibrator.rs`
     - **Severity:** Medium
     - **Description:** The victim's score excludes itself, while the candidate is scored against all `N` old rows,
       including the row it would replace:
