@@ -24,7 +24,9 @@ Old samples expire according to `max_sample_lifespan_us`, before the incoming ma
 magnetometer can therefore change cache readiness and normalization through expiry, but it is not retained and does not
 run an optimizer update. The first `N` valid samples fill the cache unconditionally. After the cache is full, a
 k-nearest-neighbor diversity heuristic decides whether a new sample replaces a retained row. Every valid current sample
-still participates in one online optimizer update even when diversity rejects it.
+still participates in one online optimizer update even when diversity rejects it. While no calibration has been
+published yet, each valid sample also triggers a ramped number of cache-only replay updates that accelerate cold-start
+convergence.
 
 Calibration publication requires `N.max(9)` retained samples. Since the cache cannot hold more than `N`, this means the
 cache must be full and `N` must be at least nine.
@@ -153,6 +155,17 @@ gravity-refined candidate and no relaxed radial-error allowance for gravity-assi
 When the current sample was retained, its row is excluded from random draws so it occurs exactly once. Magnetometer and
 gravity data are always sampled together. Sampling uses a private deterministic SplitMix-style `u64` generator.
 
+#### Cold-start cache replay
+
+While no calibration has been published yet, the sample-anchored update is followed by up to `replay_updates`
+additional updates (default 4) whose minibatches contain `replay_minibatch_size` observations (default 8) drawn
+uniformly with replacement from the retained rows only. The arriving sample is never a required replay member; once
+retained, it is an ordinary cache row that replay may draw like any other. The replay count ramps with the retained
+fraction, `replay_updates * matrix_filled / N`, because repeatedly fitting a small, low-coverage cache overfits it and
+can strand the working shape outside the publishable region. Replay steps share the current learning rate but do not
+advance the step counter, so annealing stays tied to the rate of arriving data rather than to compute.
+`replay_updates(0)` disables replay.
+
 For minibatch `B` and gravity subset `G`, the analytic gradients are:
 
 ```text
@@ -243,6 +256,7 @@ m = A (x - b).
 For minibatch size `B`:
 
 - online fitting is `O(10 B)`;
+- cold-start replay adds `O(10 R B_r)` for `R` ramped replay updates of size `B_r`, only until first publication;
 - candidate conversion uses fixed `3 x 3` operations;
 - full publication validation is `O(N)`;
 - diversity maintenance is expected `O(N)` for a full cache;

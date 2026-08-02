@@ -15,6 +15,14 @@ const MAX_RADIAL_RMS: f32 = 0.1;
 const MIN_MAG_NORM: f32 = 0.4;
 const DEFAULT_GRAVITY_WEIGHT: f32 = 0.01;
 const DEFAULT_MINIBATCH_SIZE: usize = 32;
+/// Cache-only replay updates run per valid sample while the calibration is
+/// still unpublished. They let the cold-start optimizer take several gradient
+/// steps per arriving sample without waiting for new data.
+const DEFAULT_REPLAY_UPDATES: usize = 4;
+/// Replay minibatches are smaller than the sample-anchored minibatch because
+/// several of them run per sample and each one re-evaluates its objective
+/// during the bounded half-step search.
+const DEFAULT_REPLAY_MINIBATCH_SIZE: usize = 8;
 const ONLINE_INITIAL_LEARNING_RATE: f32 = 0.5;
 const ONLINE_LEARNING_RATE_DECAY_STEPS: f32 = 64.0;
 const ONLINE_MIN_LEARNING_RATE: f32 = 0.01;
@@ -47,7 +55,10 @@ impl NeighborEntry {
 
 #[derive(Clone, Copy)]
 struct MinibatchSpec {
-    current_sample: Vector3<f32>,
+    /// The arriving observation anchoring a sample-triggered update.
+    /// Cache-replay updates leave this empty and draw every observation from
+    /// the retained rows.
+    current_sample: Option<Vector3<f32>>,
     current_gravity: Option<Vector3<f32>>,
     accepted_row: Option<usize>,
     random_draws: usize,
@@ -85,6 +96,8 @@ pub struct MagCalibrator<const N: usize> {
     gravity_projection: f32,
     gravity_projection_initialized: bool,
     minibatch_size: usize,
+    replay_updates: usize,
+    replay_minibatch_size: usize,
     prng_state: u64,
     optimizer_steps: u64,
 }
@@ -112,6 +125,8 @@ impl<const N: usize> Default for MagCalibrator<N> {
             gravity_projection: 0.0,
             gravity_projection_initialized: false,
             minibatch_size: DEFAULT_MINIBATCH_SIZE.min(N.max(1)),
+            replay_updates: DEFAULT_REPLAY_UPDATES,
+            replay_minibatch_size: DEFAULT_REPLAY_MINIBATCH_SIZE.min(N.max(1)),
             prng_state: ONLINE_PRNG_SEED,
             optimizer_steps: 0,
         }
@@ -161,6 +176,29 @@ impl<const N: usize> MagCalibrator<N> {
     pub fn minibatch_size(self, minibatch_size: usize) -> Self {
         Self {
             minibatch_size: minibatch_size.clamp(1, N.max(1)),
+            ..self
+        }
+    }
+
+    /// Configure the number of additional cache-only optimizer updates run
+    /// with each valid sample while the calibration is still unpublished.
+    /// Replay draws its whole minibatch from the retained rows, so it never
+    /// requires the arriving sample; it accelerates cold-start convergence at
+    /// a small pre-publication computation cost. The default is 4; zero
+    /// disables replay.
+    pub fn replay_updates(self, replay_updates: usize) -> Self {
+        Self {
+            replay_updates,
+            ..self
+        }
+    }
+
+    /// Configure the number of retained-row observations used by each
+    /// cache-replay update. The default is 8, smaller than the
+    /// sample-anchored minibatch, capped by the sample-buffer capacity.
+    pub fn replay_minibatch_size(self, replay_minibatch_size: usize) -> Self {
+        Self {
+            replay_minibatch_size: replay_minibatch_size.clamp(1, N.max(1)),
             ..self
         }
     }
@@ -394,7 +432,9 @@ impl<const N: usize> MagCalibrator<N> {
             }
         };
 
-        add_observation(minibatch.current_sample, minibatch.current_gravity);
+        if let Some(sample) = minibatch.current_sample {
+            add_observation(sample, minibatch.current_gravity);
+        }
         for _ in 0..minibatch.random_draws {
             let Some(row) = Self::random_cache_row(
                 &mut random_state,
@@ -414,8 +454,10 @@ impl<const N: usize> MagCalibrator<N> {
         objective
     }
 
-    /// Applies one bounded normalized-SGD update to the current valid sample
-    /// and randomly selected retained observations.
+    /// Applies one bounded normalized-SGD update anchored to the current
+    /// valid sample, followed, while the calibration is still unpublished, by
+    /// the configured number of cache-replay updates drawn purely from the
+    /// retained rows.
     fn update_online_optimizer(
         &mut self,
         current_sample: Vector3<f32>,
@@ -432,13 +474,46 @@ impl<const N: usize> MagCalibrator<N> {
         } else {
             0
         };
-        let minibatch = MinibatchSpec {
-            current_sample,
+        if self.apply_minibatch_update(MinibatchSpec {
+            current_sample: Some(current_sample),
             current_gravity,
             accepted_row,
             random_draws,
             random_state: self.prng_state,
-        };
+        }) {
+            self.optimizer_steps += 1;
+        }
+
+        // Cold-start cache replay: the arriving sample is never a required
+        // member of a replay minibatch; once retained, it is an ordinary
+        // cache row that replay may draw like any other. Replay ramps in with
+        // the retained fraction: repeatedly fitting a small, low-coverage
+        // cache overfits it and can strand the working shape outside the
+        // publishable region, while a nearly full cache is representative
+        // enough to converge against. Replay steps reuse the current
+        // learning rate without advancing its schedule, so annealing stays
+        // tied to the rate of arriving data rather than to compute.
+        if self.calibration_initialized || self.matrix_filled == 0 {
+            return;
+        }
+        let replay_count = self.replay_updates.saturating_mul(self.matrix_filled) / N.max(1);
+        for _ in 0..replay_count {
+            self.apply_minibatch_update(MinibatchSpec {
+                current_sample: None,
+                current_gravity: None,
+                accepted_row: None,
+                random_draws: self.replay_minibatch_size,
+                random_state: self.prng_state,
+            });
+        }
+    }
+
+    /// Applies one bounded normalized-SGD update over the given minibatch,
+    /// advancing the private draw state past the sampled rows. Returns whether
+    /// a finite objective-lowering step was accepted; an update that finds no
+    /// observation or no usable descent direction leaves the working state
+    /// unchanged.
+    fn apply_minibatch_update(&mut self, minibatch: MinibatchSpec) -> bool {
         let mut next_random_state = minibatch.random_state;
         let mut gradient = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
         let mut gradient_scale = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
@@ -466,16 +541,23 @@ impl<const N: usize> MagCalibrator<N> {
             }
         };
 
-        add_observation(current_sample, current_gravity);
-        for _ in 0..random_draws {
-            let Some(row) =
-                Self::random_cache_row(&mut next_random_state, self.matrix_filled, accepted_row)
-            else {
+        if let Some(sample) = minibatch.current_sample {
+            add_observation(sample, minibatch.current_gravity);
+        }
+        for _ in 0..minibatch.random_draws {
+            let Some(row) = Self::random_cache_row(
+                &mut next_random_state,
+                self.matrix_filled,
+                minibatch.accepted_row,
+            ) else {
                 break;
             };
             add_observation(self.sample(row), self.gravity_directions[row]);
         }
         self.prng_state = next_random_state;
+        if observation_count == 0 {
+            return false;
+        }
 
         gradient /= observation_count as f32;
         gradient_scale /= observation_count as f32;
@@ -502,7 +584,7 @@ impl<const N: usize> MagCalibrator<N> {
         let direction_norm =
             (direction.norm_squared() + gravity_direction * gravity_direction).sqrt();
         if !direction_norm.is_finite() || direction_norm <= f32::EPSILON {
-            return;
+            return false;
         }
 
         let old_objective = self.minibatch_objective(&parameters, gravity_projection, minibatch);
@@ -522,11 +604,11 @@ impl<const N: usize> MagCalibrator<N> {
             {
                 self.parameters = candidate;
                 self.gravity_projection = candidate_gravity_projection;
-                self.optimizer_steps += 1;
-                return;
+                return true;
             }
             step *= 0.5;
         }
+        false
     }
 
     /// Computes squared distances from `x` to the first `count` rows of the

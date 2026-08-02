@@ -189,6 +189,84 @@ fn mag_calibrator_clamps_minibatch_size_and_is_deterministic() {
 }
 
 #[test]
+fn mag_calibrator_converges_faster_with_cache_replay() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+    let mut replayed = MagCalibrator::<63>::new();
+    let mut plain = MagCalibrator::<63>::new().replay_updates(0);
+
+    // Cold-start with one fill pass of full-sphere coverage: the
+    // sample-anchored update alone is still far from converged, while
+    // replaying the retained rows already fits them well.
+    for i in 0..63 {
+        let raw = offset + distortion * sample_direction(i, 63);
+        let _ = replayed.evaluate_correct(raw, None, i as u64);
+        let _ = plain.evaluate_correct(raw, None, i as u64);
+    }
+
+    let probe_error = |calibrator: &mut MagCalibrator<63>| {
+        [
+            Vector3::x(),
+            Vector3::y(),
+            Vector3::z(),
+            Vector3::new(1.0, -2.0, 3.0).normalize(),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, expected)| {
+            (calibrator
+                .evaluate_correct(offset + distortion * expected, None, 1000 + i as u64)
+                .unwrap()
+                - expected)
+                .norm()
+        })
+        .sum::<f32>()
+    };
+    let replayed_error = probe_error(&mut replayed);
+    let plain_error = probe_error(&mut plain);
+
+    assert!(
+        replayed_error < plain_error,
+        "replayed_error={replayed_error} plain_error={plain_error}"
+    );
+}
+
+#[test]
+fn mag_calibrator_clamps_replay_configuration_and_is_deterministic() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+    let expected = Vector3::new(1.0, -2.0, 3.0).normalize();
+    let raw = offset + distortion * expected;
+
+    for (replay_updates, replay_minibatch_size) in [(0, 0), (3, 0), (3, usize::MAX)] {
+        let configure = || {
+            MagCalibrator::<63>::new()
+                .replay_updates(replay_updates)
+                .replay_minibatch_size(replay_minibatch_size)
+        };
+        let mut first = configure();
+        let mut second = configure();
+        for i in 0..17 * 63 {
+            let direction = sample_direction(i % 63, 63);
+            let raw = offset + distortion * direction;
+            assert_eq!(
+                first.evaluate_correct(raw, None, i as u64),
+                second.evaluate_correct(raw, None, i as u64)
+            );
+        }
+        let first_result = first.evaluate_correct(raw, None, 10_000);
+        let second_result = second.evaluate_correct(raw, None, 10_000);
+        assert_eq!(first_result, second_result);
+        // A single-observation replay minibatch is degenerate, like a
+        // single-observation anchored minibatch, so only configurations with
+        // enough observations per update are required to converge.
+        if replay_updates == 0 || replay_minibatch_size == usize::MAX {
+            assert_vec_close(first_result.unwrap(), expected, 0.05);
+        }
+    }
+}
+
+#[test]
 fn mag_calibrator_accepts_zero_components_and_rejects_bad_vectors() {
     let mut calibrator = MagCalibrator::<12>::new();
     for (timestamp_us, sample) in [
