@@ -45,6 +45,15 @@ impl NeighborEntry {
     };
 }
 
+#[derive(Clone, Copy)]
+struct MinibatchSpec {
+    current_sample: Vector3<f32>,
+    current_gravity: Option<Vector3<f32>>,
+    accepted_row: Option<usize>,
+    random_draws: usize,
+    random_state: u64,
+}
+
 /// Online regularized ellipsoid fit for a hard-iron offset and full SPD
 /// soft-iron correction from a fixed, diverse sample buffer.
 pub struct MagCalibrator<const N: usize> {
@@ -365,12 +374,9 @@ impl<const N: usize> MagCalibrator<N> {
         &self,
         parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>,
         gravity_projection: f32,
-        current_sample: Vector3<f32>,
-        current_gravity: Option<Vector3<f32>>,
-        accepted_row: Option<usize>,
-        random_draws: usize,
-        mut random_state: u64,
+        minibatch: MinibatchSpec,
     ) -> f32 {
+        let mut random_state = minibatch.random_state;
         let mut radial_squared = 0.0;
         let mut gravity_squared = 0.0;
         let mut observation_count = 0;
@@ -388,11 +394,13 @@ impl<const N: usize> MagCalibrator<N> {
             }
         };
 
-        add_observation(current_sample, current_gravity);
-        for _ in 0..random_draws {
-            let Some(row) =
-                Self::random_cache_row(&mut random_state, self.matrix_filled, accepted_row)
-            else {
+        add_observation(minibatch.current_sample, minibatch.current_gravity);
+        for _ in 0..minibatch.random_draws {
+            let Some(row) = Self::random_cache_row(
+                &mut random_state,
+                self.matrix_filled,
+                minibatch.accepted_row,
+            ) else {
                 break;
             };
             add_observation(self.sample(row), self.gravity_directions[row]);
@@ -424,8 +432,14 @@ impl<const N: usize> MagCalibrator<N> {
         } else {
             0
         };
-        let random_state = self.prng_state;
-        let mut next_random_state = random_state;
+        let minibatch = MinibatchSpec {
+            current_sample,
+            current_gravity,
+            accepted_row,
+            random_draws,
+            random_state: self.prng_state,
+        };
+        let mut next_random_state = minibatch.random_state;
         let mut gradient = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
         let mut gradient_scale = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
         let mut gravity_gradient = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
@@ -491,15 +505,7 @@ impl<const N: usize> MagCalibrator<N> {
             return;
         }
 
-        let old_objective = self.minibatch_objective(
-            &parameters,
-            gravity_projection,
-            current_sample,
-            current_gravity,
-            accepted_row,
-            random_draws,
-            random_state,
-        );
+        let old_objective = self.minibatch_objective(&parameters, gravity_projection, minibatch);
         let learning_rate = (ONLINE_INITIAL_LEARNING_RATE
             / (1.0 + self.optimizer_steps as f32 / ONLINE_LEARNING_RATE_DECAY_STEPS))
             .max(ONLINE_MIN_LEARNING_RATE);
@@ -507,15 +513,8 @@ impl<const N: usize> MagCalibrator<N> {
         for _ in 0..ONLINE_BACKTRACK_STEPS {
             let candidate = parameters - step * direction;
             let candidate_gravity_projection = gravity_projection - step * gravity_direction;
-            let objective = self.minibatch_objective(
-                &candidate,
-                candidate_gravity_projection,
-                current_sample,
-                current_gravity,
-                accepted_row,
-                random_draws,
-                random_state,
-            );
+            let objective =
+                self.minibatch_objective(&candidate, candidate_gravity_projection, minibatch);
             if candidate.iter().all(|value| value.is_finite())
                 && candidate_gravity_projection.is_finite()
                 && objective.is_finite()
