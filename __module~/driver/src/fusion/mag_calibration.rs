@@ -13,6 +13,7 @@ const MAX_SAMPLE_CONDITION: f32 = 1.0e2;
 const MAX_CORRECTION_CONDITION: f32 = 1.0e1;
 const MAX_RADIAL_RMS: f32 = 0.1;
 const MIN_MAG_NORM: f32 = 0.4;
+const DEFAULT_GRAVITY_WEIGHT: f32 = 0.01;
 const DEFAULT_MINIBATCH_SIZE: usize = 32;
 const ONLINE_INITIAL_LEARNING_RATE: f32 = 0.5;
 const ONLINE_LEARNING_RATE_DECAY_STEPS: f32 = 64.0;
@@ -94,7 +95,7 @@ impl<const N: usize> Default for MagCalibrator<N> {
             neighbor_cache_len: [0; N],
             k: 2, // Works well in testing
             max_sample_lifespan_us: 60 * 60 * 1_000_000,
-            gravity_weight: 0.1,
+            gravity_weight: DEFAULT_GRAVITY_WEIGHT,
             parameters: Self::parameter_prior(),
             normalization_mean: Vector3::zeros(),
             normalization_radius: 0.0,
@@ -132,7 +133,7 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     /// Configure the relative weight of the gravity-consistency residual.
-    /// The default is 0.1; zero disables the ellipsoid-normal gravity
+    /// The default is 0.01; zero disables the ellipsoid-normal gravity
     /// surrogate.
     pub fn gravity_weight(self, gravity_weight: f32) -> Self {
         Self {

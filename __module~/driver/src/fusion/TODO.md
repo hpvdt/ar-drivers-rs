@@ -16,10 +16,12 @@
       so the surrogate keeps `g_i^T A m_i` approximately constant rather than the physical dip `g_i^T m_i`.
       These coincide for isotropic correction but can differ for the full rotated SPD distortion emitted by the
       simulator. A gravity weight that is too large can therefore bias the shape toward isotropy even though the
-      combined optimization problem is convex and quadratic.
-    - **Recommended fix:** Compare fixed-seed with-gravity results against both the magnetometer-only online fit and
-      the direct-solver baseline. Keep the surrogate only if it improves or preserves full-SPD direction accuracy;
-      otherwise lower its default weight or disable it while retaining the convex magnetometer objective.
+      combined optimization problem is convex and quadratic. The fixed-seed benchmark found this bias at weight `0.1`;
+      reducing the default to `0.01` recovered average post-warm-up accuracy to within `0.086 degree` of the direct
+      gravity baseline.
+    - **Recommended fix:** Extend validation beyond the current fixed simulator distortion with stronger anisotropy,
+      rotated eigenvectors, inconsistent acceleration, and multiple magnetic dip angles. Keep the low default weight or
+      disable the surrogate if those sweeps show a repeatable regression.
 
 - [ ] Bound stale optimizer influence after sample expiry
 

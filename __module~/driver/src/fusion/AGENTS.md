@@ -122,7 +122,8 @@ The optimizer learns a scalar projection `kappa` and minimizes:
 J_g = gravity_weight / (2 n_g) sum_i (psi_i^T theta - kappa)^2.
 ```
 
-`J_r + J_g` is convex and quadratic in `(theta, kappa)`. Gravity is optional and `gravity_weight(0)` removes this term.
+`J_r + J_g` is convex and quadratic in `(theta, kappa)`. Gravity is optional, defaults to weight `0.01`, and
+`gravity_weight(0)` removes this term.
 
 This term is a physical surrogate rather than exact magnetic dip. The model gives:
 
