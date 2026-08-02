@@ -4,226 +4,235 @@
 
 ### Reference Frames
 
-The library uses multiple coordinate reference frames:
+The library uses multiple coordinate frames:
 
-- **RUB (Right-Up-Back)**: Android sensor coordinate system (used in raw sensor data)
-- **FRD (Forward-Right-Down)**: Aerospace standard frame (used in fusion outputs)
-- **Custom frames**: Configurable via AHRS for different applications
+- **RUB (Right-Up-Back):** Android sensor coordinates used by raw device events.
+- **FRD (Forward-Right-Down):** Aerospace coordinates used by fusion state and outputs.
+- **Custom frames:** Configurable AHRS output frames.
 
-### Coordinate Transformations
+Treat shared sensor-event documentation and the fusion module as the source of truth for frames and units. Keep frame
+transformations explicit and centralized, document device-specific deviations, and use the existing linear-algebra
+types.
 
-- Treat the shared sensor-event documentation and the fusion module as the source
-  of truth for reference frames and units. Device events currently use RUB, while
-  fusion state and outputs use FRD.
-- Keep frame transformations explicit and centralized, document device-specific
-  deviations, and use the repository's existing linear-algebra types.
+## Magnetometer calibration
 
-## Source Files
+`MagCalibrator<N>` retains finite, nonzero FRD magnetometer samples. Each row may also carry a normalized optional
+co-timestamped body-frame FRD gravity direction and a device timestamp. Invalid gravity is ignored without rejecting
+the magnetometer sample.
 
-### Magnetometer Calibration (`mag_calibration.rs`)
+Old samples expire according to `max_sample_lifespan_us`. After the cache is full, a k-nearest-neighbor diversity
+heuristic decides whether a new sample replaces a retained row. Every valid current sample still participates in one
+online optimizer update even when diversity rejects it.
 
-`MagCalibrator<N>` keeps a cache of finite, nonzero FRD magnetometer samples. Old
-samples expire according to `max_sample_lifespan_us`; after the cache is full, a
-k-nearest-neighbor diversity heuristic decides whether a new sample should replace
-an existing one. Calibration requires `N.max(9)` retained samples, which means the
-entire cache must be populated and `N` must be at least 9.
+Calibration publication requires `N.max(9)` retained samples. Since the cache cannot hold more than `N`, this means the
+cache must be full and `N` must be at least nine.
 
-The cache size `N` must outlast a single motion pattern, not just the solver
-parameter count. If the retained samples span only one rotation segment, they
-cover a near-planar circle on the sphere, the covariance condition check still
-passes, and the ellipsoid fit is free to drift along the unobserved axis —
-visible as worst-case heading errors above 20 degrees in the dummy integration
-test with `N = 255` (roughly one 10-second motion segment at the dummy event
-rate). `FusionState` therefore uses `N = 1023`, which spans several segments
-and keeps the worst-case error near 9 degrees.
+### Production cache size
 
-Let $b$ denote the hard-iron offset, $D$ the symmetric positive-definite
-soft-iron distortion matrix, $A$ the corresponding soft-iron correction matrix,
-and $m_i$ an ideal unit-length magnetic-field sample. Their physical relationship
-is
+The cache must outlast one motion pattern, not merely contain enough rows for nine coefficients. With `N = 255`, one
+roughly ten-second dummy motion segment covers a near-planar circle and permits worst-case heading errors above
+20 degrees. `FusionState` therefore uses `N = 1023`, spanning several motion segments and keeping the direct-solver
+baseline near 9 degrees worst case.
 
-$$
-x_i=b+Dm_i,
-\qquad
-\left\|m_i\right\|=1,
-\qquad
-m_i=A(x_i-b),
-\qquad
-AD=DA=I.
-$$
+### Physical model
 
-The solver estimates the ellipsoid as a quadratic form. Define the sample mean,
-RMS radius, and dimensionless samples as
+Let `b` be hard-iron offset, `D` the symmetric positive-definite soft-iron distortion, `A = D^-1` its correction, and
+`m_i` an ideal unit magnetic vector:
 
-$$
-\mu=\frac{1}{n}\sum_i x_i,
-\qquad
-r=\sqrt{\frac{1}{n}\sum_i\left\|x_i-\mu\right\|^2},
-\qquad
-u_i=\frac{x_i-\mu}{r}.
-$$
+```text
+x_i = b + D m_i,
+||m_i|| = 1,
+m_i = A (x_i - b).
+```
 
-Centering and scaling keep the direct solve independent of the sensor units and
-reduce its numerical condition. A non-finite or zero $r$ is rejected. The
-condition number of the centered sample covariance must not exceed $10^2$.
+For current cache mean `mu` and RMS radius `r`, normalize samples as:
 
-Let $Q$ be a symmetric ellipsoid shape matrix and $q$ its linear term.
-Substituting the physical model $x_i=b+Dm_i$ with $A=D^{-1}$ into the
-normalization $u_i=(x_i-\mu)/r$ and expanding $\left\|A(x_i-b)\right\|^2=1$
-shows their physical content:
+```text
+u_i = (x_i - mu) / r.
+```
 
-$$
-Q=\gamma r^2A^2,
-\qquad
-q=-2Qd,
-\qquad
-d=\frac{b-\mu}{r},
-\qquad
-\gamma=1+d^TQd,
-$$
+The ellipsoid equation is:
 
-so $Q$ is the squared correction matrix in normalized units, $d$ is the
-normalized hard-iron center, and $\gamma$ the ellipsoid scale. The normalized
-samples obey
-
-$$
+```text
 u_i^T Q u_i + q^T u_i = 1.
-$$
+```
 
-The six independent coordinates of $Q$ and the three coordinates of $q$ form the
-nine-parameter vector
+The nine online coefficients are:
 
-$$
-\theta=[Q_{00},Q_{11},Q_{22},Q_{01},Q_{02},Q_{12},q_0,q_1,q_2]^T.
-$$
+```text
+theta = [Q00, Q11, Q22, Q01, Q02, Q12, q0, q1, q2].
+```
 
-For
+Their sample feature vector is:
 
-$$
-\phi(u)=[u_x^2,u_y^2,u_z^2,2u_xu_y,2u_xu_z,2u_yu_z,u_x,u_y,u_z]^T,
-$$
+```text
+phi(u) = [ux^2, uy^2, uz^2, 2 ux uy, 2 ux uz, 2 uy uz, ux, uy, uz].
+```
 
-the solver minimizes the regularized algebraic least-squares objective
+### Convex online objective
 
-$$
-J(\theta)
-=\frac{1}{2n}\sum_i\left(\phi(u_i)^T\theta-1\right)^2
-+\frac{\lambda}{2}\left\|Q-cI\right\|_F^2,
-\qquad \lambda=10^{-3},
-\qquad c=2.
-$$
+The radial algebraic residual and regularizer are:
 
-The Frobenius regularization targets a scaled identity shape instead of the
-non-positive-definite zero matrix, biasing candidates away from indefinite
-shapes while keeping the entire objective quadratic. The target scale $c>1$
-counters the systematic ellipsoid inflation of algebraic fits under noise
-(they underestimate the eigenvalues of $Q$); the identity shape is only the
-exact fit for noise-free ideal normalized samples. If
-$R=\operatorname{diag}(1,1,1,2,2,2,0,0,0)$ and
-$e_d=[1,1,1,0,0,0,0,0,0]^T$, the unique candidate is obtained with one
-direct linear solve:
+```text
+e_r,i = phi_i^T theta - 1,
 
-$$
-\left(\frac{1}{n}\sum_i\phi_i\phi_i^T+\lambda R\right)\theta
-=\frac{1}{n}\sum_i\phi_i+\lambda c\,e_d.
-$$
+J_r = 1 / (2 n) sum_i e_r,i^2
+    + lambda / 2 ||Q - c I||_F^2,
 
-The direct ellipsoid fit has no alternating sweeps, warm starts, parameter
-clamps, or convergence iterations.
+lambda = 1e-3,
+c = 2.
+```
 
-After solving, the normalized hard-iron center and ellipsoid metric are
+The scaled-identity prior counters algebraic ellipsoid inflation under noise and biases unpublished working state away
+from indefinite shapes. In coefficient coordinates its weights are:
 
-$$
-d=-\frac{1}{2}Q^{-1}q,
-\qquad
-\gamma=1+d^TQd,
-\qquad
-M=\frac{Q}{\gamma}.
-$$
+```text
+R = diag(1, 1, 1, 2, 2, 2, 0, 0, 0).
+```
 
-The candidate requires finite coefficients, positive-definite $Q$, and positive
-$\gamma$. Transforming back to sensor units gives
+#### Gravity surrogate
 
-$$
-b=\mu+rd,
-\qquad
-A=\frac{1}{r}M^{1/2}.
-$$
+The optional gravity term uses the ellipsoid normal:
 
-The principal symmetric positive-definite square root is computed once from the
-eigendecomposition of $M$. The correction matrix condition number must not exceed
-$10$, and the RMS radial residual
+```text
+n_i = Q u_i + q / 2.
+```
 
-$$
-\sqrt{\frac{1}{n}\sum_i\left(\left\|A(x_i-b)\right\|-1\right)^2}
-$$
+For normalized gravity `g_i`, the projection is linear in `theta`:
 
-must not exceed $0.1$. Before the first successful calibration, failed solves and
-rejected candidates return a specific `BadCalibration`. Later rejected candidates
-leave the persisted calibration unchanged and the reading uses that last accepted
-state. An incomplete sample buffer still returns `InsufficientSamples`. Successful
-calibration persists $b$ and $A$ directly; correcting a reading then requires one
-matrix-vector multiplication:
+```text
+s_i = g_i^T n_i = psi(u_i, g_i)^T theta,
 
-$$
-m=A(x-b).
-$$
+psi(u, g) = [
+    gx ux,
+    gy uy,
+    gz uz,
+    gx uy + gy ux,
+    gx uz + gz ux,
+    gy uz + gz uy,
+    gx / 2,
+    gy / 2,
+    gz / 2,
+].
+```
 
-Each retained magnetometer sample may also contain an optional co-timestamped
-body-frame FRD gravity direction. The direction is normalized when inserted;
-non-finite and zero directions are ignored without rejecting the magnetometer
-sample. Magnetometer-only samples and calibrators configured with zero gravity
-weight retain the direct-fit behavior.
+The optimizer learns a scalar projection `kappa` and minimizes:
 
-After validating the direct ellipsoid candidate, gravity-tagged samples enable
-one damped affine refinement. In normalized sample coordinates, write
+```text
+J_g = gravity_weight / (2 n_g) sum_i (psi_i^T theta - kappa)^2.
+```
 
-$$
-m_i=C u_i+a,
-\qquad
-C=rA,
-\qquad
-a=A(\mu-b).
-$$
+`J_r + J_g` is convex and quadratic in `(theta, kappa)`. Gravity is optional and `gravity_weight(0)` removes this term.
 
-The six independent coordinates of symmetric $C$ and the three coordinates of
-$a$ form another nine-parameter vector. For unit gravity $g_i$, magnetic dip
-implies that $s_i=g_i^Tm_i$ is constant. The unknown constant is eliminated by
-centering the residuals, $e_i=s_i-\bar{s}$. This gravity residual is exactly
-linear in the affine parameters. It is combined with a first-order radial
-residual and Levenberg damping in one additional $9\times9$ normal solve:
+This term is a physical surrogate rather than exact magnetic dip. The model gives:
 
-$$
-J(\delta)
-=\frac{1}{n}\sum_i(e_{r,i}+J_{r,i}\delta)^2
-+\frac{w_g}{n_g}\sum_{i:\,g_i}(e_i+J_{g,i}\delta)^2
-+\lambda\|\delta\|^2.
-$$
+```text
+Q (u_i - d) = gamma r A m_i,
+```
 
-The refinement is accepted only when the correction remains finite, symmetric
-positive-definite, within the condition limit, lowers the full
-radial-plus-gravity objective, and increases radial RMS by no more than $0.005$.
-A bounded half-step search handles linearization overshoot. Otherwise the
-validated direct candidate is retained. The refined sensor-unit parameters are
-recovered as
+so the surrogate keeps `g_i^T A m_i` approximately constant instead of exact `g_i^T m_i`. It is exact for isotropic
+correction and can be biased by anisotropic soft iron. Fixed-seed with-gravity integration results must therefore be
+compared with magnetometer-only results and the recorded direct-solver baseline.
 
-$$
-A=C/r,
-\qquad
-b=\mu-rC^{-1}a.
-$$
+### Minibatch update
 
-Accumulating the fixed $9\times9$ normal system and validating the candidate take
-$O(n)$ time per calibration and $O(1)$ auxiliary space. Gravity refinement adds
-another $O(n)$ pass and fixed $9\times9$ solve when at least two retained samples
-contain gravity.
+`minibatch_size` defaults to 32 and is clamped to `1..=N.max(1)`. Each update contains:
 
-The k-nearest-neighbor diversity heuristic keeps a per-row incremental neighbor
-cache: each row stores its nearest other rows' squared distances as a sorted
-trusted prefix of $k$ entries plus a small overshoot pad, updated in amortized
-$O(k)$ per row on append or replace and remapped on expiry compaction, with an
-$O(n)$ rescan of a row only when its pad is exhausted. A new sample therefore
-costs expected $O(n)$ neighbor work and $O(nk)$ auxiliary space with a small
-constant instead of an $O(n^2\log n)$ all-pairs rescan, and the square root is
-deferred until after selection. Configurations with $k$ above the per-row cache
-capacity bypass the cache and scan rows directly.
+1. the current valid sample, whether retained or rejected by diversity;
+2. random retained rows for the remaining slots, sampled uniformly with replacement.
+
+When the current sample was retained, its row is excluded from random draws so it occurs exactly once. Magnetometer and
+gravity data are always sampled together. Sampling uses a private deterministic SplitMix-style `u64` generator.
+
+For minibatch `B` and gravity subset `G`, the analytic gradients are:
+
+```text
+gradient_theta = 1 / |B| sum_i e_r,i phi_i
+               + gravity_weight / |G| sum_i e_g,i psi_i
+               + lambda R (theta - c e_d),
+
+gradient_kappa = -gravity_weight / |G| sum_i e_g,i.
+```
+
+The implementation divides each component by minibatch feature energy plus regularization and a finite epsilon. Its
+learning rate decays from a private initial value to a nonzero floor. A bounded half-step search accepts only finite
+updates that lower the same minibatch objective. Working `Q` may temporarily be indefinite; publication still requires
+SPD. Preventing all intermediate indefinite states can stall descent at the SPD boundary even when the convex optimum
+is valid.
+
+### Changing normalization
+
+Append, replacement, and expiry change `mu` and `r`. Persistent coefficients are analytically rebased.
+
+For:
+
+```text
+u_old = t + s u_new,
+t = (mu_new - mu_old) / r_old,
+s = r_new / r_old,
+h = 1 - t^T Q_old t - q_old^T t,
+```
+
+the equivalent state is:
+
+```text
+Q_new = s^2 Q_old / h,
+q_new = s (q_old + 2 Q_old t) / h,
+kappa_new = s kappa_old / h.
+```
+
+If a radius or `h` is unusable, only unpublished working state resets to `Q = 2 I`, `q = 0`. A single centered sample
+has zero radius, so the first informative gradient requires two distinct samples even though state exists immediately.
+
+### Candidate conversion and quality gates
+
+For a working candidate:
+
+```text
+d = -0.5 Q^-1 q,
+gamma = 1 + d^T Q d,
+M = Q / gamma,
+b = mu + r d,
+A = M^(1/2) / r.
+```
+
+The principal symmetric square root uses a `3 x 3` eigendecomposition. Publication requires:
+
+- finite coefficients, mean, radius, offset, and correction;
+- sample covariance condition at most `100`;
+- positive-definite `Q` and positive `gamma`;
+- correction condition at most `10`;
+- full-cache radial RMS at most `0.1`.
+
+Before the first successful publication, a rejected full-cache candidate returns `BadCalibration`. After publication,
+non-insufficient candidate failures leave the last published correction in use. Falling below cache readiness always
+returns `InsufficientSamples`. Correcting a reading remains one matrix-vector multiplication followed by normalization:
+
+```text
+m = A (x - b).
+```
+
+### Complexity
+
+For minibatch size `B`:
+
+- online fitting is `O(10 B)`;
+- candidate conversion uses fixed `3 x 3` operations;
+- full publication validation is `O(N)`;
+- diversity maintenance is expected `O(N)` for a full cache.
+
+The call remains `O(N)` overall because publication validation and sample diversity are linear, but there are no
+production `9 x 9` normal-matrix accumulations or solves.
+
+### Diversity neighbor cache
+
+Each retained row stores its nearest other rows as a sorted trusted prefix with a small overshoot pad. Append and
+replacement update prefixes in amortized `O(k)` per row. Expiry remaps cached indices, and a row is rescanned only when
+its trusted prefix falls below `k`. Configurations with `k` above the fixed cache capacity scan rows directly. Distance
+selection operates on squared values and takes square roots only for selected neighbors.
+
+### Known adaptation limitation
+
+Online parameters retain historical gradient influence after a row is replaced or expires. Coordinate rebasing changes
+units but does not remove that contribution. The backlog tracks explicit replay or forgetting work needed before sample
+lifespan can be interpreted as a strict optimizer-history bound.

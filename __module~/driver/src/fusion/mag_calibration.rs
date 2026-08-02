@@ -13,8 +13,14 @@ const MAX_SAMPLE_CONDITION: f32 = 1.0e2;
 const MAX_CORRECTION_CONDITION: f32 = 1.0e1;
 const MAX_RADIAL_RMS: f32 = 0.1;
 const MIN_MAG_NORM: f32 = 0.4;
-const MAX_REFINEMENT_RADIAL_RMS_INCREASE: f32 = 0.005;
-const REFINEMENT_DAMPING: f32 = 1.0e-2;
+const DEFAULT_MINIBATCH_SIZE: usize = 32;
+const ONLINE_INITIAL_LEARNING_RATE: f32 = 0.5;
+const ONLINE_LEARNING_RATE_DECAY_STEPS: f32 = 64.0;
+const ONLINE_MIN_LEARNING_RATE: f32 = 0.01;
+const ONLINE_MAX_STEP_NORM: f32 = 0.5;
+const ONLINE_SCALE_EPSILON: f32 = 1.0e-4;
+const ONLINE_BACKTRACK_STEPS: usize = 12;
+const ONLINE_PRNG_SEED: u64 = 0x9E37_79B9_7F4A_7C15;
 /// Number of neighbor entries cached per buffered sample row: the `k` nearest
 /// squared distances plus an overshoot pad that absorbs neighbor churn before
 /// an O(N) row rescan becomes necessary. Configurations with `num_neighbors`
@@ -38,7 +44,7 @@ impl NeighborEntry {
     };
 }
 
-/// Direct regularized ellipsoid fit for a hard-iron offset and full SPD
+/// Online regularized ellipsoid fit for a hard-iron offset and full SPD
 /// soft-iron correction from a fixed, diverse sample buffer.
 pub struct MagCalibrator<const N: usize> {
     matrix: SMatrix<f32, N, 3>,
@@ -62,6 +68,15 @@ pub struct MagCalibrator<const N: usize> {
     k: usize,
     max_sample_lifespan_us: u64,
     gravity_weight: f32,
+    parameters: SVector<f32, CALIBRATION_PARAMETER_COUNT>,
+    normalization_mean: Vector3<f32>,
+    normalization_radius: f32,
+    normalization_initialized: bool,
+    gravity_projection: f32,
+    gravity_projection_initialized: bool,
+    minibatch_size: usize,
+    prng_state: u64,
+    optimizer_steps: u64,
 }
 
 impl<const N: usize> Default for MagCalibrator<N> {
@@ -80,6 +95,15 @@ impl<const N: usize> Default for MagCalibrator<N> {
             k: 2, // Works well in testing
             max_sample_lifespan_us: 60 * 60 * 1_000_000,
             gravity_weight: 0.1,
+            parameters: Self::parameter_prior(),
+            normalization_mean: Vector3::zeros(),
+            normalization_radius: 0.0,
+            normalization_initialized: false,
+            gravity_projection: 0.0,
+            gravity_projection_initialized: false,
+            minibatch_size: DEFAULT_MINIBATCH_SIZE.min(N.max(1)),
+            prng_state: ONLINE_PRNG_SEED,
+            optimizer_steps: 0,
         }
     }
 }
@@ -108,7 +132,8 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     /// Configure the relative weight of the gravity-consistency residual.
-    /// The default is 0.1; zero disables gravity refinement.
+    /// The default is 0.1; zero disables the ellipsoid-normal gravity
+    /// surrogate.
     pub fn gravity_weight(self, gravity_weight: f32) -> Self {
         Self {
             gravity_weight: if gravity_weight.is_finite() {
@@ -117,6 +142,390 @@ impl<const N: usize> MagCalibrator<N> {
                 0.0
             },
             ..self
+        }
+    }
+
+    /// Configure the maximum number of observations used by each online
+    /// optimizer update. The current valid observation is always included. The
+    /// default is 32, capped by the sample-buffer capacity.
+    pub fn minibatch_size(self, minibatch_size: usize) -> Self {
+        Self {
+            minibatch_size: minibatch_size.clamp(1, N.max(1)),
+            ..self
+        }
+    }
+
+    fn parameter_prior() -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
+        SVector::from_row_slice(&[
+            SHAPE_PRIOR_SCALE,
+            SHAPE_PRIOR_SCALE,
+            SHAPE_PRIOR_SCALE,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ])
+    }
+
+    fn shape_and_linear(
+        parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>,
+    ) -> (Matrix3<f32>, Vector3<f32>) {
+        (
+            Matrix3::new(
+                parameters[0],
+                parameters[3],
+                parameters[4],
+                parameters[3],
+                parameters[1],
+                parameters[5],
+                parameters[4],
+                parameters[5],
+                parameters[2],
+            ),
+            Vector3::new(parameters[6], parameters[7], parameters[8]),
+        )
+    }
+
+    fn features(sample: Vector3<f32>) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
+        SVector::from_row_slice(&[
+            sample.x * sample.x,
+            sample.y * sample.y,
+            sample.z * sample.z,
+            2.0 * sample.x * sample.y,
+            2.0 * sample.x * sample.z,
+            2.0 * sample.y * sample.z,
+            sample.x,
+            sample.y,
+            sample.z,
+        ])
+    }
+
+    /// Features of the projection of gravity onto the ellipsoid normal
+    /// `Q * sample + q / 2`. The projection is linear in the nine ellipsoid
+    /// parameters, keeping the combined online objective convex and quadratic.
+    fn gravity_features(
+        sample: Vector3<f32>,
+        gravity: Vector3<f32>,
+    ) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
+        SVector::from_row_slice(&[
+            gravity.x * sample.x,
+            gravity.y * sample.y,
+            gravity.z * sample.z,
+            gravity.x * sample.y + gravity.y * sample.x,
+            gravity.x * sample.z + gravity.z * sample.x,
+            gravity.y * sample.z + gravity.z * sample.y,
+            0.5 * gravity.x,
+            0.5 * gravity.y,
+            0.5 * gravity.z,
+        ])
+    }
+
+    fn regularization_loss(parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>) -> f32 {
+        let prior = Self::parameter_prior();
+        let weights = [1.0, 1.0, 1.0, 2.0, 2.0, 2.0];
+        0.5 * SHAPE_REGULARIZATION
+            * (0..6)
+                .map(|index| weights[index] * (parameters[index] - prior[index]).powi(2))
+                .sum::<f32>()
+    }
+
+    fn reset_working_state(&mut self) {
+        self.parameters = Self::parameter_prior();
+        self.gravity_projection = 0.0;
+        self.gravity_projection_initialized = false;
+        self.optimizer_steps = 0;
+    }
+
+    /// Recomputes the current cache normalization and analytically transforms
+    /// the working quadratic equation into it. A failed transform resets only
+    /// unpublished optimizer state.
+    fn refresh_normalization(&mut self) {
+        let sample_count = self.matrix_filled.min(N);
+        if sample_count == 0 {
+            self.normalization_mean = Vector3::zeros();
+            self.normalization_radius = 0.0;
+            self.normalization_initialized = false;
+            self.reset_working_state();
+            return;
+        }
+
+        let sample_mean = (0..sample_count)
+            .fold(Vector3::zeros(), |sum, row| sum + self.sample(row))
+            / sample_count as f32;
+        let radius_squared = (0..sample_count)
+            .map(|row| (self.sample(row) - sample_mean).norm_squared())
+            .sum::<f32>()
+            / sample_count as f32;
+        let radius = radius_squared.sqrt();
+        if !sample_mean.iter().all(|value| value.is_finite())
+            || !radius.is_finite()
+            || radius <= f32::EPSILON
+        {
+            self.normalization_mean = sample_mean;
+            self.normalization_radius = radius;
+            self.normalization_initialized = false;
+            self.reset_working_state();
+            return;
+        }
+
+        if self.normalization_initialized {
+            let (shape, linear) = Self::shape_and_linear(&self.parameters);
+            let shift = (sample_mean - self.normalization_mean) / self.normalization_radius;
+            let scale = radius / self.normalization_radius;
+            let equation_scale = 1.0 - shift.dot(&(shape * shift)) - linear.dot(&shift);
+            let rebased_shape = scale * scale / equation_scale * shape;
+            let rebased_linear = scale / equation_scale * (linear + 2.0 * shape * shift);
+            let mut rebased = self.parameters;
+            rebased[0] = rebased_shape[(0, 0)];
+            rebased[1] = rebased_shape[(1, 1)];
+            rebased[2] = rebased_shape[(2, 2)];
+            rebased[3] = rebased_shape[(0, 1)];
+            rebased[4] = rebased_shape[(0, 2)];
+            rebased[5] = rebased_shape[(1, 2)];
+            rebased[6] = rebased_linear.x;
+            rebased[7] = rebased_linear.y;
+            rebased[8] = rebased_linear.z;
+            let gravity_projection = scale / equation_scale * self.gravity_projection;
+            if equation_scale.is_finite()
+                && equation_scale > f32::EPSILON
+                && rebased.iter().all(|value| value.is_finite())
+                && (!self.gravity_projection_initialized || gravity_projection.is_finite())
+            {
+                self.parameters = rebased;
+                self.gravity_projection = gravity_projection;
+            } else {
+                self.reset_working_state();
+            }
+        } else {
+            self.reset_working_state();
+        }
+
+        self.normalization_mean = sample_mean;
+        self.normalization_radius = radius;
+        self.normalization_initialized = true;
+    }
+
+    fn normalized_sample(&self, sample: Vector3<f32>) -> Vector3<f32> {
+        (sample - self.normalization_mean) / self.normalization_radius
+    }
+
+    fn next_random(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut value = *state;
+        value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        value ^ (value >> 31)
+    }
+
+    fn random_cache_row(
+        state: &mut u64,
+        sample_count: usize,
+        excluded_row: Option<usize>,
+    ) -> Option<usize> {
+        let eligible_count = sample_count.saturating_sub(usize::from(excluded_row.is_some()));
+        if eligible_count == 0 {
+            return None;
+        }
+        let mut row = (Self::next_random(state) % eligible_count as u64) as usize;
+        if excluded_row.is_some_and(|excluded| row >= excluded) {
+            row += 1;
+        }
+        Some(row)
+    }
+
+    fn initialize_gravity_projection(
+        &mut self,
+        current_sample: Vector3<f32>,
+        current_gravity: Option<Vector3<f32>>,
+    ) {
+        if self.gravity_projection_initialized || self.gravity_weight == 0.0 {
+            return;
+        }
+        let observation = current_gravity
+            .map(|gravity| (current_sample, gravity))
+            .or_else(|| {
+                (0..self.matrix_filled).find_map(|row| {
+                    self.gravity_directions[row].map(|gravity| (self.sample(row), gravity))
+                })
+            });
+        if let Some((sample, gravity)) = observation {
+            let features = Self::gravity_features(self.normalized_sample(sample), gravity);
+            let projection = features.dot(&self.parameters);
+            if projection.is_finite() {
+                self.gravity_projection = projection;
+                self.gravity_projection_initialized = true;
+            }
+        }
+    }
+
+    fn minibatch_objective(
+        &self,
+        parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>,
+        gravity_projection: f32,
+        current_sample: Vector3<f32>,
+        current_gravity: Option<Vector3<f32>>,
+        accepted_row: Option<usize>,
+        random_draws: usize,
+        mut random_state: u64,
+    ) -> f32 {
+        let mut radial_squared = 0.0;
+        let mut gravity_squared = 0.0;
+        let mut observation_count = 0;
+        let mut gravity_count = 0;
+        let mut add_observation = |sample: Vector3<f32>, gravity: Option<Vector3<f32>>| {
+            let normalized = self.normalized_sample(sample);
+            let residual = Self::features(normalized).dot(parameters) - 1.0;
+            radial_squared += residual * residual;
+            observation_count += 1;
+            if let Some(gravity) = gravity.filter(|_| self.gravity_projection_initialized) {
+                let residual = Self::gravity_features(normalized, gravity).dot(parameters)
+                    - gravity_projection;
+                gravity_squared += residual * residual;
+                gravity_count += 1;
+            }
+        };
+
+        add_observation(current_sample, current_gravity);
+        for _ in 0..random_draws {
+            let Some(row) =
+                Self::random_cache_row(&mut random_state, self.matrix_filled, accepted_row)
+            else {
+                break;
+            };
+            add_observation(self.sample(row), self.gravity_directions[row]);
+        }
+
+        let mut objective =
+            0.5 * radial_squared / observation_count as f32 + Self::regularization_loss(parameters);
+        if gravity_count > 0 {
+            objective += 0.5 * self.gravity_weight * gravity_squared / gravity_count as f32;
+        }
+        objective
+    }
+
+    /// Applies one bounded normalized-SGD update to the current valid sample
+    /// and randomly selected retained observations.
+    fn update_online_optimizer(
+        &mut self,
+        current_sample: Vector3<f32>,
+        current_gravity: Option<Vector3<f32>>,
+        accepted_row: Option<usize>,
+    ) {
+        if !self.normalization_initialized {
+            return;
+        }
+        self.initialize_gravity_projection(current_sample, current_gravity);
+
+        let random_draws = if self.matrix_filled > usize::from(accepted_row.is_some()) {
+            self.minibatch_size.saturating_sub(1)
+        } else {
+            0
+        };
+        let random_state = self.prng_state;
+        let mut next_random_state = random_state;
+        let mut gradient = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
+        let mut gradient_scale = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
+        let mut gravity_gradient = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
+        let mut gravity_scale = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
+        let mut gravity_projection_gradient = 0.0;
+        let mut observation_count = 0;
+        let mut gravity_count = 0;
+        let parameters = self.parameters;
+        let gravity_projection = self.gravity_projection;
+        let mut add_observation = |sample: Vector3<f32>, gravity: Option<Vector3<f32>>| {
+            let normalized = self.normalized_sample(sample);
+            let features = Self::features(normalized);
+            let residual = features.dot(&parameters) - 1.0;
+            gradient += residual * features;
+            gradient_scale += features.component_mul(&features);
+            observation_count += 1;
+            if let Some(gravity) = gravity.filter(|_| self.gravity_projection_initialized) {
+                let features = Self::gravity_features(normalized, gravity);
+                let residual = features.dot(&parameters) - gravity_projection;
+                gravity_gradient += residual * features;
+                gravity_scale += features.component_mul(&features);
+                gravity_projection_gradient -= residual;
+                gravity_count += 1;
+            }
+        };
+
+        add_observation(current_sample, current_gravity);
+        for _ in 0..random_draws {
+            let Some(row) =
+                Self::random_cache_row(&mut next_random_state, self.matrix_filled, accepted_row)
+            else {
+                break;
+            };
+            add_observation(self.sample(row), self.gravity_directions[row]);
+        }
+        self.prng_state = next_random_state;
+
+        gradient /= observation_count as f32;
+        gradient_scale /= observation_count as f32;
+        if gravity_count > 0 {
+            gradient += self.gravity_weight * gravity_gradient / gravity_count as f32;
+            gradient_scale += self.gravity_weight * gravity_scale / gravity_count as f32;
+            gravity_projection_gradient *= self.gravity_weight / gravity_count as f32;
+        } else {
+            gravity_projection_gradient = 0.0;
+        }
+
+        let prior = Self::parameter_prior();
+        for (index, weight) in [1.0, 1.0, 1.0, 2.0, 2.0, 2.0].into_iter().enumerate() {
+            gradient[index] += SHAPE_REGULARIZATION * weight * (parameters[index] - prior[index]);
+            gradient_scale[index] += SHAPE_REGULARIZATION * weight;
+        }
+        gradient_scale.add_scalar_mut(ONLINE_SCALE_EPSILON);
+        let direction = gradient.component_div(&gradient_scale);
+        let gravity_direction = if gravity_count > 0 && self.gravity_weight > 0.0 {
+            gravity_projection_gradient / (self.gravity_weight + ONLINE_SCALE_EPSILON)
+        } else {
+            0.0
+        };
+        let direction_norm =
+            (direction.norm_squared() + gravity_direction * gravity_direction).sqrt();
+        if !direction_norm.is_finite() || direction_norm <= f32::EPSILON {
+            return;
+        }
+
+        let old_objective = self.minibatch_objective(
+            &parameters,
+            gravity_projection,
+            current_sample,
+            current_gravity,
+            accepted_row,
+            random_draws,
+            random_state,
+        );
+        let learning_rate = (ONLINE_INITIAL_LEARNING_RATE
+            / (1.0 + self.optimizer_steps as f32 / ONLINE_LEARNING_RATE_DECAY_STEPS))
+            .max(ONLINE_MIN_LEARNING_RATE);
+        let mut step = learning_rate.min(ONLINE_MAX_STEP_NORM / direction_norm);
+        for _ in 0..ONLINE_BACKTRACK_STEPS {
+            let candidate = parameters - step * direction;
+            let candidate_gravity_projection = gravity_projection - step * gravity_direction;
+            let objective = self.minibatch_objective(
+                &candidate,
+                candidate_gravity_projection,
+                current_sample,
+                current_gravity,
+                accepted_row,
+                random_draws,
+                random_state,
+            );
+            if candidate.iter().all(|value| value.is_finite())
+                && candidate_gravity_projection.is_finite()
+                && objective.is_finite()
+                && objective < old_objective
+            {
+                self.parameters = candidate;
+                self.gravity_projection = candidate_gravity_projection;
+                self.optimizer_steps += 1;
+                return;
+            }
+            step *= 0.5;
         }
     }
 
@@ -309,6 +718,7 @@ impl<const N: usize> MagCalibrator<N> {
         gravity_direction: Option<Vector3<f32>>,
         timestamp_us: u64,
     ) {
+        let previous_matrix_filled = self.matrix_filled;
         let mut index_map = [u32::MAX; N];
         let mut retained = 0;
         for (index, map_slot) in index_map.iter_mut().enumerate().take(self.matrix_filled) {
@@ -331,8 +741,12 @@ impl<const N: usize> MagCalibrator<N> {
             self.mean_distance = 0.0;
             self.remap_neighbor_cache(&index_map);
         }
+        let expired = retained != previous_matrix_filled;
 
         if !x.iter().all(|e| e.is_finite()) || x.norm_squared() <= f32::EPSILON {
+            if expired {
+                self.refresh_normalization();
+            }
             return;
         }
         let gravity_direction = gravity_direction.and_then(|gravity| {
@@ -346,6 +760,10 @@ impl<const N: usize> MagCalibrator<N> {
                 None
             }
         });
+        if N == 0 {
+            return;
+        }
+        let mut accepted_row = None;
         // Check if buffer is not yet "initialized" with real measurements
         if self.matrix_filled < N {
             let count = self.matrix_filled;
@@ -373,6 +791,7 @@ impl<const N: usize> MagCalibrator<N> {
             self.add_sample_at(count, x, gravity_direction, timestamp_us);
             self.reset_row_cache(count, &squared_dists, count);
             self.matrix_filled += 1;
+            accepted_row = Some(count);
         }
         // Otherwise check which sample may be best to replace
         else {
@@ -411,8 +830,13 @@ impl<const N: usize> MagCalibrator<N> {
                 }
                 self.add_sample_at(low_index, x, gravity_direction, timestamp_us);
                 self.reset_row_cache(low_index, &squared_dists, N);
+                accepted_row = Some(low_index);
             }
         }
+        if expired || accepted_row.is_some() {
+            self.refresh_normalization();
+        }
+        self.update_online_optimizer(x, gravity_direction, accepted_row);
     }
 
     /// Insert a sample vector into `index` row of buffer matrix.
@@ -440,8 +864,8 @@ impl<const N: usize> MagCalibrator<N> {
     /// Calibrates a magnetometer vector that has already been converted to FRD.
     ///
     /// `gravity_direction` is an optional co-timestamped body-frame FRD
-    /// direction. It refines the fit using the constant magnetic dip without
-    /// making gravity mandatory for calibration.
+    /// direction. It contributes a convex constant-projection surrogate to the
+    /// online ellipsoid fit without making gravity mandatory for calibration.
     pub fn evaluate_correct(
         &mut self,
         raw_mag: Vector3<f32>,
@@ -469,7 +893,7 @@ impl<const N: usize> MagCalibrator<N> {
         }
     }
 
-    /// Fits a regularized quadratic ellipsoid and derives its symmetric
+    /// Validates the online ellipsoid estimate and derives its symmetric
     /// correction matrix.
     ///
     /// On success, persists the updated calibration state. Returns the cause when
@@ -513,60 +937,14 @@ impl<const N: usize> MagCalibrator<N> {
         }
 
         let radius = radius_squared.sqrt();
-        let mut normal = SMatrix::<f32, 9, 9>::zeros();
-        let mut right_hand_side = SVector::<f32, 9>::zeros();
-        for row in 0..sample_count {
-            let sample = (self.sample(row) - sample_mean) / radius;
-            let features = SVector::<f32, 9>::from_row_slice(&[
-                sample.x * sample.x,
-                sample.y * sample.y,
-                sample.z * sample.z,
-                2.0 * sample.x * sample.y,
-                2.0 * sample.x * sample.z,
-                2.0 * sample.y * sample.z,
-                sample.x,
-                sample.y,
-                sample.z,
-            ]);
-            normal += features * features.transpose();
-            right_hand_side += features;
-        }
-        normal /= sample_count as f32;
-        right_hand_side /= sample_count as f32;
-        // Regularize toward a scaled identity shape rather than toward the
-        // (non-PD) zero matrix. The quadratic part is unchanged; the linear
-        // term moves to the right-hand side, keeping a single direct solve.
-        for (index, weight) in [1.0, 1.0, 1.0, 2.0, 2.0, 2.0].into_iter().enumerate() {
-            normal[(index, index)] += SHAPE_REGULARIZATION * weight;
-        }
-        for index in 0..3 {
-            right_hand_side[index] += SHAPE_REGULARIZATION * SHAPE_PRIOR_SCALE;
-        }
-
-        let parameters = normal
-            .cholesky()
-            .ok_or(BadCalibration::Unsolveable {
-                message: "quadratic calibration system is singular",
-            })?
-            .solve(&right_hand_side);
+        let parameters = self.parameters;
         if !parameters.iter().all(|value| value.is_finite()) {
             return Err(BadCalibration::Unsolveable {
-                message: "quadratic calibration produced non-finite parameters",
+                message: "online calibration produced non-finite parameters",
             });
         }
 
-        let shape = Matrix3::new(
-            parameters[0],
-            parameters[3],
-            parameters[4],
-            parameters[3],
-            parameters[1],
-            parameters[5],
-            parameters[4],
-            parameters[5],
-            parameters[2],
-        );
-        let linear = Vector3::new(parameters[6], parameters[7], parameters[8]);
+        let (shape, linear) = Self::shape_and_linear(&parameters);
         let shape_eigen = shape.symmetric_eigen();
         let correction_condition = Self::condition_number(&shape_eigen.eigenvalues).sqrt();
         if correction_condition > MAX_CORRECTION_CONDITION {
@@ -620,194 +998,10 @@ impl<const N: usize> MagCalibrator<N> {
             });
         }
 
-        let (correction, offset) =
-            self.refine_with_gravity(correction, offset, sample_mean, radius, sample_count);
-
         self.hard_iron_offset = offset;
         self.soft_iron_correction = correction;
         self.calibration_initialized = true;
         Ok(())
-    }
-
-    /// Applies one damped quadratic refinement to the validated ellipsoid fit.
-    /// The unknowns are the six elements of the symmetric correction and the
-    /// three elements of its affine offset in normalized sample coordinates.
-    fn refine_with_gravity(
-        &self,
-        correction: Matrix3<f32>,
-        offset: Vector3<f32>,
-        sample_mean: Vector3<f32>,
-        radius: f32,
-        sample_count: usize,
-    ) -> (Matrix3<f32>, Vector3<f32>) {
-        let gravity_count = (0..sample_count)
-            .filter(|&row| self.gravity_directions[row].is_some())
-            .count();
-        if gravity_count < 2 || self.gravity_weight == 0.0 {
-            return (correction, offset);
-        }
-
-        let normalized_correction = correction * radius;
-        let affine_offset = correction * (sample_mean - offset);
-        let mut gravity_mean = 0.0;
-        let mut gravity_jacobian_mean = SVector::<f32, 9>::zeros();
-        for row in 0..sample_count {
-            let Some(gravity) = self.gravity_directions[row] else {
-                continue;
-            };
-            let sample = (self.sample(row) - sample_mean) / radius;
-            let basis = Self::affine_basis(sample);
-            gravity_mean += gravity.dot(&(normalized_correction * sample + affine_offset));
-            gravity_jacobian_mean += basis.transpose() * gravity;
-        }
-        gravity_mean /= gravity_count as f32;
-        gravity_jacobian_mean /= gravity_count as f32;
-
-        let mut normal = SMatrix::<f32, 9, 9>::zeros();
-        let mut right_hand_side = SVector::<f32, 9>::zeros();
-        for row in 0..sample_count {
-            let sample = (self.sample(row) - sample_mean) / radius;
-            let basis = Self::affine_basis(sample);
-            let calibrated = normalized_correction * sample + affine_offset;
-            let norm = calibrated.norm();
-            if !norm.is_finite() || norm <= f32::EPSILON {
-                return (correction, offset);
-            }
-
-            let radial_jacobian = basis.transpose() * (calibrated / norm);
-            let radial_residual = norm - 1.0;
-            normal += radial_jacobian * radial_jacobian.transpose() / sample_count as f32;
-            right_hand_side -= radial_jacobian * radial_residual / sample_count as f32;
-
-            if let Some(gravity) = self.gravity_directions[row] {
-                let gravity_jacobian = basis.transpose() * gravity - gravity_jacobian_mean;
-                let gravity_residual = gravity.dot(&calibrated) - gravity_mean;
-                normal += self.gravity_weight * gravity_jacobian * gravity_jacobian.transpose()
-                    / gravity_count as f32;
-                right_hand_side -= self.gravity_weight * gravity_jacobian * gravity_residual
-                    / gravity_count as f32;
-            }
-        }
-        for index in 0..9 {
-            normal[(index, index)] += REFINEMENT_DAMPING * normal[(index, index)].max(f32::EPSILON);
-        }
-
-        let Some(cholesky) = normal.cholesky() else {
-            return (correction, offset);
-        };
-        let delta = cholesky.solve(&right_hand_side);
-        if !delta.iter().all(|value| value.is_finite()) {
-            return (correction, offset);
-        }
-
-        let delta_correction = Matrix3::new(
-            delta[0], delta[3], delta[4], delta[3], delta[1], delta[5], delta[4], delta[5],
-            delta[2],
-        );
-        let delta_offset = Vector3::new(delta[6], delta[7], delta[8]);
-        let Some((candidate_objective, candidate_radial_rms)) = self.refinement_objective(
-            &normalized_correction,
-            &affine_offset,
-            sample_mean,
-            radius,
-            sample_count,
-        ) else {
-            return (correction, offset);
-        };
-
-        let mut step = 1.0;
-        for _ in 0..4 {
-            let refined_correction = normalized_correction + step * delta_correction;
-            let refined_affine_offset = affine_offset + step * delta_offset;
-            if !refined_correction.iter().all(|value| value.is_finite())
-                || !refined_affine_offset.iter().all(|value| value.is_finite())
-            {
-                step *= 0.5;
-                continue;
-            }
-
-            let Some(refined_cholesky) = refined_correction.cholesky() else {
-                step *= 0.5;
-                continue;
-            };
-            let refined_condition =
-                Self::condition_number(&refined_correction.symmetric_eigen().eigenvalues);
-            if refined_condition > MAX_CORRECTION_CONDITION {
-                step *= 0.5;
-                continue;
-            }
-            let Some((objective, radial_rms)) = self.refinement_objective(
-                &refined_correction,
-                &refined_affine_offset,
-                sample_mean,
-                radius,
-                sample_count,
-            ) else {
-                step *= 0.5;
-                continue;
-            };
-            if radial_rms > MAX_RADIAL_RMS
-                || radial_rms > candidate_radial_rms + MAX_REFINEMENT_RADIAL_RMS_INCREASE
-                || objective >= candidate_objective
-            {
-                step *= 0.5;
-                continue;
-            }
-
-            let refined_offset =
-                sample_mean - radius * refined_cholesky.solve(&refined_affine_offset);
-            return (refined_correction / radius, refined_offset);
-        }
-        (correction, offset)
-    }
-
-    fn refinement_objective(
-        &self,
-        correction: &Matrix3<f32>,
-        affine_offset: &Vector3<f32>,
-        sample_mean: Vector3<f32>,
-        radius: f32,
-        sample_count: usize,
-    ) -> Option<(f32, f32)> {
-        let mut radial_squared = 0.0;
-        let mut gravity_count = 0;
-        let mut gravity_mean = 0.0;
-        for row in 0..sample_count {
-            let sample = (self.sample(row) - sample_mean) / radius;
-            let calibrated = correction * sample + affine_offset;
-            let radial_residual = calibrated.norm() - 1.0;
-            radial_squared += radial_residual * radial_residual;
-            if let Some(gravity) = self.gravity_directions[row] {
-                gravity_mean += gravity.dot(&calibrated);
-                gravity_count += 1;
-            }
-        }
-        gravity_mean /= gravity_count as f32;
-
-        let mut gravity_squared = 0.0;
-        for row in 0..sample_count {
-            if let Some(gravity) = self.gravity_directions[row] {
-                let sample = (self.sample(row) - sample_mean) / radius;
-                let calibrated = correction * sample + affine_offset;
-                let residual = gravity.dot(&calibrated) - gravity_mean;
-                gravity_squared += residual * residual;
-            }
-        }
-        let radial_mean = radial_squared / sample_count as f32;
-        let objective = radial_mean + self.gravity_weight * gravity_squared / gravity_count as f32;
-        if objective.is_finite() {
-            Some((objective, radial_mean.sqrt()))
-        } else {
-            None
-        }
-    }
-
-    fn affine_basis(sample: Vector3<f32>) -> SMatrix<f32, 3, 9> {
-        SMatrix::from_row_slice(&[
-            sample.x, 0.0, 0.0, sample.y, sample.z, 0.0, 1.0, 0.0, 0.0, 0.0, sample.y, 0.0,
-            sample.x, 0.0, sample.z, 0.0, 1.0, 0.0, 0.0, 0.0, sample.z, 0.0, sample.x, sample.y,
-            0.0, 0.0, 1.0,
-        ])
     }
 
     fn sample(&self, row: usize) -> Vector3<f32> {

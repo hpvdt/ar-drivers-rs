@@ -17,7 +17,7 @@ pub enum BadCalibration {
         /// Minimum number of samples required by the calibration model.
         required: usize,
     },
-    /// The calibration solve produced non-finite parameters.
+    /// Calibration optimization or candidate conversion produced unusable parameters.
     Unsolveable {
         /// Original rejection message.
         message: &'static str,
