@@ -2,10 +2,11 @@
 
 ## Method
 
-Use the deterministic `regression` cases in `tests/mag_calibration_dummy.rs`: four fixed simulator seeds, once with
-co-timestamped accelerometer gravity and once without gravity. The integration test uses the production
-`MagCalibrator<1023>`, waits five wall-clock seconds after the first successful correction, and then validates for
-twenty seconds with an `18 degree` maximum angular error.
+Use the deterministic `regression` cases in `tests/mag_calibration_dummy.rs`, once with co-timestamped accelerometer
+gravity and once without gravity. The fixed simulator seeds are `934786981548549007`, `320366629120039532`,
+`800448092538851856`, and `14346460742415463748`. The integration test uses the production `MagCalibrator<1023>`, waits
+five wall-clock seconds after the first successful correction, and then validates for twenty seconds with an
+`18 degree` maximum angular error.
 
 Command:
 
@@ -45,6 +46,7 @@ full-cache accumulation and `9 x 9` solve.
 ## Online minibatch optimizer
 
 - **Implementation commit:** `b24dd0c`
+- **Date:** 2026-08-02
 - **Initial gravity weight:** `0.1`
 - **Test result:** 2 passed, 0 failed
 - **Complete benchmark duration:** 631.31 seconds
@@ -73,6 +75,8 @@ design review.
 The default gravity weight was reduced from `0.1` to `0.01`. The magnetometer-only path is unchanged, so only the four
 fixed-seed with-gravity cases were rerun after this adjustment.
 
+- **Implementation commit:** `9573867`
+- **Date:** 2026-08-02
 - **Test result:** 1 passed, 0 failed
 - **With-gravity benchmark duration:** 315.90 seconds
 

@@ -20,9 +20,11 @@ types.
 co-timestamped body-frame FRD gravity direction and a device timestamp. Invalid gravity is ignored without rejecting
 the magnetometer sample.
 
-Old samples expire according to `max_sample_lifespan_us`. After the cache is full, a k-nearest-neighbor diversity
-heuristic decides whether a new sample replaces a retained row. Every valid current sample still participates in one
-online optimizer update even when diversity rejects it.
+Old samples expire according to `max_sample_lifespan_us`, before the incoming magnetometer is validated. An invalid
+magnetometer can therefore change cache readiness and normalization through expiry, but it is not retained and does not
+run an optimizer update. The first `N` valid samples fill the cache unconditionally. After the cache is full, a
+k-nearest-neighbor diversity heuristic decides whether a new sample replaces a retained row. Every valid current sample
+still participates in one online optimizer update even when diversity rejects it.
 
 Calibration publication requires `N.max(9)` retained samples. Since the cache cannot hold more than `N`, this means the
 cache must be full and `N` must be at least nine.
@@ -119,11 +121,14 @@ psi(u, g) = [
 The optimizer learns a scalar projection `kappa` and minimizes:
 
 ```text
+e_g,i = psi_i^T theta - kappa,
+
 J_g = gravity_weight / (2 n_g) sum_i (psi_i^T theta - kappa)^2.
 ```
 
-`J_r + J_g` is convex and quadratic in `(theta, kappa)`. Gravity is optional, defaults to weight `0.01`, and
-`gravity_weight(0)` removes this term.
+`J_r + J_g` is convex and quadratic in `(theta, kappa)`; matrix square roots occur only during physical candidate
+conversion, not in the optimizer. Gravity is optional, defaults to weight `0.01`, and `gravity_weight(0)` removes this
+term.
 
 This term is a physical surrogate rather than exact magnetic dip. The model gives:
 
@@ -134,6 +139,9 @@ Q (u_i - d) = gamma r A m_i,
 so the surrogate keeps `g_i^T A m_i` approximately constant instead of exact `g_i^T m_i`. It is exact for isotropic
 correction and can be biased by anisotropic soft iron. Fixed-seed with-gravity integration results must therefore be
 compared with magnetometer-only results and the recorded direct-solver baseline.
+
+Gravity changes the shared `theta`. Physical candidate conversion still uses only `theta`; there is no second
+gravity-refined candidate and no relaxed radial-error allowance for gravity-assisted fits.
 
 ### Minibatch update
 
@@ -148,18 +156,31 @@ gravity data are always sampled together. Sampling uses a private deterministic 
 For minibatch `B` and gravity subset `G`, the analytic gradients are:
 
 ```text
+theta_prior = [c, c, c, 0, 0, 0, 0, 0, 0],
+
 gradient_theta = 1 / |B| sum_i e_r,i phi_i
                + gravity_weight / |G| sum_i e_g,i psi_i
-               + lambda R (theta - c e_d),
+               + lambda R (theta - theta_prior),
 
 gradient_kappa = -gravity_weight / |G| sum_i e_g,i.
 ```
 
-The implementation divides each component by minibatch feature energy plus regularization and a finite epsilon. Its
-learning rate decays from a private initial value to a nonzero floor. A bounded half-step search accepts only finite
-updates that lower the same minibatch objective. Working `Q` may temporarily be indefinite; publication still requires
-SPD. Preventing all intermediate indefinite states can stall descent at the SPD boundary even when the convex optimum
-is valid.
+Omit gravity terms when `G` is empty, and add regularization once per update rather than once per observation. The
+diagonal feature-energy scales are:
+
+```text
+scale_theta,j = 1 / |B| sum_i phi_i,j^2
+              + gravity_weight / |G| sum_i psi_i,j^2
+              + lambda R_jj
+              + epsilon,
+
+scale_kappa = gravity_weight + epsilon.
+```
+
+The optimizer divides each gradient component by its scale. Its learning rate decays from a private initial value to a
+nonzero floor, and its step norm is bounded. A bounded half-step search accepts only finite updates that lower the same
+minibatch objective. Working `Q` may temporarily be indefinite; publication still requires SPD. Preventing all
+intermediate indefinite states can stall descent at the SPD boundary even when the convex optimum is valid.
 
 ### Changing normalization
 
@@ -182,8 +203,10 @@ q_new = s (q_old + 2 Q_old t) / h,
 kappa_new = s kappa_old / h.
 ```
 
-If a radius or `h` is unusable, only unpublished working state resets to `Q = 2 I`, `q = 0`. A single centered sample
-has zero radius, so the first informative gradient requires two distinct samples even though state exists immediately.
+The `kappa` transform follows because the normal for the same raw sample scales by `s / h`. If a radius or `h` is
+unusable, only unpublished working state resets to `Q = 2 I`, `q = 0`, clears `kappa`, and restarts the optimizer's
+learning-rate schedule. A single centered sample has zero radius, so the first informative gradient requires two
+distinct samples even though state exists immediately.
 
 ### Candidate conversion and quality gates
 
@@ -205,9 +228,11 @@ The principal symmetric square root uses a `3 x 3` eigendecomposition. Publicati
 - correction condition at most `10`;
 - full-cache radial RMS at most `0.1`.
 
-Before the first successful publication, a rejected full-cache candidate returns `BadCalibration`. After publication,
-non-insufficient candidate failures leave the last published correction in use. Falling below cache readiness always
-returns `InsufficientSamples`. Correcting a reading remains one matrix-vector multiplication followed by normalization:
+Working coefficients and published correction parameters are separate. The hard-iron offset and soft-iron correction
+change only after every quality gate passes. Before the first successful publication, a rejected full-cache candidate
+returns `BadCalibration`. After publication, non-insufficient candidate failures leave the last published correction in
+use. Falling below cache readiness always returns `InsufficientSamples`. Correcting a reading remains one matrix-vector
+multiplication followed by normalization:
 
 ```text
 m = A (x - b).
@@ -220,7 +245,8 @@ For minibatch size `B`:
 - online fitting is `O(10 B)`;
 - candidate conversion uses fixed `3 x 3` operations;
 - full publication validation is `O(N)`;
-- diversity maintenance is expected `O(N)` for a full cache.
+- diversity maintenance is expected `O(N)` for a full cache;
+- persistent online-optimizer state is `O(1)` in `N`.
 
 The call remains `O(N)` overall because publication validation and sample diversity are linear, but there are no
 production `9 x 9` normal-matrix accumulations or solves.
@@ -237,3 +263,50 @@ selection operates on squared values and takes square roots only for selected ne
 Online parameters retain historical gradient influence after a row is replaced or expires. Coordinate rebasing changes
 units but does not remove that contribution. The backlog tracks explicit replay or forgetting work needed before sample
 lifespan can be interpreted as a strict optimizer-history bound.
+
+### Calibration validation
+
+When changing the calibrator, preserve deterministic coverage for cache expiry and readiness, neighbor-cache
+invariants, invalid magnetometer and gravity inputs, minibatch clamping, repeatability, full-SPD and asymmetric
+distortion, degenerate samples, stable repeated correction, and last-known-good fallback. Run the focused checks first
+from `__module~/driver`:
+
+```bash
+cargo test --package ar-drivers --no-default-features --lib fusion::mag_calibration_test
+cargo test --package ar-drivers --no-default-features --lib fusion::naive_cf_test
+cargo test --package ar-drivers --no-default-features --test mag_calibration_dummy regression -- --nocapture
+```
+
+Then run the applicable broad Rust checks from the parent guide.
+
+### Benchmark report format
+
+`MAG_CALIBRATION_BENCHMARK.md` is the chronological audit record for deterministic calibration performance. Keep its
+top-level title and a leading `## Method` section. The method must identify the benchmark cases and seeds, gravity
+modes, production cache/configuration, warm-up and validation intervals, pass threshold, exact command, build profile,
+and any timing caveats. Record host or toolchain changes when they could invalidate a timing comparison.
+
+Add one chronological `##` section for each baseline, implementation, or tuning stage. Do not replace older measured
+results. Each stage must contain:
+
+- the implementation commit containing the measured calibration code, plus relevant parameter values;
+- the run date, test result, and complete measured wall duration;
+- a `###` aggregate-results table; and
+- a short interpretation comparing accuracy, publication latency, and computation time with the relevant prior stage.
+
+A complete four-seed table has `Metric`, `With gravity`, and `Without gravity` columns and reports:
+
+1. average `evaluate_correct` computation time in milliseconds;
+2. average and worst successful angular error in degrees;
+3. average and worst post-warm-up angular error in degrees;
+4. average time and sample count until first successful publication; and
+5. average total run time and sample count.
+
+Average computation time and angular error aggregate their corresponding calls across seeds; worst values are maxima
+across all runs; run durations and sample counts are averages across seeds. Keep units in table cells and retain enough
+precision to compare with prior stages. Tables are exempt from the 120-character wrapping rule.
+
+If a tuning run intentionally covers only one mode, state that before the table, report the exact changed setting, and
+include comparable columns from earlier stages. If the harness or method changes, document the change before presenting
+new numbers and do not describe unlike measurements as a direct speedup or regression. Preserve failed or degraded
+results when they explain a retained default or later tuning decision.
