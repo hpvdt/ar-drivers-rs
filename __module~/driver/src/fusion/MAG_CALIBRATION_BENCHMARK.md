@@ -98,3 +98,49 @@ magnetometer-only online result and well below the integration test's `18 degree
 
 The result supports keeping the convex gravity surrogate at low default weight. It does not establish physical
 equivalence to magnetic dip; broader distortion and adaptation sweeps remain tracked in `TODO.md`.
+
+## Cold-start cache replay
+
+Each valid sample now triggers, in addition to the sample-anchored update, up to four cache-only replay updates of
+eight observations while the calibration is unpublished. Replay minibatches are drawn uniformly with replacement from
+the retained rows only; the replay count ramps with the retained fraction, and replay steps reuse the current learning
+rate without advancing its schedule.
+
+- **Implementation commit:** `b91cf30`
+- **Replay updates:** `4` (ramped by `matrix_filled / N`, unpublished phase only)
+- **Replay minibatch size:** `8`
+- **Date:** 2026-08-02
+- **Test result:** 2 passed, 0 failed
+- **Complete benchmark duration:** 627.80 seconds
+
+### Four-seed averages
+
+| Metric | With gravity | Without gravity |
+|---|---:|---:|
+| Average `evaluate_correct` time | 4.414 ms | 4.064 ms |
+| Average successful error | 2.499 deg | 2.491 deg |
+| Worst successful error | 9.083 deg | 9.106 deg |
+| Average post-warm-up error | 2.498 deg | 2.492 deg |
+| Worst post-warm-up error | 9.083 deg | 9.106 deg |
+| Time until first success | 53.32 s | 53.58 s |
+| Samples until first success | 1023 | 1023 |
+| Average total run time | 78.34 s | 78.60 s |
+| Average samples per run | 1505 | 1504 |
+
+Fixed-seed accuracy and publication latency are unchanged within noise against the tuned-gravity stage: average
+post-warm-up error moved by at most `0.014 degree`, worst errors improved by about `0.06 degree` in both modes, and
+first success still arrives with the full cache at sample 1023, which floors the latency metric in this harness.
+Measured computation time is flat with gravity and 3.4% lower without gravity; the decrease is timing noise rather
+than a speedup, because replay only adds pre-publication work and cannot remove any. Replay adds no visible cost
+because it is gated to the unpublished phase, where calls skip the `O(N)` publication validation that dominates
+post-fill timing.
+
+The convergence benefit the feature targets is not visible in these seeds because the online optimizer was already
+near-converged when the cache filled. It is instead covered deterministically by
+`mag_calibrator_converges_faster_with_cache_replay`: after one 63-sample fill pass with full-sphere coverage, replay
+reaches `0.013` aggregate probe error against `0.376` without, so the working model becomes adequate much earlier when
+coverage is sufficient. Two failure modes found during implementation shaped the shipped defaults. Unramped replay
+with schedule-advancing steps overfit a small, low-coverage cache (`0.072` vs `0.037` probe error after two asymmetric
+passes in the unit scenario); the retained-fraction ramp and the frozen annealing schedule reduced but did not
+eliminate that gap on the hostile partial-coverage case (`0.052` vs `0.037`, both converged). A single-observation
+replay minibatch never converges, matching the established behavior of a single-observation anchored minibatch.
