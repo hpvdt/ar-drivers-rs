@@ -133,10 +133,6 @@ fn run_calibration(config: DummyConfig, attitude_mode: AttitudeMode) -> RunStats
             panic!("magnetometer calibration failed at timestamp={timestamp}: {error:?}")
         }
         let angle_degrees = angle_degrees.unwrap();
-        assert!(
-            angle_degrees <= 18.0,
-            "corrected magnetometer exceeded 18 degrees at timestamp={timestamp}: angle_degrees={angle_degrees}"
-        );
         validation_error_sum_degrees += f64::from(angle_degrees);
         validation_error_count += 1;
         let start = *validation_start.get_or_insert_with(Instant::now);
@@ -179,6 +175,18 @@ fn run_calibration(config: DummyConfig, attitude_mode: AttitudeMode) -> RunStats
     );
     println!("  - sampling/optimization warm-up: {warmup_time:.2?} / {warmup_count} iterations");
     println!("  - verification: {verified_time:.2?} / {verified_count} iterations");
+
+    let avg_validation_error_degrees =
+        validation_error_sum_degrees / validation_error_count.max(1) as f64;
+    assert!(
+        worst_angle_degrees <= 18.0,
+        "worst corrected magnetometer error exceeded 18 degrees: worst_angle_degrees={worst_angle_degrees}"
+    );
+    assert!(
+        avg_validation_error_degrees <= 10.0,
+        "average corrected magnetometer error exceeded 10 degrees: avg_validation_error_degrees={avg_validation_error_degrees}"
+    );
+
     RunStats {
         eval_time,
         eval_count,
