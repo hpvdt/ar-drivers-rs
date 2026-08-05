@@ -24,7 +24,15 @@ const DEFAULT_REPLAY_UPDATES: usize = 4;
 /// during the bounded half-step search.
 const DEFAULT_REPLAY_MINIBATCH_SIZE: usize = 8;
 const ONLINE_INITIAL_LEARNING_RATE: f32 = 0.5;
-const ONLINE_LEARNING_RATE_DECAY_STEPS: f32 = 64.0;
+/// Learning-rate annealing timescale, in optimizer steps. The target ellipsoid
+/// is not stationary: it keeps moving as long as cache replacements improve
+/// the sample coverage, which under near-planar motion continues well past the
+/// `N`-sample cache fill. The rate must therefore stay high enough through and
+/// beyond the fill for the optimizer to track the moving convex optimum. A
+/// timescale far below the fill time collapses the rate before convergence and
+/// strands the working shape far from the optimum (seen as >18 deg worst-case
+/// dummy-integration error with a near-planar seed at 64 steps).
+const ONLINE_LEARNING_RATE_DECAY_STEPS: f32 = 128.0;
 const ONLINE_MIN_LEARNING_RATE: f32 = 0.01;
 const ONLINE_MAX_STEP_NORM: f32 = 0.5;
 const ONLINE_SCALE_EPSILON: f32 = 1.0e-4;

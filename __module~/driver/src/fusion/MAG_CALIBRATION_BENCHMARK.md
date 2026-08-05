@@ -4,9 +4,10 @@
 
 Use the deterministic `regression` cases in `tests/mag_calibration_dummy.rs`, once with co-timestamped accelerometer
 gravity and once without gravity. The fixed simulator seeds are `934786981548549007`, `320366629120039532`,
-`800448092538851856`, and `14346460742415463748`. The integration test uses the production `MagCalibrator<1023>`, waits
-five wall-clock seconds after the first successful correction, and then validates for twenty seconds with an
-`18 degree` maximum angular error.
+`800448092538851856`, `14346460742415463748`, and `308857554940434960`; the last was added in `fea858d` as a
+near-planar-coverage regression case, so stages before that commit report four-seed averages. The integration test
+uses the production `MagCalibrator<1023>`, waits five wall-clock seconds after the first successful correction, and
+then validates for twenty seconds with an `18 degree` maximum angular error.
 
 Command:
 
@@ -144,3 +145,47 @@ with schedule-advancing steps overfit a small, low-coverage cache (`0.072` vs `0
 passes in the unit scenario); the retained-fraction ramp and the frozen annealing schedule reduced but did not
 eliminate that gap on the hostile partial-coverage case (`0.052` vs `0.037`, both converged). A single-observation
 replay minibatch never converges, matching the established behavior of a single-observation anchored minibatch.
+
+## Slower learning-rate annealing
+
+The near-planar regression seed `308857554940434960` failed both gravity modes on the prior stage: worst post-warm-up
+error was `20.002 degrees` with gravity and `18.901 degrees` without, with average post-warm-up errors of
+`8.278`/`7.648 degrees` against `2.3`-`2.8 degrees` for the other seeds. The seed's retained cache is nearly planar
+(smallest sample-covariance eigenvalue about `162`, versus `230`-`520` for the other regression seeds), and a
+closed-form solve of the same convex objective on the same cache reached `7.8 degrees` worst case. The online
+optimizer was therefore not converging to the objective's optimum: its step-count-annealed learning rate
+(`ONLINE_LEARNING_RATE_DECAY_STEPS = 64`) collapsed to about `0.02` right as the cache filled, too small to track the
+optimum ellipsoid while near-planar coverage kept moving it. The annealing timescale was doubled to `128` steps so the
+rate stays useful through and beyond the `1023`-sample fill; the bounded half-step search still prevents any
+objective-increasing step, and the change converges to the closed-form optimum on all 105 swept seeds (100 random plus
+the five regression seeds) in both gravity modes.
+
+- **Implementation commit:** working tree superseding `b91cf30`
+- **Learning-rate decay steps:** `128` (was `64`); initial rate `0.5`, floor `0.01` unchanged
+- **Date:** 2026-08-04
+- **Test result:** 2 passed, 0 failed
+- **Complete benchmark duration:** 732.57 seconds
+
+### Five-seed averages
+
+This is the first stage measured on the five-seed suite; earlier tables average the original four seeds and are not
+directly comparable on the aggregate rows.
+
+| Metric | With gravity | Without gravity |
+|---|---:|---:|
+| Average `evaluate_correct` time | 3.941 ms | 3.821 ms |
+| Average successful error | 2.481 deg | 2.466 deg |
+| Worst successful error | 9.068 deg | 9.091 deg |
+| Average post-warm-up error | 2.484 deg | 2.470 deg |
+| Worst post-warm-up error | 9.068 deg | 9.091 deg |
+| Time until first success | 48.35 s | 48.10 s |
+| Samples until first success | 1023 | 1023 |
+| Average total run time | 73.38 s | 73.13 s |
+| Average samples per run | 1557 | 1557 |
+
+The previously failing regression seed now passes with worst post-warm-up errors of `8.795 degrees` (with gravity) and
+`8.684 degrees` (without), and its average post-warm-up error dropped from `8.278`/`7.648` to `2.442`/`2.420 degrees`;
+the online fit now matches the closed-form optimum on that seed. The other four seeds are unchanged within noise, and
+first success still arrives with the full cache at sample 1023. Measured computation time is slightly below the prior
+stage, but the difference is machine-load noise rather than a speedup: the change only raises the learning-rate
+schedule and does not remove per-call work.
