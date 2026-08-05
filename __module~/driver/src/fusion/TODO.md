@@ -70,3 +70,17 @@
       no new calibration information and can hide the fitting-cost reduction in end-to-end timing.
     - **Recommended fix:** Track a working-parameter revision and rerun full publication validation only after that
       revision or the cache changes. Continue returning `InsufficientSamples` immediately when expiry drops readiness.
+
+- [ ] Publish a live calibration confidence score
+
+    - **Summary:** Publication gates are binary, so poor coverage or an unconverged fit is invisible until the
+      full-cache gates pass or fail, and barely-passing calibrations look identical to excellent ones.
+    - **Affected module:** `src/fusion/mag_calibration.rs`
+    - **Severity:** Medium
+    - **Description:** Both quality inputs already exist at publication time: the sample-covariance condition number
+      (coverage) and the full-cache radial RMS (fitness). During warm-up the same quantities are computable over the
+      partial cache, so planar-motion stagnation could be surfaced long before the cache fills.
+    - **Recommended fix:** Return a `[0, 1]` confidence from `perform_calibration`: the product of a log-ramped
+      coverage score (condition 1 -> 1, gate 100 -> 0) and a linear-ramped fitness score (radial RMS 0 -> 1, gate
+      0.1 -> 0). Surface it through the `evaluate_correct` result and a `get_confidence()` getter, and keep a live
+      pre-publication value warm over the current partial cache whenever the buffer changes.
