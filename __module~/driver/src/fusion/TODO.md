@@ -78,9 +78,15 @@
     - **Affected module:** `src/fusion/mag_calibration.rs`
     - **Severity:** Medium
     - **Description:** Both quality inputs already exist at publication time: the sample-covariance condition number
-      (coverage) and the full-cache radial RMS (fitness). During warm-up the same quantities are computable over the
-      partial cache, so planar-motion stagnation could be surfaced long before the cache fills.
+      (coverage) and the full-cache radial RMS (fitness). Coverage must be measured on corrected readings
+      `A (x_i - b)`, not raw samples: soft-iron anisotropy inflates the raw covariance condition by up to
+      `cond(D)^2`, so a distorted device would report perfect directional coverage as poor. During warm-up the same
+      quantities are computable over the partial cache, so planar-motion stagnation could be surfaced long before
+      the cache fills.
     - **Recommended fix:** Return a `[0, 1]` confidence from `perform_calibration`: the product of a log-ramped
-      coverage score (condition 1 -> 1, gate 100 -> 0) and a linear-ramped fitness score (radial RMS 0 -> 1, gate
-      0.1 -> 0). Surface it through the `evaluate_correct` result and a `get_confidence()` getter, and keep a live
-      pre-publication value warm over the current partial cache whenever the buffer changes.
+      coverage score (corrected-reading condition 1 -> 1, gate 100 -> 0) and a linear-ramped fitness score (radial
+      RMS 0 -> 1, gate 0.1 -> 0). Correct samples with the published calibration once initialized and with the
+      working candidate before that when it converts to a valid SPD correction; fall back to raw samples while no
+      convertible candidate exists. Surface it through the `evaluate_correct` result and a `get_confidence()`
+      getter, and keep a live pre-publication value warm over the current partial cache whenever the buffer
+      changes.
