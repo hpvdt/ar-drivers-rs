@@ -1,3 +1,6 @@
+#[cfg(test)]
+use std::cell::Cell;
+
 use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
 
 use super::bad_mag_cause::{BadCalibration, BadMagCause, BadReading};
@@ -73,6 +76,46 @@ struct MinibatchSpec {
     random_state: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CalibrationCandidate {
+    offset: Vector3<f32>,
+    correction: Matrix3<f32>,
+}
+
+/// Result of evaluating one FRD magnetometer observation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MagCalibrationResult {
+    /// No correction has passed the live quality gates yet.
+    Pending {
+        /// Current bounded calibration quality in `[0, 1]`.
+        confidence: f32,
+    },
+    /// A published correction produced a normalized FRD magnetic direction.
+    Calibrated {
+        /// Corrected and normalized FRD magnetic direction.
+        direction: Vector3<f32>,
+        /// Current bounded working-candidate quality in `[0, 1]`.
+        confidence: f32,
+    },
+}
+
+impl MagCalibrationResult {
+    /// Returns the current bounded calibration quality in `[0, 1]`.
+    pub fn confidence(self) -> f32 {
+        match self {
+            Self::Pending { confidence } | Self::Calibrated { confidence, .. } => confidence,
+        }
+    }
+
+    /// Returns the corrected direction only when a correction is published.
+    pub fn calibrated(self) -> Option<Vector3<f32>> {
+        match self {
+            Self::Pending { .. } => None,
+            Self::Calibrated { direction, .. } => Some(direction),
+        }
+    }
+}
+
 /// Online regularized ellipsoid fit for a hard-iron offset and full SPD
 /// soft-iron correction from a fixed, diverse sample buffer.
 pub struct MagCalibrator<const N: usize> {
@@ -108,6 +151,12 @@ pub struct MagCalibrator<const N: usize> {
     replay_minibatch_size: usize,
     prng_state: u64,
     optimizer_steps: u64,
+    raw_sample_sum: Vector3<f64>,
+    raw_outer_product_sum: Matrix3<f64>,
+    radial_residual_mean_square: Option<f32>,
+    confidence: f32,
+    #[cfg(test)]
+    sample_reads: Cell<usize>,
 }
 
 impl<const N: usize> Default for MagCalibrator<N> {
@@ -137,6 +186,12 @@ impl<const N: usize> Default for MagCalibrator<N> {
             replay_minibatch_size: DEFAULT_REPLAY_MINIBATCH_SIZE.min(N.max(1)),
             prng_state: ONLINE_PRNG_SEED,
             optimizer_steps: 0,
+            raw_sample_sum: Vector3::zeros(),
+            raw_outer_product_sum: Matrix3::zeros(),
+            radial_residual_mean_square: None,
+            confidence: 0.0,
+            #[cfg(test)]
+            sample_reads: Cell::new(0),
         }
     }
 }
@@ -292,28 +347,53 @@ impl<const N: usize> MagCalibrator<N> {
         self.gravity_projection = 0.0;
         self.gravity_projection_initialized = false;
         self.optimizer_steps = 0;
+        self.radial_residual_mean_square = None;
+        self.confidence = 0.0;
+    }
+
+    fn add_raw_moment(&mut self, sample: Vector3<f32>) {
+        let sample = sample.cast::<f64>();
+        self.raw_sample_sum += sample;
+        self.raw_outer_product_sum += sample * sample.transpose();
+    }
+
+    fn remove_raw_moment(&mut self, sample: Vector3<f32>) {
+        let sample = sample.cast::<f64>();
+        self.raw_sample_sum -= sample;
+        self.raw_outer_product_sum -= sample * sample.transpose();
+    }
+
+    fn raw_mean_and_covariance(&self) -> Option<(Vector3<f32>, Matrix3<f32>)> {
+        if self.matrix_filled == 0 {
+            return None;
+        }
+        let count = self.matrix_filled as f64;
+        let mean = self.raw_sample_sum / count;
+        let covariance = self.raw_outer_product_sum / count - mean * mean.transpose();
+        let covariance = 0.5 * (covariance + covariance.transpose());
+        let mean = mean.cast::<f32>();
+        let covariance = covariance.cast::<f32>();
+        if mean.iter().all(|value| value.is_finite())
+            && covariance.iter().all(|value| value.is_finite())
+        {
+            Some((mean, covariance))
+        } else {
+            None
+        }
     }
 
     /// Recomputes the current cache normalization and analytically transforms
     /// the working quadratic equation into it. A failed transform resets only
     /// unpublished optimizer state.
     fn refresh_normalization(&mut self) {
-        let sample_count = self.matrix_filled.min(N);
-        if sample_count == 0 {
+        let Some((sample_mean, covariance)) = self.raw_mean_and_covariance() else {
             self.normalization_mean = Vector3::zeros();
             self.normalization_radius = 0.0;
             self.normalization_initialized = false;
             self.reset_working_state();
             return;
-        }
-
-        let sample_mean = (0..sample_count)
-            .fold(Vector3::zeros(), |sum, row| sum + self.sample(row))
-            / sample_count as f32;
-        let radius_squared = (0..sample_count)
-            .map(|row| (self.sample(row) - sample_mean).norm_squared())
-            .sum::<f32>()
-            / sample_count as f32;
+        };
+        let radius_squared = covariance.trace();
         let radius = radius_squared.sqrt();
         if !sample_mean.iter().all(|value| value.is_finite())
             || !radius.is_finite()
@@ -801,17 +881,32 @@ impl<const N: usize> MagCalibrator<N> {
     /// Add a sample if it is deemed more useful than the least useful sample.
     ///
     /// `gravity_direction` is an optional co-timestamped body-frame FRD
-    /// direction. Non-finite and zero directions are ignored.
+    /// direction. Non-finite and zero directions are ignored. The live quality
+    /// and publication state are updated even when diversity rejects the valid
+    /// current observation.
     pub fn evaluate_sample_vec(
         &mut self,
         x: Vector3<f32>,
         gravity_direction: Option<Vector3<f32>>,
         timestamp_us: u64,
     ) {
+        let valid_current_sample = self.ingest_sample(x, gravity_direction, timestamp_us);
+        self.update_publication(valid_current_sample.then_some(x));
+    }
+
+    /// Updates the cache and online optimizer, returning whether the current
+    /// magnetometer observation was finite and nonzero.
+    fn ingest_sample(
+        &mut self,
+        x: Vector3<f32>,
+        gravity_direction: Option<Vector3<f32>>,
+        timestamp_us: u64,
+    ) -> bool {
         let previous_matrix_filled = self.matrix_filled;
         let mut index_map = [u32::MAX; N];
         let mut retained = 0;
         for (index, map_slot) in index_map.iter_mut().enumerate().take(self.matrix_filled) {
+            let sample = self.sample(index);
             if timestamp_us.saturating_sub(self.sample_timestamps_us[index])
                 <= self.max_sample_lifespan_us
             {
@@ -824,6 +919,8 @@ impl<const N: usize> MagCalibrator<N> {
                     self.sample_timestamps_us[retained] = self.sample_timestamps_us[index];
                 }
                 retained += 1;
+            } else {
+                self.remove_raw_moment(sample);
             }
         }
         if retained != self.matrix_filled {
@@ -837,7 +934,7 @@ impl<const N: usize> MagCalibrator<N> {
             if expired {
                 self.refresh_normalization();
             }
-            return;
+            return false;
         }
         let gravity_direction = gravity_direction.and_then(|gravity| {
             let norm = gravity.norm();
@@ -851,7 +948,7 @@ impl<const N: usize> MagCalibrator<N> {
             }
         });
         if N == 0 {
-            return;
+            return false;
         }
         let mut accepted_row = None;
         // Check if buffer is not yet "initialized" with real measurements
@@ -878,6 +975,7 @@ impl<const N: usize> MagCalibrator<N> {
                     complete,
                 );
             }
+            self.add_raw_moment(x);
             self.add_sample_at(count, x, gravity_direction, timestamp_us);
             self.reset_row_cache(count, &squared_dists, count);
             self.matrix_filled += 1;
@@ -918,6 +1016,8 @@ impl<const N: usize> MagCalibrator<N> {
                         complete,
                     );
                 }
+                self.remove_raw_moment(self.sample(low_index));
+                self.add_raw_moment(x);
                 self.add_sample_at(low_index, x, gravity_direction, timestamp_us);
                 self.reset_row_cache(low_index, &squared_dists, N);
                 accepted_row = Some(low_index);
@@ -927,6 +1027,7 @@ impl<const N: usize> MagCalibrator<N> {
             self.refresh_normalization();
         }
         self.update_online_optimizer(x, gravity_direction, accepted_row);
+        true
     }
 
     /// Insert a sample vector into `index` row of buffer matrix.
@@ -951,6 +1052,15 @@ impl<const N: usize> MagCalibrator<N> {
         self.mean_distance
     }
 
+    /// Returns the current bounded calibration quality in `[0, 1]`.
+    ///
+    /// Zero means the current working candidate is pending or unusable. A
+    /// previously published correction can remain available while this value
+    /// is zero after a rejected later candidate.
+    pub fn get_confidence(&self) -> f32 {
+        self.confidence
+    }
+
     /// Calibrates a magnetometer vector that has already been converted to FRD.
     ///
     /// `gravity_direction` is an optional co-timestamped body-frame FRD
@@ -961,14 +1071,13 @@ impl<const N: usize> MagCalibrator<N> {
         raw_mag: Vector3<f32>,
         gravity_direction: Option<Vector3<f32>>,
         timestamp_us: u64,
-    ) -> Result<Vector3<f32>, BadMagCause> {
-        self.evaluate_sample_vec(raw_mag, gravity_direction, timestamp_us);
-        if let Err(error) = self.perform_calibration() {
-            if !self.calibration_initialized
-                || matches!(error, BadCalibration::InsufficientSamples { .. })
-            {
-                return Err(error.into());
-            }
+    ) -> Result<MagCalibrationResult, BadMagCause> {
+        let valid_current_sample = self.ingest_sample(raw_mag, gravity_direction, timestamp_us);
+        self.update_publication(valid_current_sample.then_some(raw_mag));
+        if !self.calibration_initialized {
+            return Ok(MagCalibrationResult::Pending {
+                confidence: self.confidence,
+            });
         }
         let mag = self.soft_iron_correction * (raw_mag - self.hard_iron_offset);
 
@@ -979,54 +1088,39 @@ impl<const N: usize> MagCalibrator<N> {
                 min_norm: MIN_MAG_NORM,
             }))
         } else {
-            Ok(mag.normalize())
+            Ok(MagCalibrationResult::Calibrated {
+                direction: mag.normalize(),
+                confidence: self.confidence,
+            })
         }
     }
 
-    /// Validates the online ellipsoid estimate and derives its symmetric
-    /// correction matrix.
-    ///
-    /// On success, persists the updated calibration state. Returns the cause when
-    /// there are not enough samples to start calibration.
-    fn perform_calibration(&mut self) -> Result<(), BadCalibration> {
-        let sample_count = self.matrix_filled.min(N);
-        let required_samples = N.max(CALIBRATION_PARAMETER_COUNT);
-        if sample_count < required_samples {
-            return Err(BadCalibration::InsufficientSamples {
-                samples: sample_count,
-                required: required_samples,
-            });
+    fn update_publication(&mut self, current_sample: Option<Vector3<f32>>) {
+        if let Some(candidate) = self
+            .update_quality(current_sample)
+            .filter(|_| self.confidence > 0.0)
+        {
+            self.hard_iron_offset = candidate.offset;
+            self.soft_iron_correction = candidate.correction;
+            self.calibration_initialized = true;
         }
+    }
 
-        let sample_mean = (0..sample_count)
-            .fold(Vector3::zeros(), |sum, row| sum + self.sample(row))
-            / sample_count as f32;
-        if !sample_mean.iter().all(|value| value.is_finite()) {
+    /// Derives one finite SPD correction candidate from the current online
+    /// ellipsoid state without scanning retained rows.
+    fn working_candidate(&self) -> Result<CalibrationCandidate, BadCalibration> {
+        if !self.normalization_initialized
+            || !self
+                .normalization_mean
+                .iter()
+                .all(|value| value.is_finite())
+            || !self.normalization_radius.is_finite()
+            || self.normalization_radius <= f32::EPSILON
+        {
             return Err(BadCalibration::Unsolveable {
-                message: "sample mean is non-finite",
+                message: "sample normalization is non-finite or zero",
             });
         }
-
-        let covariance = (0..sample_count).fold(Matrix3::zeros(), |sum, row| {
-            let centered = self.sample(row) - sample_mean;
-            sum + centered * centered.transpose()
-        }) / sample_count as f32;
-        let radius_squared = covariance.trace();
-        if !radius_squared.is_finite() || radius_squared <= f32::EPSILON {
-            return Err(BadCalibration::Unsolveable {
-                message: "sample radius is non-finite or zero",
-            });
-        }
-
-        let sample_condition = Self::condition_number(&covariance.symmetric_eigen().eigenvalues);
-        if sample_condition > MAX_SAMPLE_CONDITION {
-            return Err(BadCalibration::DegenerateSoftIronMatrix {
-                condition: sample_condition,
-                max_condition: MAX_SAMPLE_CONDITION,
-            });
-        }
-
-        let radius = radius_squared.sqrt();
         let parameters = self.parameters;
         if !parameters.iter().all(|value| value.is_finite()) {
             return Err(BadCalibration::Unsolveable {
@@ -1064,8 +1158,9 @@ impl<const N: usize> MagCalibrator<N> {
                 .map(|value| (value / ellipsoid_scale).sqrt()),
         );
         let correction =
-            shape_eigen.eigenvectors * square_root * shape_eigen.eigenvectors.transpose() / radius;
-        let offset = sample_mean + radius * normalized_offset;
+            shape_eigen.eigenvectors * square_root * shape_eigen.eigenvectors.transpose()
+                / self.normalization_radius;
+        let offset = self.normalization_mean + self.normalization_radius * normalized_offset;
         if !offset.iter().all(|value| value.is_finite())
             || !correction.iter().all(|value| value.is_finite())
         {
@@ -1074,27 +1169,70 @@ impl<const N: usize> MagCalibrator<N> {
             });
         }
 
-        let radial_rms = ((0..sample_count)
-            .map(|row| {
-                let residual = (correction * (self.sample(row) - offset)).norm() - 1.0;
-                residual * residual
-            })
-            .sum::<f32>()
-            / sample_count as f32)
-            .sqrt();
-        if !radial_rms.is_finite() || radial_rms > MAX_RADIAL_RMS {
-            return Err(BadCalibration::Unsolveable {
-                message: "calibration radial residual is too large",
-            });
-        }
+        Ok(CalibrationCandidate { offset, correction })
+    }
 
-        self.hard_iron_offset = offset;
-        self.soft_iron_correction = correction;
-        self.calibration_initialized = true;
-        Ok(())
+    fn corrected_covariance(&self, correction: Matrix3<f32>) -> Option<Matrix3<f32>> {
+        let (_, raw_covariance) = self.raw_mean_and_covariance()?;
+        let covariance = correction * raw_covariance * correction.transpose();
+        let covariance = 0.5 * (covariance + covariance.transpose());
+        covariance
+            .iter()
+            .all(|value| value.is_finite())
+            .then_some(covariance)
+    }
+
+    fn coverage_score(covariance: Matrix3<f32>) -> f32 {
+        let condition = Self::condition_number(&covariance.symmetric_eigen().eigenvalues);
+        if !condition.is_finite() {
+            0.0
+        } else {
+            (1.0 - condition.max(1.0).ln() / MAX_SAMPLE_CONDITION.ln()).clamp(0.0, 1.0)
+        }
+    }
+
+    /// Updates the live radial statistic and quality for the current working
+    /// candidate. All cache-dependent data comes from maintained moments.
+    fn update_quality(
+        &mut self,
+        current_sample: Option<Vector3<f32>>,
+    ) -> Option<CalibrationCandidate> {
+        if self.matrix_filled < CALIBRATION_PARAMETER_COUNT {
+            self.confidence = 0.0;
+            return None;
+        }
+        let candidate = match self.working_candidate() {
+            Ok(candidate) => candidate,
+            Err(_) => {
+                self.confidence = 0.0;
+                return None;
+            }
+        };
+        if let Some(sample) = current_sample {
+            let residual = (candidate.correction * (sample - candidate.offset)).norm() - 1.0;
+            let residual_squared = residual * residual;
+            if !residual_squared.is_finite() {
+                self.confidence = 0.0;
+                return None;
+            }
+            let alpha = 1.0 / self.matrix_filled.min(self.minibatch_size).max(1) as f32;
+            let mean_square = self.radial_residual_mean_square.unwrap_or(0.0);
+            self.radial_residual_mean_square =
+                Some(mean_square + alpha * (residual_squared - mean_square));
+        }
+        let coverage = self
+            .corrected_covariance(candidate.correction)
+            .map_or(0.0, Self::coverage_score);
+        let fitness = self.radial_residual_mean_square.map_or(0.0, |mean_square| {
+            (1.0 - mean_square.sqrt() / MAX_RADIAL_RMS).clamp(0.0, 1.0)
+        });
+        self.confidence = (coverage * fitness).clamp(0.0, 1.0);
+        Some(candidate)
     }
 
     fn sample(&self, row: usize) -> Vector3<f32> {
+        #[cfg(test)]
+        self.sample_reads.set(self.sample_reads.get() + 1);
         // TODO: this should be a linear algebra operation, avoid elementwise operations
         Vector3::new(
             self.matrix[(row, 0)],
@@ -1113,6 +1251,56 @@ impl<const N: usize> MagCalibrator<N> {
             f32::INFINITY
         } else {
             max / min
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn working_quality_components(&self) -> (bool, f32, f32) {
+        let Ok(candidate) = self.working_candidate() else {
+            return (false, 0.0, 0.0);
+        };
+        let coverage = self
+            .corrected_covariance(candidate.correction)
+            .map_or(0.0, Self::coverage_score);
+        let fitness = self.radial_residual_mean_square.map_or(0.0, |mean_square| {
+            (1.0 - mean_square.sqrt() / MAX_RADIAL_RMS).clamp(0.0, 1.0)
+        });
+        (true, coverage, fitness)
+    }
+
+    #[cfg(test)]
+    pub(super) fn corrected_covariance_for_test(
+        &self,
+        correction: Matrix3<f32>,
+    ) -> Option<Matrix3<f32>> {
+        self.corrected_covariance(correction)
+    }
+
+    #[cfg(test)]
+    pub(super) fn quality_cache_reads_for_test(&mut self) -> usize {
+        let before = self.sample_reads.get();
+        self.update_quality(None);
+        self.sample_reads.get() - before
+    }
+
+    /// Verifies maintained raw moments against a direct current-cache sum.
+    #[cfg(test)]
+    pub(super) fn check_raw_moments(&self) -> Result<(), String> {
+        let (sum, outer_sum) = (0..self.matrix_filled).fold(
+            (Vector3::<f64>::zeros(), Matrix3::<f64>::zeros()),
+            |(sum, outer_sum), row| {
+                let sample = self.sample(row).cast::<f64>();
+                (sum + sample, outer_sum + sample * sample.transpose())
+            },
+        );
+        let scale = sum.norm().max(outer_sum.norm()).max(1.0);
+        let error = (self.raw_sample_sum - sum)
+            .norm()
+            .max((self.raw_outer_product_sum - outer_sum).norm());
+        if error <= 1.0e-12 * scale {
+            Ok(())
+        } else {
+            Err(format!("raw moment error={error} scale={scale}"))
         }
     }
 

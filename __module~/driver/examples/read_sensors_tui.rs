@@ -8,7 +8,7 @@ use std::io::stdout;
 use std::time::{Duration, Instant};
 
 use ar_drivers::any_glasses_or_dummy;
-use ar_drivers::fusion::{rub_to_frd, FusionState};
+use ar_drivers::fusion::{rub_to_frd, FusionState, MagCalibrationResult};
 use ar_drivers::GlassesEvent;
 use ratatui::backend::CrosstermBackend;
 use ratatui::widgets::{Block, Clear, Paragraph, Widget};
@@ -135,10 +135,16 @@ fn format_event(
                 mag_frd.x, mag_frd.y, mag_frd.z, timestamp
             );
             let calibration = match fusion.mag.evaluate_correct(mag_frd, None, timestamp) {
-                Ok(calibrated) => format!(
-                    "Magnetometer FRD (Calibrated): [x={:+10.4}, y={:+10.4}, z={:+10.4}]",
-                    calibrated.x, calibrated.y, calibrated.z
+                Ok(MagCalibrationResult::Calibrated {
+                    direction,
+                    confidence,
+                }) => format!(
+                    "Magnetometer FRD (Calibrated, quality={confidence:.3}): [x={:+10.4}, y={:+10.4}, z={:+10.4}]",
+                    direction.x, direction.y, direction.z
                 ),
+                Ok(MagCalibrationResult::Pending { confidence }) => {
+                    format!("Magnetometer calibration pending: quality={confidence:.3}")
+                }
                 Err(cause) => format!("Magnetometer calibration unavailable: {:?}", cause),
             };
             let source = format!("  - converted from raw {:?}", event);

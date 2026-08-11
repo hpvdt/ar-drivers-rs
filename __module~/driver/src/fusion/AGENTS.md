@@ -33,15 +33,18 @@ co-timestamped body-frame FRD gravity direction and a device timestamp. Invalid 
 the magnetometer sample.
 
 Old samples expire according to `max_sample_lifespan_us`, before the incoming magnetometer is validated. An invalid
-magnetometer can therefore change cache readiness and normalization through expiry, but it is not retained and does not
-run an optimizer update. The first `N` valid samples fill the cache unconditionally. After the cache is full, a
+magnetometer can therefore change retained support, normalization, and live quality through expiry, but it is not
+retained and does not run an optimizer update. The first `N` valid samples fill the cache unconditionally. After the
+cache is full, a
 k-nearest-neighbor diversity heuristic decides whether a new sample replaces a retained row. Every valid current sample
 still participates in one online optimizer update even when diversity rejects it. While no calibration has been
 published yet, each valid sample also triggers a ramped number of cache-only replay updates that accelerate cold-start
 convergence.
 
-Calibration publication requires `N.max(9)` retained samples. Since the cache cannot hold more than `N`, this means the
-cache must be full and `N` must be at least nine.
+The calibrator maintains the raw first moment and second outer-product moment when rows are appended, replaced, or
+expired. Cache normalization and corrected centered covariance are derived from these fixed-size statistics without a
+row scan. Before nine retained samples, calibration is explicitly pending with quality zero. After that model minimum,
+the first finite SPD working candidate with positive live quality can publish from a partially filled cache.
 
 ### Production cache size
 
@@ -233,7 +236,7 @@ unusable, only unpublished working state resets to `Q = 2 I`, `q = 0`, clears `k
 learning-rate schedule. A single centered sample has zero radius, so the first informative gradient requires two
 distinct samples even though state exists immediately.
 
-### Candidate conversion and quality gates
+### Candidate conversion and live quality
 
 For a working candidate:
 
@@ -245,18 +248,30 @@ b = mu + r d,
 A = M^(1/2) / r.
 ```
 
-The principal symmetric square root uses a `3 x 3` eigendecomposition. Publication requires:
+The principal symmetric square root uses a `3 x 3` eigendecomposition. A working candidate is valid only when the
+coefficients, normalization, offset, and correction are finite, `Q` is positive-definite, `gamma` is positive, and the
+correction condition is at most `10`. Invalid candidates have quality zero; raw samples are never substituted for
+corrected samples.
 
-- finite coefficients, mean, radius, offset, and correction;
-- sample covariance condition at most `100`;
-- positive-definite `Q` and positive `gamma`;
-- correction condition at most `10`;
-- full-cache radial RMS at most `0.1`.
+For retained raw-sample mean `mu_raw` and second moment `E[x x^T]`, compute:
+
+```text
+C_raw = E[x x^T] - mu_raw mu_raw^T,
+C_corrected = A C_raw A^T.
+```
+
+The hard-iron offset cancels after centering. Directional coverage is a logarithmic ramp from `1` at corrected
+covariance condition `1` to `0` at condition `100`. Physical radial fitness uses the running mean square of
+`||A (x - b)|| - 1`, evaluated for each valid current sample after its online update with the same working candidate.
+Its update weight is `1 / min(sample_count, minibatch_size)`; the statistic resets whenever working optimizer state
+resets. Fitness is a linear ramp from `1` at radial RMS `0` to `0` at radial RMS `0.1`. Live quality is coverage times
+fitness, clamped to `[0, 1]`.
 
 Working coefficients and published correction parameters are separate. The hard-iron offset and soft-iron correction
-change only after every quality gate passes. Before the first successful publication, a rejected full-cache candidate
-returns `BadCalibration`. After publication, non-insufficient candidate failures leave the last published correction in
-use. Falling below cache readiness always returns `InsufficientSamples`. Correcting a reading remains one matrix-vector
+change whenever a valid working candidate has positive quality, including while the cache is partial. Before the first
+publication, `evaluate_correct` returns a non-error `Pending` result and no vector. After publication, a rejected
+working candidate reports its current quality, which may be zero, while leaving the last published correction in use.
+Fusion callers use only `Calibrated` vectors for attitude updates. Correcting a reading remains one matrix-vector
 multiplication followed by normalization:
 
 ```text
@@ -270,12 +285,12 @@ For minibatch size `B`:
 - online fitting is `O(10 B)`;
 - cold-start replay adds `O(10 R B_r)` for `R` ramped replay updates of size `B_r`, only until first publication;
 - candidate conversion uses fixed `3 x 3` operations;
-- full publication validation is `O(N)`;
+- normalization and live-quality maintenance use fixed-size raw moments and are `O(1)` in `N`;
 - diversity maintenance is expected `O(N)` for a full cache;
-- persistent online-optimizer state is `O(1)` in `N`.
+- persistent online-optimizer, moment, and quality state is `O(1)` in `N`.
 
-The call remains `O(N)` overall because publication validation and sample diversity are linear, but there are no
-production `9 x 9` normal-matrix accumulations or solves.
+The call remains `O(N)` overall because sample diversity is linear, but live confidence adds no cache scan and there
+are no production `9 x 9` normal-matrix accumulations or solves.
 
 ### Diversity neighbor cache
 

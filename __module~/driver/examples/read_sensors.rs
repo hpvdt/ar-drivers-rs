@@ -3,7 +3,7 @@
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
 use ar_drivers::any_glasses_or_dummy;
-use ar_drivers::fusion::{rub_to_frd, FusionState};
+use ar_drivers::fusion::{rub_to_frd, FusionState, MagCalibrationResult};
 use ar_drivers::GlassesEvent;
 
 fn main() {
@@ -47,9 +47,15 @@ fn main() {
                 );
                 println!("  - converted from raw {:?}", event);
                 match fusion.mag.evaluate_correct(mag_frd, None, timestamp) {
-                    Ok(calibrated) => println!(
-                        "Magnetometer FRD (Calibrated): [x={:+10.4}, y={:+10.4}, z={:+10.4}]",
-                        calibrated.x, calibrated.y, calibrated.z
+                    Ok(MagCalibrationResult::Calibrated {
+                        direction,
+                        confidence,
+                    }) => println!(
+                        "Magnetometer FRD (Calibrated, quality={confidence:.3}): [x={:+10.4}, y={:+10.4}, z={:+10.4}]",
+                        direction.x, direction.y, direction.z
+                    ),
+                    Ok(MagCalibrationResult::Pending { confidence }) => println!(
+                        "Magnetometer calibration pending: quality={confidence:.3}"
                     ),
                     Err(cause) => println!("Magnetometer calibration unavailable: {:?}", cause),
                 }

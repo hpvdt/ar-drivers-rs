@@ -1,7 +1,7 @@
 use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 
-use super::bad_mag_cause::{BadCalibration, BadMagCause};
-use super::mag_calibration::MagCalibrator;
+use super::bad_mag_cause::BadMagCause;
+use super::mag_calibration::{MagCalibrationResult, MagCalibrator};
 
 #[test]
 fn mag_calibrator_corrects_synthetic_full_spd_distortion() {
@@ -18,9 +18,11 @@ fn mag_calibrator_corrects_synthetic_full_spd_distortion() {
     .into_iter()
     .enumerate()
     {
-        let corrected = calibrator
-            .evaluate_correct(offset + distortion * expected, None, timestamp_us as u64)
-            .unwrap();
+        let corrected = calibrated(calibrator.evaluate_correct(
+            offset + distortion * expected,
+            None,
+            timestamp_us as u64,
+        ));
         assert_vec_close(corrected, expected, 0.05);
     }
 }
@@ -47,9 +49,8 @@ fn mag_calibrator_corrects_asymmetrically_sampled_distortion() {
         let _ = calibrator.evaluate_correct(offset + distortion * direction, None, (64 + i) as u64);
     }
     let expected = Vector3::new(1.0, -2.0, -1.0).normalize();
-    let corrected = calibrator
-        .evaluate_correct(offset + distortion * expected, None, 64 + 16 * 63)
-        .expect("online calibration did not converge");
+    let corrected =
+        calibrated(calibrator.evaluate_correct(offset + distortion * expected, None, 64 + 16 * 63));
 
     assert_vec_close(corrected, expected, 0.05);
 }
@@ -62,8 +63,8 @@ fn mag_calibrator_returns_stable_online_corrections() {
     let expected = Vector3::new(1.0, -2.0, 3.0).normalize();
     let raw = offset + distortion * expected;
 
-    let first = calibrator.evaluate_correct(raw, None, 1).unwrap();
-    let second = calibrator.evaluate_correct(raw, None, 2).unwrap();
+    let first = calibrated(calibrator.evaluate_correct(raw, None, 1));
+    let second = calibrated(calibrator.evaluate_correct(raw, None, 2));
 
     assert_vec_close(second, first, 0.01);
 }
@@ -80,33 +81,35 @@ fn mag_calibrator_rejects_degenerate_data() {
 
     assert!(matches!(
         result,
-        Err(BadMagCause::BadCalibration(
-            BadCalibration::Unsolveable { .. }
-        ))
+        Ok(MagCalibrationResult::Pending { confidence: 0.0 })
     ));
+    assert_eq!(calibrator.get_confidence(), 0.0);
 }
 
 #[test]
-fn mag_calibrator_waits_for_the_full_buffer_after_reaching_the_model_minimum() {
-    let mut calibrator = MagCalibrator::<12>::new();
-    let mut result = None;
-    for i in 0..9 {
-        result = Some(calibrator.evaluate_correct(
-            Vector3::new(5.0 + i as f32, 6.0, 7.0),
-            None,
-            i as u64,
-        ));
+fn mag_calibrator_publishes_before_the_buffer_is_full() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+    let mut calibrator = MagCalibrator::<1023>::new();
+    let mut published_at = None;
+    for i in 0..1022 {
+        let direction = sample_direction(i % 63, 63);
+        let result = calibrator
+            .evaluate_correct(offset + distortion * direction, None, i as u64)
+            .unwrap();
+        if result.calibrated().is_some() {
+            published_at = Some(i + 1);
+            break;
+        }
     }
 
-    assert!(matches!(
-        result.unwrap(),
-        Err(BadMagCause::BadCalibration(
-            BadCalibration::InsufficientSamples {
-                samples: 9,
-                required: 12
-            }
-        ))
-    ));
+    let components = calibrator.working_quality_components();
+    let published_at = published_at.unwrap_or_else(|| {
+        panic!("partial cache never published a valid correction: components={components:?}")
+    });
+    assert!(published_at >= 9);
+    assert!(published_at < 1023);
+    assert!(calibrator.get_confidence() > 0.0);
 }
 
 #[test]
@@ -124,9 +127,7 @@ fn mag_calibrator_rejects_nearly_collinear_samples() {
 
     assert!(matches!(
         result.unwrap(),
-        Err(BadMagCause::BadCalibration(
-            BadCalibration::DegenerateSoftIronMatrix { .. }
-        ))
+        Ok(MagCalibrationResult::Pending { confidence: 0.0 })
     ));
 }
 
@@ -143,7 +144,15 @@ fn mag_calibrator_keeps_last_correction_after_rejected_refit() {
         result = Some(calibrator.evaluate_correct(raw, None, 1));
     }
 
-    assert_vec_close(result.unwrap().unwrap(), expected, 0.05);
+    let result = result.unwrap().unwrap();
+    assert_eq!(result.confidence(), 0.0);
+    assert_vec_close(
+        result
+            .calibrated()
+            .expect("last published correction was discarded"),
+        expected,
+        0.05,
+    );
 }
 
 #[test]
@@ -154,9 +163,8 @@ fn mag_calibrator_clamps_neighbor_count_through_public_result() {
 
     for k in [0, 99] {
         let mut calibrator = seeded_calibrator::<63>(offset, distortion).num_neighbors(k);
-        let corrected = calibrator
-            .evaluate_correct(offset + distortion * expected, None, 1)
-            .unwrap();
+        let corrected =
+            calibrated(calibrator.evaluate_correct(offset + distortion * expected, None, 1));
         assert_vec_close(corrected, expected, 0.05);
     }
 }
@@ -183,7 +191,7 @@ fn mag_calibrator_clamps_minibatch_size_and_is_deterministic() {
         let second_result = second.evaluate_correct(raw, None, 10_000);
         assert_eq!(first_result, second_result);
         if minibatch_size == usize::MAX {
-            assert_vec_close(first_result.unwrap(), expected, 0.05);
+            assert_vec_close(calibrated(first_result), expected, 0.05);
         }
     }
 }
@@ -195,14 +203,28 @@ fn mag_calibrator_converges_faster_with_cache_replay() {
     let mut replayed = MagCalibrator::<63>::new();
     let mut plain = MagCalibrator::<63>::new().replay_updates(0);
 
-    // Cold-start with one fill pass of full-sphere coverage: the
-    // sample-anchored update alone is still far from converged, while
-    // replaying the retained rows already fits them well.
-    for i in 0..63 {
-        let raw = offset + distortion * sample_direction(i, 63);
-        let _ = replayed.evaluate_correct(raw, None, i as u64);
-        let _ = plain.evaluate_correct(raw, None, i as u64);
+    let mut replayed_published_at = None;
+    let mut plain_published_at = None;
+    for i in 0..16 * 63 {
+        let raw = offset + distortion * sample_direction(i % 63, 63);
+        let replayed_result = replayed.evaluate_correct(raw, None, i as u64).unwrap();
+        let plain_result = plain.evaluate_correct(raw, None, i as u64).unwrap();
+        if replayed_result.calibrated().is_some() && replayed_published_at.is_none() {
+            replayed_published_at = Some(i);
+        }
+        if plain_result.calibrated().is_some() && plain_published_at.is_none() {
+            plain_published_at = Some(i);
+        }
+        if replayed_published_at.is_some() && plain_published_at.is_some() {
+            break;
+        }
     }
+    let replayed_published_at = replayed_published_at.expect("replayed calibration stayed pending");
+    let plain_published_at = plain_published_at.expect("plain calibration stayed pending");
+    assert!(
+        replayed_published_at < plain_published_at,
+        "replayed_published_at={replayed_published_at} plain_published_at={plain_published_at}"
+    );
 
     let probe_error = |calibrator: &mut MagCalibrator<63>| {
         [
@@ -214,10 +236,11 @@ fn mag_calibrator_converges_faster_with_cache_replay() {
         .into_iter()
         .enumerate()
         .map(|(i, expected)| {
-            (calibrator
-                .evaluate_correct(offset + distortion * expected, None, 1000 + i as u64)
-                .unwrap()
-                - expected)
+            (calibrated(calibrator.evaluate_correct(
+                offset + distortion * expected,
+                None,
+                1000 + i as u64,
+            )) - expected)
                 .norm()
         })
         .sum::<f32>()
@@ -261,7 +284,7 @@ fn mag_calibrator_clamps_replay_configuration_and_is_deterministic() {
         // single-observation anchored minibatch, so only configurations with
         // enough observations per update are required to converge.
         if replay_updates == 0 || replay_minibatch_size == usize::MAX {
-            assert_vec_close(first_result.unwrap(), expected, 0.05);
+            assert_vec_close(calibrated(first_result), expected, 0.05);
         }
     }
 }
@@ -281,12 +304,7 @@ fn mag_calibrator_accepts_zero_components_and_rejects_bad_vectors() {
         let result = calibrator.evaluate_correct(sample, None, timestamp_us as u64);
         assert!(matches!(
             result,
-            Err(BadMagCause::BadCalibration(
-                BadCalibration::InsufficientSamples {
-                    samples: 1,
-                    required: 12
-                }
-            ))
+            Ok(MagCalibrationResult::Pending { confidence: 0.0 })
         ));
     }
 }
@@ -303,14 +321,13 @@ fn mag_calibrator_defaults_sample_lifespan_to_one_hour() {
         60 * 60 * 1_000_000 + 1,
     );
 
+    let result = result.unwrap();
     assert!(matches!(
         result,
-        Err(BadMagCause::BadCalibration(
-            BadCalibration::InsufficientSamples {
-                samples: 1,
-                required: 12
-            }
-        ))
+        MagCalibrationResult::Calibrated {
+            confidence: 0.0,
+            ..
+        }
     ));
 }
 
@@ -322,14 +339,13 @@ fn mag_calibrator_uses_configured_sample_lifespan() {
 
     let result = calibrator.evaluate_correct(Vector3::new(20.0, 30.0, 40.0), None, 11);
 
+    let result = result.unwrap();
     assert!(matches!(
         result,
-        Err(BadMagCause::BadCalibration(
-            BadCalibration::InsufficientSamples {
-                samples: 1,
-                required: 12
-            }
-        ))
+        MagCalibrationResult::Calibrated {
+            confidence: 0.0,
+            ..
+        }
     ));
 }
 
@@ -364,9 +380,7 @@ fn mag_calibrator_improves_with_consistent_gravity() {
     let plain_error: f32 = probes
         .iter()
         .map(|&expected| {
-            (plain
-                .evaluate_correct(offset + distortion * expected, None, 100)
-                .unwrap()
+            (calibrated(plain.evaluate_correct(offset + distortion * expected, None, 100))
                 - expected)
                 .norm()
         })
@@ -374,10 +388,11 @@ fn mag_calibrator_improves_with_consistent_gravity() {
     let refined_error: f32 = probes
         .iter()
         .map(|&expected| {
-            (gravity_refined
-                .evaluate_correct(offset + distortion * expected, None, 100)
-                .unwrap()
-                - expected)
+            (calibrated(gravity_refined.evaluate_correct(
+                offset + distortion * expected,
+                None,
+                100,
+            )) - expected)
                 .norm()
         })
         .sum();
@@ -417,9 +432,46 @@ fn mag_calibrator_ignores_invalid_gravity() {
 
     let expected = Vector3::new(1.0, -2.0, 3.0).normalize();
     let raw = offset + distortion * expected;
-    let plain = plain.evaluate_correct(raw, None, 100).unwrap();
-    let invalid = invalid.evaluate_correct(raw, None, 100).unwrap();
+    let plain = calibrated(plain.evaluate_correct(raw, None, 100));
+    let invalid = calibrated(invalid.evaluate_correct(raw, None, 100));
     assert_vec_close(invalid, plain, 1.0e-6);
+}
+
+#[test]
+fn mag_calibrator_uses_corrected_centered_covariance_for_coverage() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(2.4, 0.3, -0.2, 0.3, 0.7, 0.1, -0.2, 0.1, 1.3);
+    let correction = distortion.try_inverse().unwrap();
+    let mut calibrator = MagCalibrator::<63>::new();
+    let mut directions = Vec::new();
+    for i in 0..63 {
+        let direction = sample_direction(i, 63);
+        directions.push(direction);
+        calibrator.evaluate_sample_vec(offset + distortion * direction, None, i as u64);
+    }
+
+    let mean = directions.iter().copied().sum::<Vector3<f32>>() / directions.len() as f32;
+    let expected = directions.iter().fold(Matrix3::zeros(), |sum, direction| {
+        let centered = direction - mean;
+        sum + centered * centered.transpose()
+    }) / directions.len() as f32;
+    let actual = calibrator
+        .corrected_covariance_for_test(correction)
+        .expect("maintained covariance is unavailable");
+
+    assert!(
+        (actual - expected).norm() < 1.0e-5,
+        "actual={actual:?} expected={expected:?}"
+    );
+}
+
+#[test]
+fn live_quality_does_not_read_the_sample_cache() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+    let mut calibrator = seeded_calibrator::<63>(offset, distortion);
+
+    assert_eq!(calibrator.quality_cache_reads_for_test(), 0);
 }
 
 #[test]
@@ -455,6 +507,9 @@ fn mag_calibrator_neighbor_cache_matches_naive_rescan() {
             calibrator
                 .check_neighbor_cache()
                 .unwrap_or_else(|message| panic!("k={k} timestamp_us={timestamp_us}: {message}"));
+            calibrator
+                .check_raw_moments()
+                .unwrap_or_else(|message| panic!("k={k} timestamp_us={timestamp_us}: {message}"));
         }
     }
 }
@@ -481,7 +536,7 @@ fn train_calibrator<const N: usize>(
         result = Some(calibrator.evaluate_correct(offset + distortion * direction, None, 0));
     }
     assert!(
-        result.is_some_and(|result| result.is_ok()),
+        result.is_some_and(|result| result.is_ok_and(|result| result.calibrated().is_some())),
         "online calibration did not converge"
     );
     calibrator
@@ -503,4 +558,11 @@ fn assert_vec_close(actual: Vector3<f32>, expected: Vector3<f32>, tolerance: f32
         expected.transpose(),
         diff
     );
+}
+
+fn calibrated(result: Result<MagCalibrationResult, BadMagCause>) -> Vector3<f32> {
+    result
+        .expect("magnetometer evaluation failed")
+        .calibrated()
+        .expect("calibration is still pending")
 }

@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use ar_drivers::fusion::{rub_to_frd, FusionState};
+use ar_drivers::fusion::{rub_to_frd, FusionState, MagCalibrationResult};
 use ar_drivers::{ARGlasses, Dummy, DummyConfig, GlassesEvent};
 use nalgebra::Vector3;
 use serial_test::serial;
@@ -102,10 +102,12 @@ fn run_calibration(config: DummyConfig, attitude_mode: AttitudeMode) -> RunStats
             .evaluate_correct(raw_frd, gravity_direction, timestamp);
         eval_time += eval_start.elapsed();
         eval_count += 1;
-        let angle_degrees = result
-            .as_ref()
-            .ok()
-            .map(|corrected| corrected.angle(&ideal_body_frd).to_degrees());
+        let corrected = result.as_ref().ok().and_then(|result| match result {
+            MagCalibrationResult::Pending { .. } => None,
+            MagCalibrationResult::Calibrated { direction, .. } => Some(*direction),
+        });
+        let angle_degrees =
+            corrected.map(|direction| direction.angle(&ideal_body_frd).to_degrees());
         if let Some(angle_degrees) = angle_degrees {
             error_sum_degrees += f64::from(angle_degrees);
             error_count += 1;
@@ -115,7 +117,7 @@ fn run_calibration(config: DummyConfig, attitude_mode: AttitudeMode) -> RunStats
         let warmed_up =
             first_success_at.is_some_and(|instant: Instant| instant.elapsed() >= warmup_duration);
         if !warmed_up {
-            if result.is_ok() && first_success_at.is_none() {
+            if corrected.is_some() && first_success_at.is_none() {
                 first_success_at = Some(Instant::now());
                 until_first_success = Some((test_start.elapsed(), eval_count));
             }
@@ -132,7 +134,9 @@ fn run_calibration(config: DummyConfig, attitude_mode: AttitudeMode) -> RunStats
         if let Err(error) = result {
             panic!("magnetometer calibration failed at timestamp={timestamp}: {error:?}")
         }
-        let angle_degrees = angle_degrees.unwrap();
+        let angle_degrees = angle_degrees.unwrap_or_else(|| {
+            panic!("magnetometer calibration returned pending at timestamp={timestamp}")
+        });
         validation_error_sum_degrees += f64::from(angle_degrees);
         validation_error_count += 1;
         let start = *validation_start.get_or_insert_with(Instant::now);

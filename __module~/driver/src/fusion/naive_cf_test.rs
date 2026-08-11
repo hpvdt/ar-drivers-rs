@@ -1,7 +1,6 @@
 use nalgebra::{UnitQuaternion, Vector3};
 
-use super::bad_mag_cause::{BadCalibration, BadMagCause};
-use super::mag_calibration::MagCalibrator;
+use super::mag_calibration::{MagCalibrationResult, MagCalibrator};
 use super::naive_cf::NaiveCF;
 use super::FusionState;
 
@@ -29,18 +28,13 @@ fn update_mag_uses_shared_mag_calibrator() {
 }
 
 #[test]
-fn get_calibrated_mag_discards_underconstrained_calibration() {
+fn get_calibrated_mag_reports_underconstrained_calibration_as_pending() {
     let mut state = FusionState::new(Box::new(crate::sim::Dummy::new()));
     let raw_mag = Vector3::new(5.0, 6.0, 7.0);
 
     assert!(matches!(
         state.mag.evaluate_correct(raw_mag, None, 0),
-        Err(BadMagCause::BadCalibration(
-            BadCalibration::InsufficientSamples {
-                samples: 1,
-                required: 1023
-            }
-        ))
+        Ok(MagCalibrationResult::Pending { confidence: 0.0 })
     ));
 }
 
