@@ -69,24 +69,32 @@
       candidate still scans all retained rows. Revalidating after an invalid input or rejected optimizer step provides
       no new calibration information and can hide the fitting-cost reduction in end-to-end timing.
     - **Recommended fix:** Track a working-parameter revision and rerun full publication validation only after that
-      revision or the cache changes. Continue returning `InsufficientSamples` immediately when expiry drops readiness.
+      revision or the cache changes. When expiry removes enough support to invalidate the working candidate, update the
+      live pending/quality state without restoring a full-buffer `InsufficientSamples` gate.
 
-- [ ] Publish a live calibration confidence score
+- [ ] Replace full-buffer readiness with a live calibration quality score
 
-    - **Summary:** Publication gates are binary, so poor coverage or an unconverged fit is invisible until the
-      full-cache gates pass or fail, and barely-passing calibrations look identical to excellent ones.
-    - **Affected module:** `src/fusion/mag_calibration.rs`
+    - **Summary:** Publish a bounded `[0, 1]` calibration quality score continuously and use it, rather than a full
+      sample cache, to decide when the first valid correction is ready.
+    - **Affected module:** `src/fusion/mag_calibration.rs`, its public result/error types, fusion callers, and tests
     - **Severity:** Medium
-    - **Description:** Both quality inputs already exist at publication time: the sample-covariance condition number
-      (coverage) and the full-cache radial RMS (fitness). Coverage must be measured on corrected readings
-      `A (x_i - b)`, not raw samples: soft-iron anisotropy inflates the raw covariance condition by up to
-      `cond(D)^2`, so a distorted device would report perfect directional coverage as poor. During warm-up the same
-      quantities are computable over the partial cache, so planar-motion stagnation could be surfaced long before
-      the cache fills.
-    - **Recommended fix:** Return a `[0, 1]` confidence from `perform_calibration`: the product of a log-ramped
-      coverage score (corrected-reading condition 1 -> 1, gate 100 -> 0) and a linear-ramped fitness score (radial
-      RMS 0 -> 1, gate 0.1 -> 0). Correct samples with the published calibration once initialized and with the
-      working candidate before that when it converts to a valid SPD correction; fall back to raw samples while no
-      convertible candidate exists. Surface it through the `evaluate_correct` result and a `get_confidence()`
-      getter, and keep a live pre-publication value warm over the current partial cache whenever the buffer
-      changes.
+    - **Description:** The score must add no cache-size-dependent work to an online update. It combines directional
+      coverage and radial fitness for the same candidate correction. Coverage is the condition number of the centered,
+      unnormalized corrected vectors `A (x_i - b)`, computed as `A C_raw A^T`; maintain the raw first and second
+      moments as rows are appended, replaced, or expired so this remains `O(1)` in `N`. The hard-iron offset cancels
+      after centering. Fitness is the running mean square of each valid current sample's physical radial residual
+      `||A (x - b)|| - 1`, evaluated after its online update with the same working candidate. Update it with
+      `alpha = 1 / min(sample_count, minibatch_size)`, reset it whenever the working optimizer state resets, and do not
+      rescan the partial or full cache. A candidate that cannot produce finite SPD correction parameters has score
+      zero. Never substitute raw samples for corrected samples when computing either component.
+    - **Recommended fix:** Define coverage as a logarithmic ramp from condition `1 -> 1` to `100 -> 0`, fitness as a
+      linear ramp from radial RMS `0 -> 1` to `0.1 -> 0`, and quality as their product clamped to `[0, 1]`. Before nine
+      accepted samples, or while no finite SPD working candidate exists, report a non-error pending state with quality
+      zero and no corrected vector; do not return raw magnetometer data. A valid working candidate with positive
+      quality publishes the first correction even when the cache is only partially filled. After publication, a
+      rejected working candidate leaves the last published correction available and reports the current quality.
+      Surface both pending and calibrated states through `evaluate_correct`, add a `get_confidence()` getter, remove
+      `InsufficientSamples` as the cache-readiness result, and update fusion callers so only calibrated vectors enter
+      attitude estimation. Add deterministic tests for partial-cache publication, pending-state handling, corrected
+      covariance under anisotropic distortion, zero quality for invalid candidates, last-published fallback, and the
+      absence of a per-update full-cache confidence scan.
