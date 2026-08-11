@@ -153,6 +153,7 @@ fn mag_calibrator_keeps_last_correction_after_rejected_refit() {
         expected,
         0.05,
     );
+    assert_eq!(calibrator.radial_residual_mean_square_for_test(), None);
 }
 
 #[test]
@@ -472,6 +473,103 @@ fn live_quality_does_not_read_the_sample_cache() {
     let mut calibrator = seeded_calibrator::<63>(offset, distortion);
 
     assert_eq!(calibrator.quality_cache_reads_for_test(), 0);
+}
+
+#[test]
+fn live_quality_ramps_and_running_mean_square_match_the_specification() {
+    let identity = Matrix3::identity();
+    let condition_ten = Matrix3::from_diagonal(&Vector3::new(1.0, 1.0, 10.0));
+    let condition_hundred = Matrix3::from_diagonal(&Vector3::new(1.0, 1.0, 100.0));
+    let singular = Matrix3::from_diagonal(&Vector3::new(1.0, 1.0, 0.0));
+
+    assert_eq!(
+        MagCalibrator::<9>::quality_scores_for_test(identity, Some(0.0)),
+        (1.0, 1.0)
+    );
+    let (coverage, fitness) =
+        MagCalibrator::<9>::quality_scores_for_test(condition_ten, Some(0.05f32.powi(2)));
+    assert!((coverage - 0.5).abs() < 1.0e-6, "coverage={coverage}");
+    assert!((fitness - 0.5).abs() < 1.0e-6, "fitness={fitness}");
+    assert_eq!(
+        MagCalibrator::<9>::quality_scores_for_test(condition_hundred, Some(0.1f32.powi(2))),
+        (0.0, 0.0)
+    );
+    assert_eq!(
+        MagCalibrator::<9>::quality_scores_for_test(singular, Some(f32::NAN)),
+        (0.0, 0.0)
+    );
+    assert_eq!(
+        MagCalibrator::<9>::quality_scores_for_test(identity, Some(-1.0)),
+        (1.0, 0.0)
+    );
+
+    assert_eq!(
+        MagCalibrator::<9>::running_mean_square_for_test(None, 0.04, 0.25),
+        Some(0.01)
+    );
+    let updated = MagCalibrator::<9>::running_mean_square_for_test(Some(0.04), 0.0, 0.25).unwrap();
+    assert!((updated - 0.03).abs() < 1.0e-7, "updated={updated}");
+    assert_eq!(
+        MagCalibrator::<9>::running_mean_square_for_test(Some(f32::NAN), 0.0, 0.25),
+        None
+    );
+    assert_eq!(
+        MagCalibrator::<9>::running_mean_square_for_test(None, f32::INFINITY, 0.25),
+        None
+    );
+}
+
+#[test]
+fn raw_moments_follow_all_cache_mutations_and_const_generic_edges() {
+    let mut calibrator = MagCalibrator::<3>::new()
+        .num_neighbors(2)
+        .max_sample_lifespan_us(5);
+    let samples = [Vector3::x(), Vector3::y(), Vector3::z()];
+    for (timestamp_us, sample) in samples.into_iter().enumerate() {
+        calibrator.evaluate_sample_vec(sample, None, timestamp_us as u64);
+        calibrator.check_raw_moments().unwrap();
+    }
+
+    let full_moments = calibrator.raw_moments_for_test();
+    calibrator.evaluate_sample_vec(Vector3::x(), None, 3);
+    assert_eq!(calibrator.raw_moments_for_test(), full_moments);
+    calibrator.check_raw_moments().unwrap();
+
+    calibrator.evaluate_sample_vec(Vector3::repeat(10.0), None, 4);
+    assert_ne!(calibrator.raw_moments_for_test(), full_moments);
+    calibrator.check_raw_moments().unwrap();
+
+    calibrator.evaluate_sample_vec(Vector3::repeat(f32::NAN), None, 7);
+    assert_eq!(calibrator.raw_moments_for_test().0, 2);
+    calibrator.check_raw_moments().unwrap();
+
+    calibrator.evaluate_sample_vec(Vector3::repeat(f32::INFINITY), None, 10);
+    assert_eq!(
+        calibrator.raw_moments_for_test(),
+        (0, Vector3::zeros(), Matrix3::zeros())
+    );
+    calibrator.check_raw_moments().unwrap();
+
+    let mut empty = MagCalibrator::<0>::new();
+    empty.evaluate_sample_vec(Vector3::x(), None, 0);
+    empty.evaluate_sample_vec(Vector3::repeat(f32::NAN), None, 1);
+    assert_eq!(
+        empty.raw_moments_for_test(),
+        (0, Vector3::zeros(), Matrix3::zeros())
+    );
+    empty.check_raw_moments().unwrap();
+
+    let mut singleton = MagCalibrator::<1>::new().max_sample_lifespan_us(0);
+    singleton.evaluate_sample_vec(Vector3::x(), None, 0);
+    let singleton_moments = singleton.raw_moments_for_test();
+    singleton.evaluate_sample_vec(Vector3::y(), None, 0);
+    assert_eq!(singleton.raw_moments_for_test(), singleton_moments);
+    singleton.evaluate_sample_vec(Vector3::repeat(f32::NAN), None, 1);
+    assert_eq!(
+        singleton.raw_moments_for_test(),
+        (0, Vector3::zeros(), Matrix3::zeros())
+    );
+    singleton.check_raw_moments().unwrap();
 }
 
 #[test]

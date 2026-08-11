@@ -363,6 +363,11 @@ impl<const N: usize> MagCalibrator<N> {
         self.raw_outer_product_sum -= sample * sample.transpose();
     }
 
+    fn clear_raw_moments(&mut self) {
+        self.raw_sample_sum = Vector3::zeros();
+        self.raw_outer_product_sum = Matrix3::zeros();
+    }
+
     fn raw_mean_and_covariance(&self) -> Option<(Vector3<f32>, Matrix3<f32>)> {
         if self.matrix_filled == 0 {
             return None;
@@ -925,6 +930,12 @@ impl<const N: usize> MagCalibrator<N> {
         }
         if retained != self.matrix_filled {
             self.matrix_filled = retained;
+            if retained == 0 {
+                // Incremental subtraction can leave round-off residue after
+                // the last retained row expires. An empty cache has exact
+                // zero moments by definition.
+                self.clear_raw_moments();
+            }
             self.mean_distance = 0.0;
             self.remap_neighbor_cache(&index_map);
         }
@@ -1191,6 +1202,36 @@ impl<const N: usize> MagCalibrator<N> {
         }
     }
 
+    fn update_running_mean_square(
+        current: Option<f32>,
+        residual_squared: f32,
+        alpha: f32,
+    ) -> Option<f32> {
+        if !residual_squared.is_finite()
+            || residual_squared < 0.0
+            || !alpha.is_finite()
+            || !(0.0..=1.0).contains(&alpha)
+            || alpha == 0.0
+        {
+            return None;
+        }
+        let current = current.unwrap_or(0.0);
+        if !current.is_finite() || current < 0.0 {
+            return None;
+        }
+        let updated = current + alpha * (residual_squared - current);
+        updated.is_finite().then_some(updated.max(0.0))
+    }
+
+    fn fitness_score(mean_square: Option<f32>) -> f32 {
+        match mean_square {
+            Some(mean_square) if mean_square.is_finite() && mean_square >= 0.0 => {
+                (1.0 - mean_square.sqrt() / MAX_RADIAL_RMS).clamp(0.0, 1.0)
+            }
+            _ => 0.0,
+        }
+    }
+
     /// Updates the live radial statistic and quality for the current working
     /// candidate. All cache-dependent data comes from maintained moments.
     fn update_quality(
@@ -1211,22 +1252,28 @@ impl<const N: usize> MagCalibrator<N> {
         if let Some(sample) = current_sample {
             let residual = (candidate.correction * (sample - candidate.offset)).norm() - 1.0;
             let residual_squared = residual * residual;
-            if !residual_squared.is_finite() {
+            let alpha = 1.0 / self.matrix_filled.min(self.minibatch_size).max(1) as f32;
+            let Some(mean_square) = Self::update_running_mean_square(
+                self.radial_residual_mean_square,
+                residual_squared,
+                alpha,
+            ) else {
+                self.radial_residual_mean_square = None;
                 self.confidence = 0.0;
                 return None;
-            }
-            let alpha = 1.0 / self.matrix_filled.min(self.minibatch_size).max(1) as f32;
-            let mean_square = self.radial_residual_mean_square.unwrap_or(0.0);
-            self.radial_residual_mean_square =
-                Some(mean_square + alpha * (residual_squared - mean_square));
+            };
+            self.radial_residual_mean_square = Some(mean_square);
         }
         let coverage = self
             .corrected_covariance(candidate.correction)
             .map_or(0.0, Self::coverage_score);
-        let fitness = self.radial_residual_mean_square.map_or(0.0, |mean_square| {
-            (1.0 - mean_square.sqrt() / MAX_RADIAL_RMS).clamp(0.0, 1.0)
-        });
-        self.confidence = (coverage * fitness).clamp(0.0, 1.0);
+        let fitness = Self::fitness_score(self.radial_residual_mean_square);
+        let quality = coverage * fitness;
+        self.confidence = if quality.is_finite() {
+            quality.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         Some(candidate)
     }
 
@@ -1262,10 +1309,42 @@ impl<const N: usize> MagCalibrator<N> {
         let coverage = self
             .corrected_covariance(candidate.correction)
             .map_or(0.0, Self::coverage_score);
-        let fitness = self.radial_residual_mean_square.map_or(0.0, |mean_square| {
-            (1.0 - mean_square.sqrt() / MAX_RADIAL_RMS).clamp(0.0, 1.0)
-        });
+        let fitness = Self::fitness_score(self.radial_residual_mean_square);
         (true, coverage, fitness)
+    }
+
+    #[cfg(test)]
+    pub(super) fn quality_scores_for_test(
+        covariance: Matrix3<f32>,
+        mean_square: Option<f32>,
+    ) -> (f32, f32) {
+        (
+            Self::coverage_score(covariance),
+            Self::fitness_score(mean_square),
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn running_mean_square_for_test(
+        current: Option<f32>,
+        residual_squared: f32,
+        alpha: f32,
+    ) -> Option<f32> {
+        Self::update_running_mean_square(current, residual_squared, alpha)
+    }
+
+    #[cfg(test)]
+    pub(super) fn radial_residual_mean_square_for_test(&self) -> Option<f32> {
+        self.radial_residual_mean_square
+    }
+
+    #[cfg(test)]
+    pub(super) fn raw_moments_for_test(&self) -> (usize, Vector3<f64>, Matrix3<f64>) {
+        (
+            self.matrix_filled,
+            self.raw_sample_sum,
+            self.raw_outer_product_sum,
+        )
     }
 
     #[cfg(test)]
