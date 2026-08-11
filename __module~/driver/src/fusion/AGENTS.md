@@ -14,6 +14,18 @@ Treat shared sensor-event documentation and the fusion module as the source of t
 transformations explicit and centralized, document device-specific deviations, and use the existing linear-algebra
 types.
 
+### Acronyms
+
+Every acronym used in this directory's documentation (this guide, `TODO.md`, `MAG_CALIBRATION_BENCHMARK.md`) must
+appear in this list. Add a new acronym here in the same change that introduces it; otherwise spell the term out.
+
+- **AHRS:** Attitude and Heading Reference System.
+- **FRD:** Forward-Right-Down aerospace coordinate frame.
+- **RMS:** Root Mean Square.
+- **RUB:** Right-Up-Back Android sensor coordinate frame.
+- **SGD:** Stochastic Gradient Descent.
+- **SPD:** Symmetric Positive-Definite.
+
 ## Magnetometer calibration
 
 `MagCalibrator<N>` retains finite, nonzero FRD magnetometer samples. Each row may also carry a normalized optional
