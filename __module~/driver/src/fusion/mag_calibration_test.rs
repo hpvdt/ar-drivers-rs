@@ -1,7 +1,10 @@
 use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 
 use super::bad_mag_cause::BadMagCause;
-use super::mag_calibration::{MagCalibrationResult, MagCalibrator};
+use super::mag_calibration::{
+    MagCalibrationResult, MagCalibrator, CONFIDENCE_MATURITY_STEPS, MIN_PUBLICATION_CONFIDENCE,
+    MIN_PUBLICATION_STREAK,
+};
 
 #[test]
 fn mag_calibrator_corrects_synthetic_full_spd_distortion() {
@@ -92,12 +95,19 @@ fn mag_calibrator_publishes_before_the_buffer_is_full() {
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
     let mut calibrator = MagCalibrator::<1023>::new();
     let mut published_at = None;
+    let mut qualifying_streak = 0;
     for i in 0..1022 {
         let direction = sample_direction(i % 63, 63);
         let result = calibrator
             .evaluate_correct(offset + distortion * direction, None, i as u64)
             .unwrap();
+        if result.confidence() >= MIN_PUBLICATION_CONFIDENCE {
+            qualifying_streak += 1;
+        } else {
+            qualifying_streak = 0;
+        }
         if result.calibrated().is_some() {
+            assert!(qualifying_streak >= MIN_PUBLICATION_STREAK);
             published_at = Some(i + 1);
             break;
         }
@@ -109,7 +119,26 @@ fn mag_calibrator_publishes_before_the_buffer_is_full() {
     });
     assert!(published_at >= 9);
     assert!(published_at < 1023);
-    assert!(calibrator.get_confidence() > 0.0);
+    assert!(calibrator.get_confidence() >= MIN_PUBLICATION_CONFIDENCE);
+}
+
+#[test]
+fn mag_calibrator_resets_publication_streak_after_invalid_sample() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+    let mut calibrator = MagCalibrator::<1023>::new();
+
+    for i in 0..1022 {
+        let direction = sample_direction(i % 63, 63);
+        let _ = calibrator.evaluate_correct(offset + distortion * direction, None, i as u64);
+        if calibrator.publication_quality_streak_for_test() > 0 {
+            let _ = calibrator.evaluate_correct(Vector3::repeat(f32::NAN), None, i as u64 + 1);
+            assert_eq!(calibrator.publication_quality_streak_for_test(), 0);
+            return;
+        }
+    }
+
+    panic!("confidence never began a publication-quality streak");
 }
 
 #[test]
@@ -204,8 +233,25 @@ fn mag_calibrator_converges_faster_with_cache_replay() {
     let mut replayed = MagCalibrator::<63>::new();
     let mut plain = MagCalibrator::<63>::new().replay_updates(0);
 
+    let probe_error = |calibrator: &MagCalibrator<63>| {
+        [
+            Vector3::x(),
+            Vector3::y(),
+            Vector3::z(),
+            Vector3::new(1.0, -2.0, 3.0).normalize(),
+        ]
+        .into_iter()
+        .try_fold(0.0, |sum, expected| {
+            calibrator
+                .correct_working_for_test(offset + distortion * expected)
+                .map(|actual| sum + (actual - expected).norm())
+        })
+    };
+
     let mut replayed_published_at = None;
     let mut plain_published_at = None;
+    let mut replayed_converged_at = None;
+    let mut plain_converged_at = None;
     for i in 0..16 * 63 {
         let raw = offset + distortion * sample_direction(i % 63, 63);
         let replayed_result = replayed.evaluate_correct(raw, None, i as u64).unwrap();
@@ -216,43 +262,31 @@ fn mag_calibrator_converges_faster_with_cache_replay() {
         if plain_result.calibrated().is_some() && plain_published_at.is_none() {
             plain_published_at = Some(i);
         }
-        if replayed_published_at.is_some() && plain_published_at.is_some() {
-            break;
+        if replayed_converged_at.is_none()
+            && probe_error(&replayed).is_some_and(|error| error < 0.02)
+        {
+            replayed_converged_at = Some(i);
+        }
+        if plain_converged_at.is_none() && probe_error(&plain).is_some_and(|error| error < 0.02) {
+            plain_converged_at = Some(i);
         }
     }
     let replayed_published_at = replayed_published_at.expect("replayed calibration stayed pending");
     let plain_published_at = plain_published_at.expect("plain calibration stayed pending");
+    let replayed_converged_at =
+        replayed_converged_at.expect("replayed calibration did not converge");
+    let plain_converged_at = plain_converged_at.expect("plain calibration did not converge");
     assert!(
-        replayed_published_at < plain_published_at,
-        "replayed_published_at={replayed_published_at} plain_published_at={plain_published_at}"
+        replayed_converged_at < plain_converged_at,
+        "replayed_converged_at={replayed_converged_at} plain_converged_at={plain_converged_at}"
     );
+    assert!(replayed_published_at <= plain_published_at);
 
-    let probe_error = |calibrator: &mut MagCalibrator<63>| {
-        [
-            Vector3::x(),
-            Vector3::y(),
-            Vector3::z(),
-            Vector3::new(1.0, -2.0, 3.0).normalize(),
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(i, expected)| {
-            (calibrated(calibrator.evaluate_correct(
-                offset + distortion * expected,
-                None,
-                1000 + i as u64,
-            )) - expected)
-                .norm()
-        })
-        .sum::<f32>()
-    };
-    let replayed_error = probe_error(&mut replayed);
-    let plain_error = probe_error(&mut plain);
+    let replayed_error = probe_error(&replayed).unwrap();
+    let plain_error = probe_error(&plain).unwrap();
 
-    assert!(
-        replayed_error < plain_error,
-        "replayed_error={replayed_error} plain_error={plain_error}"
-    );
+    assert!(replayed_error < 0.02, "replayed_error={replayed_error}");
+    assert!(plain_error < 0.02, "plain_error={plain_error}");
 }
 
 #[test]
@@ -381,7 +415,9 @@ fn mag_calibrator_improves_with_consistent_gravity() {
     let plain_error: f32 = probes
         .iter()
         .map(|&expected| {
-            (calibrated(plain.evaluate_correct(offset + distortion * expected, None, 100))
+            (plain
+                .correct_working_for_test(offset + distortion * expected)
+                .expect("plain working calibration is invalid")
                 - expected)
                 .norm()
         })
@@ -389,11 +425,10 @@ fn mag_calibrator_improves_with_consistent_gravity() {
     let refined_error: f32 = probes
         .iter()
         .map(|&expected| {
-            (calibrated(gravity_refined.evaluate_correct(
-                offset + distortion * expected,
-                None,
-                100,
-            )) - expected)
+            (gravity_refined
+                .correct_working_for_test(offset + distortion * expected)
+                .expect("gravity-refined working calibration is invalid")
+                - expected)
                 .norm()
         })
         .sum();
@@ -420,7 +455,8 @@ fn mag_calibrator_ignores_invalid_gravity() {
         };
         let _ = invalid.evaluate_correct(raw, Some(gravity), i as u64);
     }
-    for i in 12..12 + 16 * 12 {
+    let training_updates = CONFIDENCE_MATURITY_STEPS as usize + 2 * MIN_PUBLICATION_STREAK;
+    for i in 12..12 + training_updates {
         let raw = offset + distortion * sample_direction(i % 12, 12);
         let _ = plain.evaluate_correct(raw, None, i as u64);
         let gravity = match i % 3 {
@@ -502,6 +538,10 @@ fn live_quality_ramps_and_running_mean_square_match_the_specification() {
         MagCalibrator::<9>::quality_scores_for_test(identity, Some(-1.0)),
         (1.0, 0.0)
     );
+    assert_eq!(MagCalibrator::<9>::maturity_score_for_test(0), 0.0);
+    assert_eq!(MagCalibrator::<9>::maturity_score_for_test(350), 0.5);
+    assert_eq!(MagCalibrator::<9>::maturity_score_for_test(700), 1.0);
+    assert_eq!(MagCalibrator::<9>::maturity_score_for_test(701), 1.0);
 
     assert_eq!(
         MagCalibrator::<9>::running_mean_square_for_test(None, 0.04, 0.25),
@@ -629,7 +669,9 @@ fn train_calibrator<const N: usize>(
         let _ = calibrator.evaluate_correct(offset + distortion * direction, None, 0);
     }
     let mut result = None;
-    for i in 0..16 * N {
+    let training_updates =
+        (16 * N).max(CONFIDENCE_MATURITY_STEPS as usize + 2 * MIN_PUBLICATION_STREAK);
+    for i in 0..training_updates {
         let direction = sample_direction(i % N, N);
         result = Some(calibrator.evaluate_correct(offset + distortion * direction, None, 0));
     }

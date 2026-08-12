@@ -15,6 +15,9 @@ const SHAPE_PRIOR_SCALE: f32 = 2.0;
 const MAX_SAMPLE_CONDITION: f32 = 1.0e2;
 const MAX_CORRECTION_CONDITION: f32 = 1.0e1;
 const MAX_RADIAL_RMS: f32 = 0.1;
+pub(super) const CONFIDENCE_MATURITY_STEPS: u64 = 700;
+pub(super) const MIN_PUBLICATION_CONFIDENCE: f32 = 0.4;
+pub(super) const MIN_PUBLICATION_STREAK: usize = 64;
 const MIN_MAG_NORM: f32 = 0.4;
 const DEFAULT_GRAVITY_WEIGHT: f32 = 0.01;
 const DEFAULT_MINIBATCH_SIZE: usize = 32;
@@ -155,6 +158,7 @@ pub struct MagCalibrator<const N: usize> {
     raw_outer_product_sum: Matrix3<f64>,
     radial_residual_mean_square: Option<f32>,
     confidence: f32,
+    publication_quality_streak: usize,
     #[cfg(test)]
     sample_reads: Cell<usize>,
 }
@@ -190,6 +194,7 @@ impl<const N: usize> Default for MagCalibrator<N> {
             raw_outer_product_sum: Matrix3::zeros(),
             radial_residual_mean_square: None,
             confidence: 0.0,
+            publication_quality_streak: 0,
             #[cfg(test)]
             sample_reads: Cell::new(0),
         }
@@ -349,6 +354,7 @@ impl<const N: usize> MagCalibrator<N> {
         self.optimizer_steps = 0;
         self.radial_residual_mean_square = None;
         self.confidence = 0.0;
+        self.publication_quality_streak = 0;
     }
 
     fn add_raw_moment(&mut self, sample: Vector3<f32>) {
@@ -1107,13 +1113,22 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     fn update_publication(&mut self, current_sample: Option<Vector3<f32>>) {
-        if let Some(candidate) = self
-            .update_quality(current_sample)
-            .filter(|_| self.confidence > 0.0)
+        let current_sample_valid = current_sample.is_some();
+        let candidate = self.update_quality(current_sample);
+        if current_sample_valid
+            && candidate.is_some()
+            && self.confidence >= MIN_PUBLICATION_CONFIDENCE
         {
-            self.hard_iron_offset = candidate.offset;
-            self.soft_iron_correction = candidate.correction;
-            self.calibration_initialized = true;
+            self.publication_quality_streak = self.publication_quality_streak.saturating_add(1);
+        } else {
+            self.publication_quality_streak = 0;
+        }
+        if self.publication_quality_streak >= MIN_PUBLICATION_STREAK {
+            if let Some(candidate) = candidate {
+                self.hard_iron_offset = candidate.offset;
+                self.soft_iron_correction = candidate.correction;
+                self.calibration_initialized = true;
+            }
         }
     }
 
@@ -1232,6 +1247,10 @@ impl<const N: usize> MagCalibrator<N> {
         }
     }
 
+    fn maturity_score(optimizer_steps: u64) -> f32 {
+        (optimizer_steps as f32 / CONFIDENCE_MATURITY_STEPS as f32).min(1.0)
+    }
+
     /// Updates the live radial statistic and quality for the current working
     /// candidate. All cache-dependent data comes from maintained moments.
     fn update_quality(
@@ -1268,7 +1287,8 @@ impl<const N: usize> MagCalibrator<N> {
             .corrected_covariance(candidate.correction)
             .map_or(0.0, Self::coverage_score);
         let fitness = Self::fitness_score(self.radial_residual_mean_square);
-        let quality = coverage * fitness;
+        let maturity = Self::maturity_score(self.optimizer_steps);
+        let quality = coverage * fitness * maturity;
         self.confidence = if quality.is_finite() {
             quality.clamp(0.0, 1.0)
         } else {
@@ -1314,6 +1334,19 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     #[cfg(test)]
+    pub(super) fn correct_working_for_test(&self, raw_mag: Vector3<f32>) -> Option<Vector3<f32>> {
+        let candidate = self.working_candidate().ok()?;
+        let corrected = candidate.correction * (raw_mag - candidate.offset);
+        let norm = corrected.norm();
+        (norm.is_finite() && norm > f32::EPSILON).then(|| corrected / norm)
+    }
+
+    #[cfg(test)]
+    pub(super) fn publication_quality_streak_for_test(&self) -> usize {
+        self.publication_quality_streak
+    }
+
+    #[cfg(test)]
     pub(super) fn quality_scores_for_test(
         covariance: Matrix3<f32>,
         mean_square: Option<f32>,
@@ -1322,6 +1355,11 @@ impl<const N: usize> MagCalibrator<N> {
             Self::coverage_score(covariance),
             Self::fitness_score(mean_square),
         )
+    }
+
+    #[cfg(test)]
+    pub(super) fn maturity_score_for_test(optimizer_steps: u64) -> f32 {
+        Self::maturity_score(optimizer_steps)
     }
 
     #[cfg(test)]
