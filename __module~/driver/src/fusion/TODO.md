@@ -79,9 +79,8 @@
     - **Affected module:** `src/fusion/mag_calibration.rs`, its public result/error types, fusion callers, and tests
     - **Severity:** Medium
     - **Description:** The score must add no cache-size-dependent work to an online update. It combines directional
-      coverage, radial fitness, and optimizer maturity for the same candidate correction. Coverage is the condition
-      number of the centered, unnormalized corrected vectors `A (x_i - b)`, computed as `A C_raw A^T`; maintain the
-      raw first and second
+      coverage and radial fitness for the same candidate correction. Coverage is the condition number of the centered,
+      unnormalized corrected vectors `A (x_i - b)`, computed as `A C_raw A^T`; maintain the raw first and second
       moments as rows are appended, replaced, or expired so this remains `O(1)` in `N`. The hard-iron offset cancels
       after centering. Fitness is the running mean square of each valid current sample's physical radial residual
       `||A (x - b)|| - 1`, evaluated after its online update with the same working candidate. Update it with
@@ -89,15 +88,14 @@
       rescan the partial or full cache. A candidate that cannot produce finite SPD correction parameters has score
       zero. Never substitute raw samples for corrected samples when computing either physical component.
     - **Recommended fix:** Define coverage as a logarithmic ramp from condition `1 -> 1` to `100 -> 0`, fitness as a
-      linear ramp from radial RMS `0 -> 1` to `0.1 -> 0`, and optimizer maturity as a linear ramp from zero accepted
-      current-sample optimizer updates to `1` at 700; cache replay does not advance maturity. Confidence is the product
-      of all three components clamped to `[0, 1]`. Before nine accepted samples, or while no finite SPD working
-      candidate exists, report a non-error pending state with confidence zero and no corrected vector; do not return
-      raw magnetometer data. A valid working candidate must maintain confidence at least `0.40` for 64 consecutive
-      valid updates before publishing the first correction, even when the cache is only partially filled. Reset this
-      O(1) streak on an invalid or lower-confidence candidate so a transient score spike is not treated as readiness.
-      After publication, a candidate without the required streak leaves the last published correction available and
-      reports the current confidence.
+      linear ramp from radial RMS `0 -> 1` to `0.1 -> 0`. Confidence is the product of those two components clamped to
+      `[0, 1]`. Before nine accepted samples, or while no finite SPD working candidate exists, report a non-error
+      pending state with confidence zero and no corrected vector; do not return raw magnetometer data. A valid working
+      candidate must maintain confidence at least `0.40` for 64 consecutive valid updates before publishing the first
+      correction, even when the cache is only partially filled. Reset this O(1) streak on an invalid or
+      lower-confidence candidate so a transient score spike is not treated as readiness. After publication, a
+      candidate without the required streak leaves the last published correction available and reports the current
+      confidence.
       Surface both pending and calibrated states through `evaluate_correct`, add a `get_confidence()` getter, remove
       `InsufficientSamples` as the cache-readiness result, and update fusion callers so only calibrated vectors enter
       attitude estimation. Add deterministic tests for partial-cache publication, pending-state handling, corrected

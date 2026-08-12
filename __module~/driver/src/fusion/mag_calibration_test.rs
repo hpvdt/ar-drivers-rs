@@ -2,8 +2,7 @@ use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 
 use super::bad_mag_cause::BadMagCause;
 use super::mag_calibration::{
-    MagCalibrationResult, MagCalibrator, CONFIDENCE_MATURITY_STEPS, MIN_PUBLICATION_CONFIDENCE,
-    MIN_PUBLICATION_STREAK,
+    MagCalibrationResult, MagCalibrator, MIN_PUBLICATION_CONFIDENCE, MIN_PUBLICATION_STREAK,
 };
 
 #[test]
@@ -455,7 +454,7 @@ fn mag_calibrator_ignores_invalid_gravity() {
         };
         let _ = invalid.evaluate_correct(raw, Some(gravity), i as u64);
     }
-    let training_updates = CONFIDENCE_MATURITY_STEPS as usize + 2 * MIN_PUBLICATION_STREAK;
+    let training_updates = 2 * MIN_PUBLICATION_STREAK;
     for i in 12..12 + training_updates {
         let raw = offset + distortion * sample_direction(i % 12, 12);
         let _ = plain.evaluate_correct(raw, None, i as u64);
@@ -538,11 +537,6 @@ fn live_quality_ramps_and_running_mean_square_match_the_specification() {
         MagCalibrator::<9>::quality_scores_for_test(identity, Some(-1.0)),
         (1.0, 0.0)
     );
-    assert_eq!(MagCalibrator::<9>::maturity_score_for_test(0), 0.0);
-    assert_eq!(MagCalibrator::<9>::maturity_score_for_test(350), 0.5);
-    assert_eq!(MagCalibrator::<9>::maturity_score_for_test(700), 1.0);
-    assert_eq!(MagCalibrator::<9>::maturity_score_for_test(701), 1.0);
-
     assert_eq!(
         MagCalibrator::<9>::running_mean_square_for_test(None, 0.04, 0.25),
         Some(0.01)
@@ -669,8 +663,7 @@ fn train_calibrator<const N: usize>(
         let _ = calibrator.evaluate_correct(offset + distortion * direction, None, 0);
     }
     let mut result = None;
-    let training_updates =
-        (16 * N).max(CONFIDENCE_MATURITY_STEPS as usize + 2 * MIN_PUBLICATION_STREAK);
+    let training_updates = (16 * N).max(2 * MIN_PUBLICATION_STREAK);
     for i in 0..training_updates {
         let direction = sample_direction(i % N, N);
         result = Some(calibrator.evaluate_correct(offset + distortion * direction, None, 0));

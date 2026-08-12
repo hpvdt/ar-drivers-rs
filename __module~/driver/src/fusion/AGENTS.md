@@ -265,19 +265,12 @@ The hard-iron offset cancels after centering. Directional coverage is a logarith
 covariance condition `1` to `0` at condition `100`. Physical radial fitness uses the running mean square of
 `||A (x - b)|| - 1`, evaluated for each valid current sample after its online update with the same working candidate.
 Its update weight is `1 / min(sample_count, minibatch_size)`; the statistic resets whenever working optimizer state
-resets. Fitness is a linear ramp from `1` at radial RMS `0` to `0` at radial RMS `0.1`. Optimizer maturity is a linear
-ramp from `0` before any accepted current-sample optimizer update to `1` at 700 accepted updates. Live confidence is
-coverage times fitness times maturity, clamped to `[0, 1]`; cache replay does not advance maturity.
+resets. Fitness is a linear ramp from `1` at radial RMS `0` to `0` at radial RMS `0.1`. Live confidence is coverage
+times fitness, clamped to `[0, 1]`.
 
 Working coefficients and published correction parameters are separate. The hard-iron offset and soft-iron correction
 change only after 64 consecutive valid candidates have confidence at least `0.40`, including while the cache is
-partial; an invalid or lower-confidence candidate resets that O(1) streak. An unweighted one-sample or 64-sample gate
-is insufficient: integration evidence found a `26.720`-degree trajectory after an early `0.54` crossing. Conversely,
-an unweighted 192-sample gate timed out on valid random seeds whose longest qualifying streak was only 78 updates.
-The maturity-weighted 64-update gate delayed the former seed until its error stayed below `7.269` degrees. A `0.45`
-threshold still timed out on a valid random seed whose confidence peaked at `0.473931` but crossed `0.45` for at most
-13 consecutive updates; lowering the threshold to `0.40` let that seed publish at 55.68 seconds and validate below
-`10.307` degrees while allowing the other timeout seeds to complete the unchanged guard. Before first publication,
+partial; an invalid or lower-confidence candidate resets that O(1) streak. Before first publication,
 `evaluate_correct` returns a non-error `Pending` result and no vector. After publication, a candidate without the
 required streak reports its current confidence while leaving the last published correction in use. Fusion callers use
 only `Calibrated` vectors for attitude updates. Correcting a reading remains one matrix-vector multiplication followed

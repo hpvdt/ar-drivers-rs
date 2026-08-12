@@ -15,7 +15,6 @@ const SHAPE_PRIOR_SCALE: f32 = 2.0;
 const MAX_SAMPLE_CONDITION: f32 = 1.0e2;
 const MAX_CORRECTION_CONDITION: f32 = 1.0e1;
 const MAX_RADIAL_RMS: f32 = 0.1;
-pub(super) const CONFIDENCE_MATURITY_STEPS: u64 = 700;
 pub(super) const MIN_PUBLICATION_CONFIDENCE: f32 = 0.4;
 pub(super) const MIN_PUBLICATION_STREAK: usize = 64;
 const MIN_MAG_NORM: f32 = 0.4;
@@ -1247,10 +1246,6 @@ impl<const N: usize> MagCalibrator<N> {
         }
     }
 
-    fn maturity_score(optimizer_steps: u64) -> f32 {
-        (optimizer_steps as f32 / CONFIDENCE_MATURITY_STEPS as f32).min(1.0)
-    }
-
     /// Updates the live radial statistic and quality for the current working
     /// candidate. All cache-dependent data comes from maintained moments.
     fn update_quality(
@@ -1287,8 +1282,7 @@ impl<const N: usize> MagCalibrator<N> {
             .corrected_covariance(candidate.correction)
             .map_or(0.0, Self::coverage_score);
         let fitness = Self::fitness_score(self.radial_residual_mean_square);
-        let maturity = Self::maturity_score(self.optimizer_steps);
-        let quality = coverage * fitness * maturity;
+        let quality = coverage * fitness;
         self.confidence = if quality.is_finite() {
             quality.clamp(0.0, 1.0)
         } else {
@@ -1355,11 +1349,6 @@ impl<const N: usize> MagCalibrator<N> {
             Self::coverage_score(covariance),
             Self::fitness_score(mean_square),
         )
-    }
-
-    #[cfg(test)]
-    pub(super) fn maturity_score_for_test(optimizer_steps: u64) -> f32 {
-        Self::maturity_score(optimizer_steps)
     }
 
     #[cfg(test)]
