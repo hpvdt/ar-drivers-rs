@@ -1,8 +1,7 @@
 use nalgebra::{UnitQuaternion, Vector3};
 
-use super::mag_calibration::{MagCalibrationResult, MagCalibrator};
+use super::mag_calibration::MagCalibrator;
 use super::naive_cf::NaiveCF;
-use super::FusionState;
 
 fn frd_to_rub(v: Vector3<f32>) -> Vector3<f32> {
     Vector3::new(v.y, -v.z, -v.x)
@@ -28,22 +27,6 @@ fn update_mag_uses_shared_mag_calibrator() {
 }
 
 #[test]
-fn get_calibrated_mag_reports_underconstrained_calibration_as_pending() {
-    let mut state = FusionState::new(Box::new(crate::sim::Dummy::new()));
-    let raw_mag = Vector3::new(5.0, 6.0, 7.0);
-
-    // TODO: move into correct unit test
-    //
-    //  this file should only test public API of naive_cf, not mag_calibration
-    //  there are several violations like this
-    //  after moving, remember to scan for duplicated/similar test cases and merge them
-    assert!(matches!(
-        state.mag.evaluate_correct(raw_mag, None, 0),
-        Ok(MagCalibrationResult::Pending { confidence: 0.0 })
-    ));
-}
-
-#[test]
 fn update_mag_discards_ill_conditioned_calibration() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::Dummy::new())).unwrap();
     fusion.state.mag = nearly_collinear_calibrator();
@@ -59,17 +42,6 @@ fn update_mag_discards_ill_conditioned_calibration() {
     assert_eq!(fusion.state.corrections.mag.avg, 0.0);
     assert_eq!(fusion.state.attitude.angle(), 0.0);
 }
-
-// #[test]
-// fn get_calibrated_mag_discards_weak_raw_reading() {
-//     let mut state = FusionState::new(Box::new(crate::sim::Dummy {}));
-//     let raw_mag = Vector3::new(0.1, 0.1, 0.1);
-//
-//     assert!(matches!(
-//         state.getCalibratedMag(raw_mag),
-//         Err(super::BadMagCause::BadReading(super::BadReading::WeakRawReading { .. }))
-//     ));
-// }
 
 fn seeded_calibrator(offset: Vector3<f32>, scale: Vector3<f32>) -> MagCalibrator<1023> {
     let mut calibrator = MagCalibrator::new();

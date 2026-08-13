@@ -72,12 +72,17 @@ fn mag_calibrator_returns_stable_online_corrections() {
 }
 
 #[test]
-fn mag_calibrator_rejects_degenerate_data() {
+fn mag_calibrator_stays_pending_with_underconstrained_or_degenerate_data() {
     let mut calibrator = MagCalibrator::<9>::new();
-    let result = (0..9)
-        .map(|timestamp_us| {
-            calibrator.evaluate_correct(Vector3::new(5.0, 6.0, 7.0), None, timestamp_us)
-        })
+    let sample = Vector3::new(5.0, 6.0, 7.0);
+    let single = calibrator.evaluate_correct(sample, None, 0);
+
+    assert!(matches!(
+        single,
+        Ok(MagCalibrationResult::Pending { confidence: 0.0 })
+    ));
+    let result = (1..9)
+        .map(|timestamp_us| calibrator.evaluate_correct(sample, None, timestamp_us))
         .last()
         .unwrap();
 
