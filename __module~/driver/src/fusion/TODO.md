@@ -91,7 +91,7 @@
       linear ramp from radial RMS `0 -> 1` to `0.1 -> 0`. Confidence is the product of those two components clamped to
       `[0, 1]`. Before nine accepted samples, or while no finite SPD working candidate exists, report a non-error
       pending state with confidence zero and no corrected vector; do not return raw magnetometer data. A valid working
-      candidate must maintain confidence at least `0.40` for 64 consecutive valid updates before publishing the first
+      candidate must maintain confidence at least `0.40` for 110 consecutive valid updates before publishing the first
       correction, even when the cache is only partially filled. Reset this O(1) streak on an invalid or
       lower-confidence candidate so a transient score spike is not treated as readiness. After publication, a
       candidate without the required streak leaves the last published correction available and reports the current

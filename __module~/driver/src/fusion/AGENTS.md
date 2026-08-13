@@ -44,7 +44,7 @@ convergence.
 The calibrator maintains the raw first moment and second outer-product moment when rows are appended, replaced, or
 expired. Cache normalization and corrected centered covariance are derived from these fixed-size statistics without a
 row scan. Before nine retained samples, calibration is explicitly pending with confidence zero. After that model
-minimum, a finite SPD working candidate must maintain live confidence at least `0.40` for 64 consecutive valid updates
+minimum, a finite SPD working candidate must maintain live confidence at least `0.40` for 110 consecutive valid updates
 before it can publish from a partially filled cache.
 
 ### Production cache size
@@ -269,7 +269,7 @@ resets. Fitness is a linear ramp from `1` at radial RMS `0` to `0` at radial RMS
 times fitness, clamped to `[0, 1]`.
 
 Working coefficients and published correction parameters are separate. The hard-iron offset and soft-iron correction
-change only after 64 consecutive valid candidates have confidence at least `0.40`, including while the cache is
+change only after 110 consecutive valid candidates have confidence at least `0.40`, including while the cache is
 partial; an invalid or lower-confidence candidate resets that O(1) streak. Before first publication,
 `evaluate_correct` returns a non-error `Pending` result and no vector. After publication, a candidate without the
 required streak reports its current confidence while leaving the last published correction in use. Fusion callers use
