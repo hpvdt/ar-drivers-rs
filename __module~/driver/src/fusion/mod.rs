@@ -52,11 +52,13 @@ pub trait FusionInconsistency {
 
 impl<T: Fusion + ?Sized> FusionInconsistency for T {
     fn inconsistency(&self) -> f32 {
-        self.corrections().totalAvg()
+        self.corrections().total_avg()
     }
 }
 
+/// Sensor fusion algorithm interface: consumes raw glasses events and produces an attitude estimate.
 pub trait Fusion: Send + FusionInconsistency {
+    /// Underlying glasses device this fusion reads events from.
     fn glasses(&mut self) -> &mut Box<dyn ARGlasses>;
     // TODO: only declared mutable as many API of ARGlasses are also mutable
 
@@ -67,10 +69,12 @@ pub trait Fusion: Send + FusionInconsistency {
     /// Per-sensor correction magnitudes tracked by the fusion algorithm.
     fn corrections(&self) -> NineAxis<Correction>;
 
+    /// Consume the next sensor event and advance the attitude estimate.
     fn update(&mut self) -> ();
 }
 
 impl dyn Fusion {
+    /// Create a fusion instance over whichever glasses are connected, or the dummy device.
     pub fn any_cf() -> Result<Box<dyn Fusion>> {
         // let glasses = any_glasses()?;
         let glasses = any_glasses_or_dummy()?;
@@ -116,6 +120,7 @@ impl fmt::Display for Correction {
     }
 }
 
+/// Per-sensor (acc/gyro/mag) triplet of homogeneous values.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NineAxis<T> {
     /// Accelerometer correction.
@@ -127,7 +132,7 @@ pub struct NineAxis<T> {
 }
 
 impl NineAxis<Correction> {
-    fn totalAvg(&self) -> f32 {
+    fn total_avg(&self) -> f32 {
         self.acc.avg + self.gyro.avg + self.mag.avg
     }
 }
@@ -142,10 +147,13 @@ impl fmt::Display for NineAxis<Correction> {
     }
 }
 
+/// Shared fusion algorithm state: glasses device, current attitude, and magnetometer calibration.
 pub struct FusionState {
+    /// Glasses device the state reads events from.
     pub glasses: Box<dyn ARGlasses>,
 
     // following data will be updated in memory directly,
+    /// Latest attitude estimate as a unit quaternion.
     pub attitude: UnitQuaternion<f32>,
 
     /// Per-sensor correction magnitudes.
@@ -157,6 +165,7 @@ pub struct FusionState {
     // near-planar circle on the sphere, and the ellipsoid fit is free to
     // drift along the unobserved axis (seen as >20 deg worst-case heading
     // error in the dummy integration test with 255 samples).
+    /// Magnetometer calibration state shared by all fusion implementations.
     pub mag: MagCalibrator<1023>,
 }
 
@@ -172,6 +181,7 @@ impl FusionState {
     }
 }
 
+/// Wraps a [`Fusion`] to output attitudes in a chosen reference frame and bias convention.
 pub struct AhrsCorrection {
     fusion: Box<dyn Fusion>,
     neutral_bias: (UnitQuaternion<f32>, UnitQuaternion<f32>), // multiplicative
@@ -187,6 +197,7 @@ impl AhrsCorrection {
     // Euler-Angle: forward-right-down, right hand axes, right hand rotation
     //
     // Quaternion: right hand, ijkw
+    /// Correction with the standard forward-right-down (FRD) reference frame.
     pub fn frd(fusion: Box<dyn Fusion>) -> AhrsCorrection {
         AhrsCorrection {
             // defaults to RUF reference frame of Unity game engine
@@ -208,6 +219,7 @@ impl AhrsCorrection {
     //   but here it is used for backward compatibility
     //
     // Quaternion: left hand, ijkw ?
+    /// Correction matching the AirAPI_Windows reference frame, with neutral heading 90° pitch down.
     pub fn left_fru_down(fusion: Box<dyn Fusion>) -> AhrsCorrection {
         AhrsCorrection {
             // defaults to RUF reference frame of Unity game engine
@@ -236,6 +248,7 @@ impl AhrsCorrection {
         corrected
     }
 
+    /// Attitude as Euler angles (roll, pitch, yaw) in the configured frame, in radians.
     pub fn attitude_euler_rad(&self) -> Vector3<f32> {
         let (roll, pitch, yaw) = self.attitude_quaternion_frd().euler_angles();
         let frd = Vector3::new(roll, pitch, yaw);
@@ -249,6 +262,7 @@ impl AhrsCorrection {
         ordered
     }
 
+    /// Attitude as Euler angles (roll, pitch, yaw) in the configured frame, in degrees.
     pub fn attitude_euler_deg(&self) -> Vector3<f32> {
         self.attitude_euler_rad().map(|x| x.to_degrees())
     }

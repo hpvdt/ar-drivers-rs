@@ -53,8 +53,10 @@ pub mod nreal_light;
 #[cfg(feature = "rokid")]
 pub mod rokid;
 
+/// Singleton connection that runs sensor fusion in a background thread.
 pub mod connection;
 
+/// C ABI entry points for the Unity integration.
 pub mod ffi;
 
 pub mod sim;
@@ -99,7 +101,7 @@ fn rw<T>(v: T) -> Rw<T> {
     Arc::new(Mutex::new(v))
 }
 
-fn rw_write<T>(v: &Rw<T>) -> std::sync::MutexGuard<T> {
+fn rw_write<T>(v: &Rw<T>) -> std::sync::MutexGuard<'_, T> {
     v.lock().unwrap()
 }
 
@@ -291,6 +293,8 @@ pub struct DisplayMatrices {
     pub isometry: Isometry3<f64>,
 }
 
+/// Detect and connect to any supported glasses, falling back to the simulated
+/// [`Dummy`] device when no hardware is found.
 pub fn any_glasses_or_dummy() -> Result<Box<dyn ARGlasses>> {
     any_glasses().or_else(|e| {
         println!("{} fall back to dummy glasses", e);
