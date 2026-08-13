@@ -137,6 +137,9 @@ impl NaiveCF {
     pub(super) fn update_mag(&mut self, mag_rub: &Vector3<f32>, t: u64) -> () {
         let raw_mag = rub_to_frd(mag_rub); // reading is always muT (microTesla) pointing to north
 
+        // TODO: add gravity direction
+        //  this usage of evaluate_correct assumes no available gravity direction
+        //  not true, gravity direction is already estimated from other sensors
         let mag_north: Vector3<f32> = match self
             .state
             .mag
