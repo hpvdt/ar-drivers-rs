@@ -202,6 +202,8 @@ impl NaiveCF {
         scaled_opt
     }
 
+    // ponytail: kept for temporary debugging; remove together with the rest of the rotation helpers
+    #[allow(dead_code)]
     pub fn get_rotation(
         acc: &Vector3<f32>,
         rotation: &UnitQuaternion<f32>,
@@ -209,6 +211,7 @@ impl NaiveCF {
         Self::get_rotation_raw(acc, rotation)
     }
 
+    #[allow(dead_code)]
     fn get_rotation_raw(
         acc: &Vector3<f32>,
         rotation: &UnitQuaternion<f32>,
@@ -218,6 +221,7 @@ impl NaiveCF {
         correction_opt
     }
 
+    #[allow(dead_code)]
     fn get_rotation_verified(
         acc: &Vector3<f32>,
         rotation: &UnitQuaternion<f32>,
