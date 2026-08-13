@@ -32,6 +32,11 @@ fn get_calibrated_mag_reports_underconstrained_calibration_as_pending() {
     let mut state = FusionState::new(Box::new(crate::sim::Dummy::new()));
     let raw_mag = Vector3::new(5.0, 6.0, 7.0);
 
+    // TODO: move into correct unit test
+    //
+    //  this file should only test public API of naive_cf, not mag_calibration
+    //  there are several violations like this
+    //  after moving, remember to scan for duplicated/similar test cases and merge them
     assert!(matches!(
         state.mag.evaluate_correct(raw_mag, None, 0),
         Ok(MagCalibrationResult::Pending { confidence: 0.0 })
