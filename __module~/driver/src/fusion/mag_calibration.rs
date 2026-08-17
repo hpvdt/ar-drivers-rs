@@ -1,22 +1,39 @@
-#[cfg(test)]
-use std::cell::Cell;
-
-use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
+use nalgebra::{Matrix3, SMatrix, SVector, SymmetricEigen, Vector3};
 
 use super::bad_mag_cause::{BadCalibration, BadMagCause, BadReading};
 
 const CALIBRATION_PARAMETER_COUNT: usize = 9;
+/// Design sum of the retained direction features backing the coverage score.
+pub(super) type DesignMatrix =
+    SMatrix<f32, CALIBRATION_PARAMETER_COUNT, CALIBRATION_PARAMETER_COUNT>;
 const SHAPE_REGULARIZATION: f32 = 1.0e-3;
 /// Scale of the regularization target shape, in units of the identity.
 /// Algebraic ellipsoid fits under noise systematically inflate the ellipsoid
 /// (underestimate the eigenvalues of the shape matrix), so the prior centers
 /// on a shape larger than the ideal sphere to counter that bias.
 const SHAPE_PRIOR_SCALE: f32 = 2.0;
-const MAX_SAMPLE_CONDITION: f32 = 1.0e2;
 const MAX_CORRECTION_CONDITION: f32 = 1.0e1;
 const MAX_RADIAL_RMS: f32 = 0.1;
-pub(super) const MIN_PUBLICATION_CONFIDENCE: f32 = 0.4;
+/// Confidence required for a working candidate to advance the publication
+/// streak. With E-optimality coverage this sits in the gap between a
+/// calibrator whose retained motion genuinely fills a broad region (whose
+/// live confidence plateaus at 0.042 or above even when it never visits a
+/// third axis) and one still confined to the first motion segments (whose
+/// near-planar support leaves the design matrix rank-deficient and the
+/// confidence below 0.02 sustained).
+pub(super) const MIN_PUBLICATION_CONFIDENCE: f32 = 0.03;
+/// Confidence floor below which the publication streak resets. This
+/// hysteresis keeps a qualifying candidate from losing its streak to
+/// threshold jitter: a short dip in live quality (for example while the
+/// optimizer absorbs a newly visited motion segment) pauses the streak
+/// instead of restarting it, while a genuine quality collapse resets it.
+const PUBLICATION_STREAK_RESET_CONFIDENCE: f32 = 0.02;
 pub(super) const MIN_PUBLICATION_STREAK: usize = 110;
+/// Uniform-sphere reference for directional coverage: the smallest
+/// eigenvalue of `E[phi(d) phi(d)^T]` over uniformly distributed unit
+/// directions, where `phi` is the quadratic feature vector shared with the
+/// ellipsoid fit. A fully isotropic cache scores 1 against this reference.
+const COVERAGE_LAMBDA_REF: f32 = 2.0 / 15.0;
 const MIN_MAG_NORM: f32 = 0.4;
 const DEFAULT_GRAVITY_WEIGHT: f32 = 0.01;
 const DEFAULT_MINIBATCH_SIZE: usize = 32;
@@ -158,8 +175,6 @@ pub struct MagCalibrator<const N: usize> {
     radial_residual_mean_square: Option<f32>,
     confidence: f32,
     publication_quality_streak: usize,
-    #[cfg(test)]
-    sample_reads: Cell<usize>,
 }
 
 impl<const N: usize> Default for MagCalibrator<N> {
@@ -194,8 +209,6 @@ impl<const N: usize> Default for MagCalibrator<N> {
             radial_residual_mean_square: None,
             confidence: 0.0,
             publication_quality_streak: 0,
-            #[cfg(test)]
-            sample_reads: Cell::new(0),
         }
     }
 }
@@ -1063,6 +1076,63 @@ impl<const N: usize> MagCalibrator<N> {
         }
     }
 
+    /// Quadratic feature vector of a unit direction: the nine ellipsoid-fit
+    /// features with `sqrt(2)` cross-term weights. With this weighting the
+    /// feature norm equals the rotation-invariant `tr(d d^T d d^T)`, so the
+    /// induced rotation on feature space is orthogonal and the design
+    /// eigenvalues are exactly rotation-invariant. Under the uniform
+    /// spherical distribution `E[phi phi^T]` has eigenvalues `{1/3 x4, 2/15
+    /// x5}`.
+    fn direction_feature(d: Vector3<f32>) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
+        SVector::<f32, CALIBRATION_PARAMETER_COUNT>::from_column_slice(&[
+            d.x * d.x,
+            d.y * d.y,
+            d.z * d.z,
+            std::f32::consts::SQRT_2 * d.x * d.y,
+            std::f32::consts::SQRT_2 * d.x * d.z,
+            std::f32::consts::SQRT_2 * d.y * d.z,
+            d.x,
+            d.y,
+            d.z,
+        ])
+    }
+
+    /// E-optimality coverage of the retained directions: the smallest
+    /// eigenvalue of the mean design matrix relative to the uniform-sphere
+    /// reference. Rotation-invariant by construction, and a cache whose
+    /// directions support fewer than nine independent features (for example
+    /// near-planar motion) is rank-deficient and scores near zero.
+    fn coverage_from_design(design_matrix: &DesignMatrix, matrix_filled: usize) -> f32 {
+        if matrix_filled < CALIBRATION_PARAMETER_COUNT {
+            return 0.0;
+        }
+        let mean_design = design_matrix / matrix_filled as f32;
+        let lambda_min = SymmetricEigen::new(mean_design).eigenvalues.min();
+        (lambda_min / COVERAGE_LAMBDA_REF).clamp(0.0, 1.0)
+    }
+
+    /// Coverage of the retained rows, mean-centered and recomputed from the
+    /// current cache on each quality update. Recomputing keeps every
+    /// direction centered on the current cache mean, so no insertion-time
+    /// snapshots, incremental design state, or drift-triggered rebuilds are
+    /// needed. The cache mean is used rather than the fitted hard-iron
+    /// offset: the offset's component along the thinnest data direction is
+    /// itself unconstrained for near-planar support, which destabilizes the
+    /// score exactly where it must be decisive. A near-planar cache stays
+    /// rank-deficient under any centering.
+    fn mean_centered_coverage(&self) -> f32 {
+        let mut design = DesignMatrix::zeros();
+        for row in 0..self.matrix_filled {
+            let centered = self.sample(row) - self.normalization_mean;
+            let norm = centered.norm();
+            if norm.is_finite() && norm > f32::EPSILON {
+                let phi = Self::direction_feature(centered / norm);
+                design += phi * phi.transpose();
+            }
+        }
+        Self::coverage_from_design(&design, self.matrix_filled)
+    }
+
     /// Get mean distance value between samples in matrix buffer.
     pub fn get_mean_distance(&self) -> f32 {
         self.mean_distance
@@ -1114,12 +1184,16 @@ impl<const N: usize> MagCalibrator<N> {
     fn update_publication(&mut self, current_sample: Option<Vector3<f32>>) {
         let current_sample_valid = current_sample.is_some();
         let candidate = self.update_quality(current_sample);
-        if current_sample_valid
-            && candidate.is_some()
-            && self.confidence >= MIN_PUBLICATION_CONFIDENCE
-        {
+        if !current_sample_valid || candidate.is_none() {
+            // Invalid observations and unusable candidates always reset the
+            // streak: they are evidence against publishing, not jitter.
+            self.publication_quality_streak = 0;
+        } else if self.confidence >= MIN_PUBLICATION_CONFIDENCE {
             self.publication_quality_streak = self.publication_quality_streak.saturating_add(1);
-        } else {
+        } else if self.confidence < PUBLICATION_STREAK_RESET_CONFIDENCE {
+            // Only a genuine quality collapse restarts the streak; a short
+            // dip in live quality while the optimizer absorbs newly visited
+            // directions merely pauses it.
             self.publication_quality_streak = 0;
         }
         if self.publication_quality_streak >= MIN_PUBLICATION_STREAK {
@@ -1197,25 +1271,6 @@ impl<const N: usize> MagCalibrator<N> {
         Ok(CalibrationCandidate { offset, correction })
     }
 
-    fn corrected_covariance(&self, correction: Matrix3<f32>) -> Option<Matrix3<f32>> {
-        let (_, raw_covariance) = self.raw_mean_and_covariance()?;
-        let covariance = correction * raw_covariance * correction.transpose();
-        let covariance = 0.5 * (covariance + covariance.transpose());
-        covariance
-            .iter()
-            .all(|value| value.is_finite())
-            .then_some(covariance)
-    }
-
-    fn coverage_score(covariance: Matrix3<f32>) -> f32 {
-        let condition = Self::condition_number(&covariance.symmetric_eigen().eigenvalues);
-        if !condition.is_finite() {
-            0.0
-        } else {
-            (1.0 - condition.max(1.0).ln() / MAX_SAMPLE_CONDITION.ln()).clamp(0.0, 1.0)
-        }
-    }
-
     fn update_running_mean_square(
         current: Option<f32>,
         residual_squared: f32,
@@ -1278,9 +1333,7 @@ impl<const N: usize> MagCalibrator<N> {
             };
             self.radial_residual_mean_square = Some(mean_square);
         }
-        let coverage = self
-            .corrected_covariance(candidate.correction)
-            .map_or(0.0, Self::coverage_score);
+        let coverage = self.mean_centered_coverage();
         let fitness = Self::fitness_score(self.radial_residual_mean_square);
         let quality = coverage * fitness;
         self.confidence = if quality.is_finite() {
@@ -1292,8 +1345,6 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     fn sample(&self, row: usize) -> Vector3<f32> {
-        #[cfg(test)]
-        self.sample_reads.set(self.sample_reads.get() + 1);
         // TODO: this should be a linear algebra operation, avoid elementwise operations
         Vector3::new(
             self.matrix[(row, 0)],
@@ -1317,12 +1368,10 @@ impl<const N: usize> MagCalibrator<N> {
 
     #[cfg(test)]
     pub(super) fn working_quality_components(&self) -> (bool, f32, f32) {
-        let Ok(candidate) = self.working_candidate() else {
+        let Ok(_candidate) = self.working_candidate() else {
             return (false, 0.0, 0.0);
         };
-        let coverage = self
-            .corrected_covariance(candidate.correction)
-            .map_or(0.0, Self::coverage_score);
+        let coverage = self.mean_centered_coverage();
         let fitness = Self::fitness_score(self.radial_residual_mean_square);
         (true, coverage, fitness)
     }
@@ -1341,14 +1390,26 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     #[cfg(test)]
-    pub(super) fn quality_scores_for_test(
-        covariance: Matrix3<f32>,
-        mean_square: Option<f32>,
-    ) -> (f32, f32) {
-        (
-            Self::coverage_score(covariance),
-            Self::fitness_score(mean_square),
-        )
+    pub(super) fn coverage_scores_for_test(
+        design_matrix: &DesignMatrix,
+        matrix_filled: usize,
+    ) -> f32 {
+        Self::coverage_from_design(design_matrix, matrix_filled)
+    }
+
+    #[cfg(test)]
+    pub(super) fn design_matrix_for_test(directions: &[Vector3<f32>]) -> DesignMatrix {
+        let mut design = DesignMatrix::zeros();
+        for &direction in directions {
+            let phi = Self::direction_feature(direction);
+            design += phi * phi.transpose();
+        }
+        design
+    }
+
+    #[cfg(test)]
+    pub(super) fn fitness_score_for_test(mean_square: Option<f32>) -> f32 {
+        Self::fitness_score(mean_square)
     }
 
     #[cfg(test)]
@@ -1372,21 +1433,6 @@ impl<const N: usize> MagCalibrator<N> {
             self.raw_sample_sum,
             self.raw_outer_product_sum,
         )
-    }
-
-    #[cfg(test)]
-    pub(super) fn corrected_covariance_for_test(
-        &self,
-        correction: Matrix3<f32>,
-    ) -> Option<Matrix3<f32>> {
-        self.corrected_covariance(correction)
-    }
-
-    #[cfg(test)]
-    pub(super) fn quality_cache_reads_for_test(&mut self) -> usize {
-        let before = self.sample_reads.get();
-        self.update_quality(None);
-        self.sample_reads.get() - before
     }
 
     /// Verifies maintained raw moments against a direct current-cache sum.

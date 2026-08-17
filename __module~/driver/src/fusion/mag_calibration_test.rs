@@ -34,9 +34,12 @@ fn mag_calibrator_corrects_asymmetrically_sampled_distortion() {
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
     let mut calibrator = MagCalibrator::<63>::new();
+    // Non-uniform spiral covering the sphere: the E-optimality coverage score
+    // refuses publication for a sweep that never visits a cap of the sphere,
+    // so the asymmetric sampling must still span all directions.
     for i in 0..63 {
         let theta = 0.37 + i as f32 * 1.21;
-        let z = -0.1 + i as f32 / 62.0;
+        let z = -0.85 + 1.7 * i as f32 / 62.0;
         let radius = (1.0 - z * z).sqrt();
         let direction = Vector3::new(radius * theta.cos(), radius * theta.sin(), z);
         let _ = calibrator.evaluate_correct(offset + distortion * direction, None, i as u64);
@@ -45,7 +48,7 @@ fn mag_calibrator_corrects_asymmetrically_sampled_distortion() {
     for i in 0..16 * 63 {
         let sample_index = i % 63;
         let theta = 0.37 + sample_index as f32 * 1.21;
-        let z = -0.1 + sample_index as f32 / 62.0;
+        let z = -0.85 + 1.7 * sample_index as f32 / 62.0;
         let radius = (1.0 - z * z).sqrt();
         let direction = Vector3::new(radius * theta.cos(), radius * theta.sin(), z);
         let _ = calibrator.evaluate_correct(offset + distortion * direction, None, (64 + i) as u64);
@@ -479,69 +482,123 @@ fn mag_calibrator_ignores_invalid_gravity() {
 }
 
 #[test]
-fn mag_calibrator_uses_corrected_centered_covariance_for_coverage() {
+fn mag_calibrator_scores_direction_coverage() {
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let distortion = Matrix3::new(2.4, 0.3, -0.2, 0.3, 0.7, 0.1, -0.2, 0.1, 1.3);
-    let correction = distortion.try_inverse().unwrap();
     let mut calibrator = MagCalibrator::<63>::new();
-    let mut directions = Vec::new();
+
+    // A near-planar circle leaves the directional design matrix
+    // rank-deficient no matter how long it is sampled, and the coverage
+    // score cannot be inflated by the fit's own reshaping of the sample
+    // covariance.
+    for i in 0..16 * 63 {
+        let theta = i as f32 * 0.31;
+        let near_planar = Vector3::new(theta.cos() * 0.866, theta.sin() * 0.866, 0.5).normalize();
+        calibrator.evaluate_sample_vec(offset + near_planar, None, i as u64);
+    }
+    let (valid, coverage, _) = calibrator.working_quality_components();
+    assert!(valid, "planar sweep produced no working candidate");
+    assert!(
+        coverage < MIN_PUBLICATION_CONFIDENCE,
+        "planar coverage={coverage} must stay below the publication confidence"
+    );
+    assert!(calibrator.get_confidence() < MIN_PUBLICATION_CONFIDENCE);
+
+    // The same broad three-dimensional sweep under identity and strong
+    // anisotropic distortion must score similarly: coverage follows the
+    // retained directions, not the fitted correction.
+    let mut identity = MagCalibrator::<63>::new();
+    let mut distorted = MagCalibrator::<63>::new();
     for i in 0..63 {
         let direction = sample_direction(i, 63);
-        directions.push(direction);
-        calibrator.evaluate_sample_vec(offset + distortion * direction, None, i as u64);
+        identity.evaluate_sample_vec(offset + direction, None, i as u64);
+        distorted.evaluate_sample_vec(offset + distortion * direction, None, i as u64);
     }
-
-    let mean = directions.iter().copied().sum::<Vector3<f32>>() / directions.len() as f32;
-    let expected = directions.iter().fold(Matrix3::zeros(), |sum, direction| {
-        let centered = direction - mean;
-        sum + centered * centered.transpose()
-    }) / directions.len() as f32;
-    let actual = calibrator
-        .corrected_covariance_for_test(correction)
-        .expect("maintained covariance is unavailable");
-
+    let (identity_valid, identity_coverage, _) = identity.working_quality_components();
+    let (distorted_valid, distorted_coverage, _) = distorted.working_quality_components();
+    assert!(identity_valid && distorted_valid);
     assert!(
-        (actual - expected).norm() < 1.0e-5,
-        "actual={actual:?} expected={expected:?}"
+        (identity_coverage - distorted_coverage).abs() < 0.2,
+        "identity_coverage={identity_coverage} distorted_coverage={distorted_coverage}"
+    );
+    assert!(
+        distorted_coverage >= MIN_PUBLICATION_CONFIDENCE,
+        "identity_coverage={identity_coverage} distorted_coverage={distorted_coverage} \
+         threshold={MIN_PUBLICATION_CONFIDENCE}"
     );
 }
 
 #[test]
-fn live_quality_does_not_read_the_sample_cache() {
-    let offset = Vector3::new(11.0, -7.0, 5.0);
-    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
-    let mut calibrator = seeded_calibrator::<63>(offset, distortion);
+fn design_coverage_is_rotation_invariant_and_detects_rank_deficiency() {
+    // A broad deterministic sweep has near-isotropic directional support and
+    // scores close to the uniform-sphere reference.
+    let directions: Vec<Vector3<f32>> = (0..64).map(|i| sample_direction(i, 64)).collect();
+    let coverage = MagCalibrator::<9>::coverage_scores_for_test(
+        &MagCalibrator::<9>::design_matrix_for_test(&directions),
+        64,
+    );
+    // The spiral never visits the poles, so it scores well below the
+    // uniform-sphere reference but far above a rank-deficient sweep.
+    assert!(coverage > 0.3, "broad coverage={coverage}");
+    assert!(coverage <= 1.0, "coverage={coverage} exceeds the clamp");
 
-    assert_eq!(calibrator.quality_cache_reads_for_test(), 0);
+    // The sqrt(2)-weighted features make the induced rotation on feature
+    // space orthogonal, so a rigid rotation of every direction leaves the
+    // score unchanged.
+    let rotation = UnitQuaternion::from_euler_angles(0.4, -0.7, 1.1);
+    let rotated: Vec<Vector3<f32>> = directions.iter().map(|&d| rotation * d).collect();
+    let rotated_coverage = MagCalibrator::<9>::coverage_scores_for_test(
+        &MagCalibrator::<9>::design_matrix_for_test(&rotated),
+        64,
+    );
+    assert!(
+        (coverage - rotated_coverage).abs() < 1.0e-4,
+        "coverage={coverage} rotated_coverage={rotated_coverage}"
+    );
+
+    // A tilted circle spans a measure-zero band: the design matrix is
+    // rank-deficient and the score collapses however long the circle runs.
+    let circle: Vec<Vector3<f32>> = (0..64)
+        .map(|i| {
+            let theta = i as f32 * 0.31;
+            Vector3::new(theta.cos() * 0.866, theta.sin() * 0.866, 0.5).normalize()
+        })
+        .collect();
+    let planar_coverage = MagCalibrator::<9>::coverage_scores_for_test(
+        &MagCalibrator::<9>::design_matrix_for_test(&circle),
+        64,
+    );
+    assert!(
+        planar_coverage < 0.1,
+        "planar_coverage={planar_coverage} must stay near zero"
+    );
+
+    // Fewer retained rows than the nine fit features score zero.
+    assert_eq!(
+        MagCalibrator::<9>::coverage_scores_for_test(
+            &MagCalibrator::<9>::design_matrix_for_test(&directions[..8]),
+            8,
+        ),
+        0.0
+    );
 }
 
 #[test]
 fn live_quality_ramps_and_running_mean_square_match_the_specification() {
-    let identity = Matrix3::identity();
-    let condition_ten = Matrix3::from_diagonal(&Vector3::new(1.0, 1.0, 10.0));
-    let condition_hundred = Matrix3::from_diagonal(&Vector3::new(1.0, 1.0, 100.0));
-    let singular = Matrix3::from_diagonal(&Vector3::new(1.0, 1.0, 0.0));
-
-    assert_eq!(
-        MagCalibrator::<9>::quality_scores_for_test(identity, Some(0.0)),
-        (1.0, 1.0)
-    );
-    let (coverage, fitness) =
-        MagCalibrator::<9>::quality_scores_for_test(condition_ten, Some(0.05f32.powi(2)));
-    assert!((coverage - 0.5).abs() < 1.0e-6, "coverage={coverage}");
+    // Radial RMS ramps fitness linearly from 1 at 0 to 0 at the 0.1 ceiling.
+    assert_eq!(MagCalibrator::<9>::fitness_score_for_test(Some(0.0)), 1.0);
+    let fitness = MagCalibrator::<9>::fitness_score_for_test(Some(0.05f32.powi(2)));
     assert!((fitness - 0.5).abs() < 1.0e-6, "fitness={fitness}");
+    // At and beyond the ceiling, and for unusable statistics, fitness is 0.
     assert_eq!(
-        MagCalibrator::<9>::quality_scores_for_test(condition_hundred, Some(0.1f32.powi(2))),
-        (0.0, 0.0)
+        MagCalibrator::<9>::fitness_score_for_test(Some(0.1f32.powi(2))),
+        0.0
     );
     assert_eq!(
-        MagCalibrator::<9>::quality_scores_for_test(singular, Some(f32::NAN)),
-        (0.0, 0.0)
+        MagCalibrator::<9>::fitness_score_for_test(Some(f32::NAN)),
+        0.0
     );
-    assert_eq!(
-        MagCalibrator::<9>::quality_scores_for_test(identity, Some(-1.0)),
-        (1.0, 0.0)
-    );
+    assert_eq!(MagCalibrator::<9>::fitness_score_for_test(Some(-1.0)), 0.0);
     assert_eq!(
         MagCalibrator::<9>::running_mean_square_for_test(None, 0.04, 0.25),
         Some(0.01)

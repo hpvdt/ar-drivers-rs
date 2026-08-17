@@ -42,10 +42,13 @@ published yet, each valid sample also triggers a ramped number of cache-only rep
 convergence.
 
 The calibrator maintains the raw first moment and second outer-product moment when rows are appended, replaced, or
-expired. Cache normalization and corrected centered covariance are derived from these fixed-size statistics without a
-row scan. Before nine retained samples, calibration is explicitly pending with confidence zero. After that model
-minimum, a finite SPD working candidate must maintain live confidence at least `0.40` for 110 consecutive valid updates
-before it can publish from a partially filled cache.
+expired; cache normalization is derived from these fixed-size statistics without a row scan. Directional coverage is
+recomputed from the current cache on each quality update: the smallest eigenvalue of the `9 x 9` design matrix of the
+mean-centered unit directions. Before nine retained samples, calibration is explicitly pending
+with confidence zero. After that model minimum, a finite SPD working candidate must raise live confidence to at least
+`0.03` for 110 valid updates before it can publish from a partially filled cache. Confidence dips below `0.03` pause
+that streak instead of resetting it while they stay above a `0.02` floor; invalid observations and unusable candidates
+always reset it.
 
 ### Production cache size
 
@@ -254,23 +257,27 @@ coefficients, normalization, offset, and correction are finite, `Q` is positive-
 correction condition is at most `10`. Invalid candidates have quality zero; raw samples are never substituted for
 corrected samples.
 
-For retained raw-sample mean `mu_raw` and second moment `E[x x^T]`, compute:
-
-```text
-C_raw = E[x x^T] - mu_raw mu_raw^T,
-C_corrected = A C_raw A^T.
-```
-
-The hard-iron offset cancels after centering. Directional coverage is a logarithmic ramp from `1` at corrected
-covariance condition `1` to `0` at condition `100`. Physical radial fitness uses the running mean square of
-`||A (x - b)|| - 1`, evaluated for each valid current sample after its online update with the same working candidate.
-Its update weight is `1 / min(sample_count, minibatch_size)`; the statistic resets whenever working optimizer state
-resets. Fitness is a linear ramp from `1` at radial RMS `0` to `0` at radial RMS `0.1`. Live confidence is coverage
-times fitness, clamped to `[0, 1]`.
+Directional coverage is the E-optimality score of the retained mean-centered unit directions: the smallest
+eigenvalue of the mean design matrix `M = 1/n sum_i phi(d_i) phi(d_i)^T`, relative to its uniform-sphere reference
+`2/15` and clamped to `[0, 1]`. The feature vector `phi` holds the nine ellipsoid-fit features with `sqrt(2)`
+cross-term weights, which makes the induced rotation on feature space orthogonal, so the score is exactly
+rotation-invariant. The design sum is recomputed from the current cache on every quality update: directions stored at
+insertion go stale as the centering mean drifts (the earliest rows of a still-forming cache keep chord-like directions,
+which collapses the smallest eigenvalue), and no incremental design state survives contact with that drift. The cache
+mean is the center, not the fitted hard-iron offset: the offset's component along the thinnest data direction is itself
+unconstrained for near-planar support, which destabilizes the score exactly where it must be decisive. Rank deficiency
+detects lower-dimensional support by construction: near-planar motion leaves the design matrix rank-deficient and
+scores near zero, so a two-circle pancake cannot inflate coverage the way the corrected covariance `A C_raw A^T` did.
+Physical radial fitness uses the
+running mean square of `||A (x - b)|| - 1`, evaluated for each valid current sample after its online update with the
+same working candidate. Its update weight is `1 / min(sample_count, minibatch_size)`; the statistic resets whenever
+working optimizer state resets. Fitness is a linear ramp from `1` at radial RMS `0` to `0` at radial RMS `0.1`. Live
+confidence is coverage times fitness, clamped to `[0, 1]`.
 
 Working coefficients and published correction parameters are separate. The hard-iron offset and soft-iron correction
-change only after 110 consecutive valid candidates have confidence at least `0.40`, including while the cache is
-partial; an invalid or lower-confidence candidate resets that O(1) streak. Before first publication,
+change only after 110 valid updates at confidence at least `0.03`, including while the cache is partial. Confidence
+between the `0.02` reset floor and `0.03` pauses the streak; invalid observations, unusable candidates, and confidence
+below the floor reset that O(1) streak. Before first publication,
 `evaluate_correct` returns a non-error `Pending` result and no vector. After publication, a candidate without the
 required streak reports its current confidence while leaving the last published correction in use. Fusion callers use
 only `Calibrated` vectors for attitude updates. Correcting a reading remains one matrix-vector multiplication followed
@@ -288,11 +295,12 @@ For minibatch size `B`:
 - cold-start replay adds `O(10 R B_r)` for `R` ramped replay updates of size `B_r`, only until first publication;
 - candidate conversion uses fixed `3 x 3` operations;
 - normalization and live-quality maintenance use fixed-size raw moments and are `O(1)` in `N`;
+- coverage is one `O(N)` design-matrix accumulation plus one `9 x 9` symmetric eigendecomposition per quality update;
 - diversity maintenance is expected `O(N)` for a full cache;
 - persistent online-optimizer, moment, and quality state is `O(1)` in `N`.
 
-The call remains `O(N)` overall because sample diversity is linear, but live confidence adds no cache scan and there
-are no production `9 x 9` normal-matrix accumulations or solves.
+The call remains `O(N)` overall because sample diversity is linear; the coverage scan shares that budget and stores no
+per-row state of its own.
 
 ### Diversity neighbor cache
 

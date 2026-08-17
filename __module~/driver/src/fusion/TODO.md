@@ -38,6 +38,51 @@
 
 ## Medium severity
 
+- [x] Replace direction-grid coverage with a directional design-matrix E-optimality score
+
+    - **Resolution:** Implemented with `sqrt(2)` cross-term feature weights (exact rotation invariance; the `2 dx dy`
+      convention quoted below is only covariant up to the feature metric). The design sum is recomputed from the
+      current cache on each quality update: insertion-time direction snapshots go stale with the drifting cache mean
+      (~60x underestimation of the smallest eigenvalue), and centering by the fitted offset destabilizes near-planar
+      supports (the offset's thin-axis component is itself unconstrained there). Thresholds re-tuned to `0.03`/`0.02`
+      against the nine-seed suite; see the E-optimality stage in `MAG_CALIBRATION_BENCHMARK.md`.
+    - **Summary:** Coverage currently counts occupied cells of a fixed `8 x 16` latitude/longitude grid whose cells
+      have unequal solid angle and whose frame is not rotation-invariant; replace it with the minimum eigenvalue of
+      an incrementally maintained directional feature design matrix.
+    - **Affected module:** `src/fusion/mag_calibration.rs`
+    - **Severity:** Medium
+    - **Description:** The grid bins by `asin(z)`, so polar cells are about five times smaller in solid angle than
+      equatorial cells, and the grid is anchored to the body frame, so the score depends on the device's incidental
+      orientation. Both defects are quadrature artifacts of approximating a supremum over the sphere with a fixed
+      partition. Instead, score coverage with the E-optimality criterion of the algebraic fit restricted to unit
+      directions. For each retained row keep the mean-centered unit direction `d_i = (x_i - mu) / ||x_i - mu||` and
+      the quadratic feature vector
+
+      ```text
+      phi(d) = [dx^2, dy^2, dz^2, 2 dx dy, 2 dx dz, 2 dy dz, dx, dy, dz].
+      ```
+
+      Maintain the `9 x 9` design matrix `M = sum_i phi(d_i) phi(d_i)^T` incrementally: add the rank-1 outer product
+      when a row is appended or replaces a victim, subtract it on expiry. Coverage equals
+      `clamp(lambda_min(M) / lambda_ref, 0, 1)` with `lambda_ref = 2/15`, the smallest design eigenvalue under the
+      uniform distribution on the sphere. This is rotation-invariant (eigenvalues rotate covariantly), needs no
+      partition, and the least-squares leverage bound
+      `Var(phi(u)^T theta) = sigma^2 phi(u)^T M^-1 phi(u) <= sigma^2 ||phi(u)||^2 / lambda_min(M)` certifies that
+      the nine ellipsoid coefficients are constrained in every direction. Rank deficiency detects lower-dimensional
+      support by construction: a tilted circle leaves rank 5 (columns `dz` and `dz^2`, and `dx` and `dx dz`, are
+      proportional), and two perpendicular rings kill exactly the `dy dz` column, so a near-planar pancake cannot
+      inflate the score through the fitted correction the way the corrected covariance did.
+    - **Recommended fix:** Add per-row stored directions (3 `f32` each) and the `9 x 9` design sum; hook the rank-1
+      add/remove into the existing `add_raw_moment`/`remove_raw_moment` sites so maintenance stays `O(1)` per update
+      with no cache scan. Recompute `lambda_min` only when the cache mutates, warm-started from the previous
+      eigenvalue pair (the design changes by one rank-2 update), keeping each mutation at roughly 1-3k flops; the
+      no-mutation path reads one cached scalar. Delete the grid state (`sample_coverage_bins`,
+      `coverage_bin_counts`, `coverage_occupied_bins`) and the `asin`/`atan2` binning. Keep
+      `confidence = coverage x fitness` and the publication streak. Re-tune `MIN_PUBLICATION_CONFIDENCE`,
+      `PUBLICATION_STREAK_RESET_CONFIDENCE`, and `MIN_PUBLICATION_STREAK` against the nine-seed regression suite,
+      add tests for rotation invariance, planar rank-deficiency, and identity-versus-distorted equivalence, update
+      the coverage description in `AGENTS.md`, and record a new stage in `MAG_CALIBRATION_BENCHMARK.md`.
+
 - [ ] Score replacement candidates in their post-replacement buffer
 
     - **Summary:** Candidate and victim diversity scores currently use different neighbor pools.
