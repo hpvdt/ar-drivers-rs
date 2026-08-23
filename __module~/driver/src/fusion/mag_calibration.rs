@@ -1158,8 +1158,7 @@ impl<const N: usize> MagCalibrator<N> {
         gravity_direction: Option<Vector3<f32>>,
         timestamp_us: u64,
     ) -> Result<MagCalibrationResult, BadMagCause> {
-        let valid_current_sample = self.ingest_sample(raw_mag, gravity_direction, timestamp_us);
-        self.update_publication(valid_current_sample.then_some(raw_mag));
+        self.evaluate_sample_vec(raw_mag, gravity_direction, timestamp_us);
         if !self.calibration_initialized {
             return Ok(MagCalibrationResult::Pending {
                 confidence: self.confidence,
