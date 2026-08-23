@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-CRATE_DIR="$(cd "$(dirname "$0")/.."; pwd)"
+CRATE_DIR="$(cd "$(dirname "$0")/../__module~/driver"; pwd)"
 PLUGINS_DIR="../../Plugins"
 
 cd "$CRATE_DIR"

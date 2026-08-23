@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+CRATE_DIR="$(cd "$(dirname "$0")/../__module~/driver"; pwd)"
+cd "$CRATE_DIR"
+
 rustup target add x86_64-pc-windows-gnu aarch64-apple-darwin x86_64-unknown-linux-gnu
 
 cargo clean
