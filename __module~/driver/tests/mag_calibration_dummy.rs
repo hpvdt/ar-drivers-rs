@@ -1,7 +1,8 @@
 use std::time::{Duration, Instant};
 
 use ar_drivers::fusion::{rub_to_frd, FusionState, MagCalibrationResult};
-use ar_drivers::{ARGlasses, Dummy, DummyConfig, GlassesEvent};
+use ar_drivers::sim::dummy::Config;
+use ar_drivers::{ARGlasses, Dummy, GlassesEvent};
 use nalgebra::Vector3;
 use serial_test::serial;
 
@@ -39,7 +40,7 @@ struct RunStats {
     verified_count: u64,
 }
 
-fn run_calibration(config: DummyConfig, attitude_mode: AttitudeMode) -> RunStats {
+fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
     let seed = config.seed;
     let mode_label = match attitude_mode {
         AttitudeMode::Always => "with accelerometer gravity",
@@ -395,9 +396,9 @@ fn run_seeds(attitude_mode: AttitudeMode, seeds: impl IntoIterator<Item = u64>) 
     let runs: Vec<RunStats> = seeds
         .into_iter()
         .map(|seed| {
-            let config = DummyConfig {
+            let config = Config {
                 seed,
-                ..DummyConfig::default()
+                ..Config::default()
             };
             run_calibration(config, attitude_mode)
         })

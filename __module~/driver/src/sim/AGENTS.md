@@ -5,8 +5,8 @@ The dummy AR glasses fixture is a deterministic, public, configurable simulator 
 
 ## Public API
 
-- Expose the fixture through `pub mod sim` and re-export `Dummy`, `DummyConfig`, and `DummySnapshot`.
-- Provide `Dummy::new()`, `Dummy::with_seed(u64)`, `Dummy::with_config(DummyConfig)`, `Default`, `snapshot()`, and
+- Expose the fixture through `pub mod sim` and re-export `Dummy`.
+- Provide `Dummy::new()`, `Dummy::with_seed(u64)`, `Dummy::with_config(dummy::Config)`, `Default`, `snapshot()`, and
     `accelerometer_reading()`.
 - Keep default operation deterministic and virtual-time based, with the first emitted event being `AccGyro`.
 - Pace `read_event` to the configured event period in wall time: sleep for the period minus the wall time elapsed since
@@ -32,12 +32,12 @@ The dummy AR glasses fixture is a deterministic, public, configurable simulator 
 - Mag emits magnetic north in RUB with magnetic dip clamped to +/-30 degrees.
 - Clamp each distorted and noisy magnetometer component to a configurable symmetric physical range in microtesla.
 - Inject hard-iron and soft-iron distortion into magnetometer readings. Keep the default hard-iron offset stationary for
-  static calibration, and provide `DummyConfig::adaptive_calibration_stress()` as the explicit deterministic profile
+  static calibration, and provide `dummy::Config::adaptive_calibration_stress()` as the explicit deterministic profile
   with `(2.0, 1.5, 2.5)` microtesla drift amplitudes over a five-minute cycle.
 - Keep the randomly generated soft-iron matrix fixed for the lifetime of the fixture.
 - Keep the default hard-iron bias below 50 microtesla while still giving integration tests a realistic calibration
   challenge.
-- Expose lower and upper bounds for each soft-iron eigenvalue through `DummyConfig` as `soft_iron_min_eigenvalue` and
+- Expose lower and upper bounds for each soft-iron eigenvalue through `dummy::Config` as `soft_iron_min_eigenvalue` and
   `soft_iron_max_eigenvalue`.
 - Compute the permanent vector-norm bounds `sqrt(soft_iron_min_eigenvalue)` and `sqrt(soft_iron_max_eigenvalue)` once
   during fixture initialization.

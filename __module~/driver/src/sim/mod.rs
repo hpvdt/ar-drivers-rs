@@ -2,4 +2,4 @@
 
 pub mod dummy;
 
-pub use dummy::{Dummy, DummyConfig, DummySnapshot};
+pub use dummy::Dummy;

@@ -1,10 +1,11 @@
-use ar_drivers::{ARGlasses, Dummy, DummyConfig, GlassesEvent};
+use ar_drivers::sim::dummy::Config;
+use ar_drivers::{ARGlasses, Dummy, GlassesEvent};
 use nalgebra::Vector3;
 
 const DEFAULT_MAGNETOMETER_RANGE: f32 = 2_000.0;
 
 fn magnetometer_for_range(range: f32, hard_iron: Vector3<f32>) -> Vector3<f32> {
-    let mut dummy = Dummy::with_config(DummyConfig {
+    let mut dummy = Dummy::with_config(Config {
         max_body_rate_rpm: 0.0,
         linear_jerk_std_dev: 0.0,
         mag_noise_std_dev: 0.0,
@@ -14,7 +15,7 @@ fn magnetometer_for_range(range: f32, hard_iron: Vector3<f32>) -> Vector3<f32> {
         hard_iron_drift: Vector3::zeros(),
         soft_iron_min_eigenvalue: 1.0,
         soft_iron_max_eigenvalue: 1.0,
-        ..DummyConfig::default()
+        ..Config::default()
     });
 
     dummy.read_event().unwrap();
@@ -34,12 +35,12 @@ fn configured_range_saturates_positive_and_negative_components() {
 #[test]
 fn default_range_is_finite_and_symmetric() {
     assert_eq!(
-        DummyConfig::default().magnetometer_range,
+        Config::default().magnetometer_range,
         DEFAULT_MAGNETOMETER_RANGE
     );
     assert_eq!(
         magnetometer_for_range(
-            DummyConfig::default().magnetometer_range,
+            Config::default().magnetometer_range,
             Vector3::new(3_000.0, -3_000.0, 0.0),
         ),
         Vector3::new(DEFAULT_MAGNETOMETER_RANGE, -DEFAULT_MAGNETOMETER_RANGE, 0.0,)

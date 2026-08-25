@@ -13,15 +13,15 @@ output any TODO lists or "next steps" unless the user explicitly asks for a plan
 
 ## Architecture
 
-### Device-Specific Modules
+The crate is a single library built as both `rlib` and `cdylib`. Every supported glasses model implements one common
+device trait defined in the crate root. The root also owns the shared event, error, and display-mode types, runs device
+discovery across all enabled drivers, and can fall back to a simulated dummy device when no hardware is found. A
+singleton connection layer runs sensor fusion on a background thread, and a C ABI layer exposes the library to the
+Unity integration.
 
-Each supported device has its own module with device-specific protocol implementations:
-
-- **`nreal_air.rs`**: XREAL Air glasses driver
-- **`nreal_light.rs`**: XREAL Light glasses driver
-- **`rokid.rs`**: Rokid devices driver
-- **`grawoow.rs`**: Grawoow G530 driver
-- **`mad_gaze.rs`**: Mad Gaze Glow driver
+Display configuration covers mirrored 1080p, full side-by-side stereo, half-resolution side-by-side upscaled by the
+device, and high-refresh-rate (120 Hz) variants of both mirrored and side-by-side modes. Not every device supports
+every mode.
 
 ### Feature Flags
 
@@ -34,17 +34,7 @@ The library uses Cargo feature flags for conditional compilation:
 
 All features are enabled by default.
 
-### Display Modes
-
-Supported display configurations:
-
-- `SameOnBoth`: Identical image for both eyes (1080p)
-- `Stereo`: Side-by-side 3D (3840x1080 or 3840x1200)
-- `HalfSBS`: Half-resolution side-by-side (1920x1080 → upscaled to 3840x1080)
-- `HighRefreshRate`: 120Hz mirrored mode
-- `HighRefreshRateSBS`: 120Hz side-by-side mode
-
-## Code Structure/Style
+## Rust Guardrails
 
 ### Formatting and Imports
 
@@ -55,8 +45,9 @@ Supported display configurations:
   `crate`/`super`/`self`. Let rustfmt sort names within each group.
 - Import the concrete types and traits used by the module. Avoid glob imports.
 - Prefer one module-level import over repeated fully qualified paths when that
-  makes the code easier to read, but retain qualification when it clarifies an
-  uncommon error or platform type.
+  makes the code easier to read.
+- only exported definitions (by `pub use`) should be imported directly, everything
+  else should be invoked under it's preceding qualifier, including mod, enum, and error
 
 ### Naming and API Shape
 
@@ -70,6 +61,10 @@ Supported display configurations:
   delegate to it where appropriate.
 - Builder-style configuration methods take and return `self`; state-changing
   operations take `&mut self`; read-only operations take `&self`.
+- Re-exporting a definition under a different name is strictly forbidden.
+- Definitions that are not defined or exported in a crate root (`lib.rs`) or module
+  root (`mod.rs`) are supporting data structure,
+  they have to be referenced through their preceding module names.
 
 ### Documentation and Comments
 
@@ -143,18 +138,23 @@ Supported display configurations:
 - Use an explicit representation such as `#[repr(C)]` when a type's layout is
   shared across an FFI or binary boundary.
 
-### Tests
+## Testing
 
-- Unit test suite should be in a different file near the implementation, with "_tests" suffix
-- Top-level test mod should be under `#[cfg(test)]`;
-- Use integration tests for behavior exercised through the public API.
-- Multiple tests that covers success, malformed input, boundary values, and error variants should be under the same
-  sub-mod
-- Prefer deterministic tests and local fixtures. Keep tests that require external
-  resources, timing, or environment state clearly separate and document their
-  prerequisites.
-- Compare floating-point results with a tolerance derived from the algorithm;
-  use exact equality only for values that are constructed exactly.
+Hardware paths require physical devices; discovery reports a not-found error when no supported glasses are connected.
+The deterministic dummy fixture in `src/sim/` is the fallback for development and testing without hardware, and most
+integration tests run against it.
+
+### Test Layout
+
+- Unit test suites live in a sibling file next to the implementation, wired in behind `#[cfg(test)]`. Use the
+  `_tests` filename suffix for new suites (some older files use `_test`).
+- Tests covering success, malformed input, boundary values, and error variants of the same behavior belong in the
+  same suite.
+- Use integration tests under `tests/` for behavior exercised through the public API.
+- Prefer deterministic tests and local fixtures. Keep tests that require external resources, timing, or environment
+  state clearly separate and document their prerequisites.
+- Compare floating-point results with a tolerance derived from the algorithm; use exact equality only for values
+  that are constructed exactly.
 
 ### Validation
 
@@ -171,22 +171,6 @@ Adapt feature flags and targets when a project does not support building every
 combination together. Run narrower package, module, or test checks first for fast
 feedback, but complete the broad checks applicable to the repository before
 submitting a change.
-
-## Testing
-
-### Hardware Testing
-
-Testing requires physical devices. The library will return `Error::NotFound` if no supported glasses are connected.
-
-### Dummy Device
-
-For testing without hardware:
-
-```rust
-use ar_drivers::any_glasses_or_dummy;
-
-let glasses = any_glasses_or_dummy() ?; // Falls back to dummy device
-```
 
 ## Documentation/Markdown Files
 

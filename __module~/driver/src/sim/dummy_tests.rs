@@ -1,8 +1,8 @@
 use super::*;
 use crate::fusion::rub_to_frd;
 
-fn quiet_config() -> DummyConfig {
-    DummyConfig {
+fn quiet_config() -> Config {
+    Config {
         max_body_rate_rpm: 0.0,
         linear_jerk_std_dev: 0.0,
         gyro_noise_std_dev: 0.0,
@@ -13,12 +13,12 @@ fn quiet_config() -> DummyConfig {
         hard_iron_drift: ZERO,
         soft_iron_min_eigenvalue: 1.0,
         soft_iron_max_eigenvalue: 1.0,
-        ..DummyConfig::default()
+        ..Config::default()
     }
 }
 
-fn moving_config() -> DummyConfig {
-    DummyConfig {
+fn moving_config() -> Config {
+    Config {
         event_period_us: 100_000,
         max_body_rate_rpm: 1.0,
         ..quiet_config()
@@ -59,7 +59,7 @@ fn starts_with_magnetic_north_forward_frd() {
             magnetometer,
             timestamp,
         } => {
-            assert_eq!(timestamp, DummyConfig::default().event_period_us);
+            assert_eq!(timestamp, Config::default().event_period_us);
             let mag_frd = rub_to_frd(&magnetometer);
             let expected = Vector3::new(50.0, 0.0, 0.0);
 
@@ -87,7 +87,7 @@ fn default_hard_iron_bias_is_under_50_microtesla() {
 
 #[test]
 fn default_body_rate_is_bounded_at_twenty_rpm_per_axis() {
-    let config = DummyConfig::default();
+    let config = Config::default();
     let max_rad_per_sec = config.max_body_rate_rpm * 2.0 * PI / SECONDS_PER_MINUTE;
     let angular_rate = Dummy::new().snapshot().angular_rate_rub;
 
@@ -99,9 +99,9 @@ fn default_body_rate_is_bounded_at_twenty_rpm_per_axis() {
 
 #[test]
 fn default_motion_changes_ideal_magnetic_signal_more_than_configured_noise() {
-    let default_config = DummyConfig::default();
+    let default_config = Config::default();
     let configured_noise = default_config.mag_noise_std_dev;
-    let mut dummy = Dummy::with_config(DummyConfig {
+    let mut dummy = Dummy::with_config(Config {
         linear_jerk_std_dev: 0.0,
         mag_noise_std_dev: 0.0,
         hard_iron_base: ZERO,

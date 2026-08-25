@@ -35,7 +35,7 @@ const MAX_EVENT_PACING_DELAY: Duration = Duration::from_millis(20);
 
 /// Configuration for [`Dummy`].
 #[derive(Clone, Debug)]
-pub struct DummyConfig {
+pub struct Config {
     /// Seed for all deterministic random sampling.
     pub seed: u64,
     /// Virtual elapsed time between emitted sensor events, in microseconds.
@@ -78,7 +78,7 @@ pub struct DummyConfig {
     pub hard_iron_drift_period_us: u64,
 }
 
-impl Default for DummyConfig {
+impl Default for Config {
     fn default() -> Self {
         Self {
             seed: DEFAULT_SEED,
@@ -104,7 +104,7 @@ impl Default for DummyConfig {
     }
 }
 
-impl DummyConfig {
+impl Config {
     /// Returns the deterministic adaptive-calibration stress profile.
     ///
     /// Unlike the stationary default profile, this varies the hard-iron bias
@@ -122,7 +122,7 @@ impl DummyConfig {
 
 /// Current internal state of a [`Dummy`] fixture.
 #[derive(Clone, Debug)]
-pub struct DummySnapshot {
+pub struct Snapshot {
     /// Current virtual time, in microseconds.
     pub timestamp_us: u64,
     /// Whether the next emitted event will be `GlassesEvent::AccGyro`.
@@ -149,7 +149,7 @@ pub struct DummySnapshot {
 
 /// Public deterministic AR glasses simulator.
 pub struct Dummy {
-    config: DummyConfig,
+    config: Config,
     rng: StdRng,
     attitude: UnitQuaternion<f32>,
     position: Vector3<f32>,
@@ -168,19 +168,19 @@ pub struct Dummy {
 impl Dummy {
     /// Creates a deterministic dummy fixture with default configuration.
     pub fn new() -> Self {
-        Self::with_config(DummyConfig::default())
+        Self::with_config(Config::default())
     }
 
     /// Creates a deterministic dummy fixture using `seed` and default dynamics.
     pub fn with_seed(seed: u64) -> Self {
-        Self::with_config(DummyConfig {
+        Self::with_config(Config {
             seed,
-            ..DummyConfig::default()
+            ..Config::default()
         })
     }
 
     /// Creates a deterministic dummy fixture using the provided configuration.
-    pub fn with_config(config: DummyConfig) -> Self {
+    pub fn with_config(config: Config) -> Self {
         let config = normalize_config(config);
         let mut rng = StdRng::seed_from_u64(config.seed);
         let angular_rate_schedule =
@@ -213,8 +213,8 @@ impl Dummy {
     }
 
     /// Returns a copy of the fixture's current internal state.
-    pub fn snapshot(&self) -> DummySnapshot {
-        DummySnapshot {
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
             timestamp_us: self.timestamp_us,
             next_event_is_acc_gyro: self.next_event_is_acc_gyro,
             attitude: self.attitude,
@@ -393,7 +393,7 @@ impl ARGlasses for Dummy {
     }
 }
 
-fn normalize_config(mut config: DummyConfig) -> DummyConfig {
+fn normalize_config(mut config: Config) -> Config {
     config.event_period_us = config.event_period_us.max(1);
     config.max_body_rate_rpm = config.max_body_rate_rpm.max(0.0);
     config.linear_jerk_std_dev = config.linear_jerk_std_dev.max(0.0);
@@ -412,7 +412,7 @@ fn normalize_config(mut config: DummyConfig) -> DummyConfig {
         .magnetic_dip_rad
         .clamp(-MAX_MAGNETIC_DIP_RAD, MAX_MAGNETIC_DIP_RAD);
     if !config.soft_iron_min_eigenvalue.is_finite() || config.soft_iron_min_eigenvalue <= 0.0 {
-        config.soft_iron_min_eigenvalue = DummyConfig::default().soft_iron_min_eigenvalue;
+        config.soft_iron_min_eigenvalue = Config::default().soft_iron_min_eigenvalue;
     }
     if !config.soft_iron_max_eigenvalue.is_finite()
         || config.soft_iron_max_eigenvalue < config.soft_iron_min_eigenvalue

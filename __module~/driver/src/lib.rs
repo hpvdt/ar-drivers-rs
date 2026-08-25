@@ -40,7 +40,6 @@ use nalgebra::{Isometry3, Matrix3, UnitQuaternion, Vector2, Vector3};
 
 /// Sensor fusion implementations and AHRS reference-frame helpers.
 pub mod fusion;
-// pub use fusion::{Fusion, AHRS};
 
 #[cfg(feature = "grawoow")]
 pub mod grawoow;
@@ -62,7 +61,7 @@ pub mod ffi;
 pub mod sim;
 mod util;
 
-pub use sim::{Dummy, DummyConfig, DummySnapshot};
+pub use sim::Dummy;
 
 /// Possible errors resulting from `ar-drivers` API calls
 #[derive(Debug)]
