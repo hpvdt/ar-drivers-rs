@@ -101,10 +101,15 @@ struct CalibrationCandidate {
     correction: Matrix3<f32>,
 }
 
+pub struct ResultV2 {
+    confidence: f32,
+    direction: Option<Vector3<f32>>,
+}
+
 /// Result of evaluating one FRD magnetometer observation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MagCalibrationResult {
-    // TODO: can be simplified to be product of confidence and Option<Vector3<f32>> directly, thereby rendering the impl redundant
+    // TODO: can be simplified to ResultV2, which is a product of confidence and Option<Vector3<f32>> directly, thereby rendering the impl redundant
     /// No correction has passed the live quality gates yet.
     Pending {
         /// Current bounded calibration quality in `[0, 1]`.

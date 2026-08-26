@@ -6,13 +6,10 @@ high level interface of glasses & state estimation, with the following built-in 
 - roll/pitch <= acc + gyro (complementary filter)
   - assuming that acc vector always pointed up, spacecraft moving in that direction can create 1G artificial gravity
     - TODO: this obviously assumes no steadily accelerating frame, at which point up d_acc has to be used for correction
-  - TODO: use ESKF (error-state/multiplicatory KF, https://arxiv.org/abs/1711.02508)
 - gyro-yaw <= gyro (integrate over time)
 - mag-yaw <= mag + roll/pitch (arctan)
-  - TODO: mag calibration?
-     (continuous ellipsoid fitting, assuming homogeneous E-M environment & hardpoint-mounted E-M interference)
 - yaw <= mag-yaw + gyro-gyro (complementary filter)
-  - TODO: use EKF
+  - TODO: add EKF/ESKF (error-state/multiplicatory KF, https://arxiv.org/abs/1711.02508)
 
 CAUTION: unlike [[GlassesEvent]], all states & outputs should use FRD reference frame
  (forward, right, down, corresponding to roll, pitch, yaw in Euler angles-represented rotation)
@@ -25,16 +22,15 @@ use std::fmt;
 use nalgebra::{Quaternion, UnitQuaternion, Vector3, Vector4};
 
 use self::naive_cf::NaiveCF;
-use crate::fusion::mag_calibration::MagCalibrator;
 use crate::{any_glasses_or_dummy, ARGlasses, Result};
 
 mod bad_mag_cause;
 pub use bad_mag_cause::{BadCalibration, BadMagCause, BadReading};
 
-mod mag_calibration;
-pub use mag_calibration::MagCalibrationResult;
+mod mag_calibrator;
+pub use mag_calibrator::MagCalibrator;
 #[cfg(test)]
-mod mag_calibration_test;
+mod mag_calibrator_test;
 mod naive_cf;
 #[cfg(test)]
 mod naive_cf_test;

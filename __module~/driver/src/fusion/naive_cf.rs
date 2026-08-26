@@ -129,7 +129,7 @@ impl NaiveCF {
                 self.state.attitude = attitude * correction;
             }
             None => {
-                //TODO: opposite direction, don't know how to correct
+                // opposite direction, don't know how to correct
             }
         }
     }
@@ -153,6 +153,7 @@ impl NaiveCF {
         let attitude = &self.state.attitude;
         let north_frd = Vector3::new(1.0, 0.0, 0.0);
         let estimated_north = attitude.inverse() * north_frd;
+
         let correction_opt = UnitQuaternion::scaled_rotation_between(
             &estimated_north,
             &mag_corrected,
@@ -166,7 +167,7 @@ impl NaiveCF {
                 self.state.attitude = attitude * correction;
             }
             None => {
-                //TODO: opposite direction, don't know how to correct
+                // opposite direction, don't know how to correct
             }
         }
     }
@@ -321,6 +322,8 @@ impl Fusion for NaiveCF {
     fn update(&mut self) -> () {
         let event = self.next_event();
         match event {
+            // TODO: one of the following estimation caused the stack overflow when running [example/sensor_fusion.rs]
+            // identify the cause
             GlassesEvent::AccGyro {
                 accelerometer,
                 gyroscope,
@@ -335,7 +338,6 @@ impl Fusion for NaiveCF {
                 magnetometer,
                 timestamp,
             } => {
-                // TODO: need an update_mag that avoid the influence of vertical dip of magnetic north?
                 self.update_mag(&magnetometer, timestamp);
                 self.renormalize();
             }

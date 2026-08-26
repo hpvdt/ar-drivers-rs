@@ -1,7 +1,7 @@
 use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 
 use super::bad_mag_cause::BadMagCause;
-use super::mag_calibration::{
+use super::mag_calibrator::{
     MagCalibrationResult, MagCalibrator, MIN_PUBLICATION_CONFIDENCE, MIN_PUBLICATION_STREAK,
 };
 
