@@ -113,7 +113,7 @@ fn mag_calibrator_publishes_before_the_buffer_is_full() {
         } else {
             qualifying_streak = 0;
         }
-        if result.calibrated().is_some() {
+        if result.corrected().is_some() {
             assert!(qualifying_streak >= MIN_PUBLICATION_STREAK);
             published_at = Some(i + 1);
             break;
@@ -184,7 +184,7 @@ fn mag_calibrator_keeps_last_correction_after_rejected_refit() {
     assert_eq!(result.confidence(), 0.0);
     assert_vec_close(
         result
-            .calibrated()
+            .corrected()
             .expect("last published correction was discarded"),
         expected,
         0.05,
@@ -263,10 +263,10 @@ fn mag_calibrator_converges_faster_with_cache_replay() {
         let raw = offset + distortion * sample_direction(i % 63, 63);
         let replayed_result = replayed.evaluate_correct(raw, None, i as u64).unwrap();
         let plain_result = plain.evaluate_correct(raw, None, i as u64).unwrap();
-        if replayed_result.calibrated().is_some() && replayed_published_at.is_none() {
+        if replayed_result.corrected().is_some() && replayed_published_at.is_none() {
             replayed_published_at = Some(i);
         }
-        if plain_result.calibrated().is_some() && plain_published_at.is_none() {
+        if plain_result.corrected().is_some() && plain_published_at.is_none() {
             plain_published_at = Some(i);
         }
         if replayed_converged_at.is_none()
@@ -731,7 +731,7 @@ fn train_calibrator<const N: usize>(
         result = Some(calibrator.evaluate_correct(offset + distortion * direction, None, 0));
     }
     assert!(
-        result.is_some_and(|result| result.is_ok_and(|result| result.calibrated().is_some())),
+        result.is_some_and(|result| result.is_ok_and(|result| result.corrected().is_some())),
         "online calibration did not converge"
     );
     calibrator
@@ -758,6 +758,6 @@ fn assert_vec_close(actual: Vector3<f32>, expected: Vector3<f32>, tolerance: f32
 fn calibrated(result: Result<MagCalibrationResult, BadMagCause>) -> Vector3<f32> {
     result
         .expect("magnetometer evaluation failed")
-        .calibrated()
+        .corrected()
         .expect("calibration is still pending")
 }

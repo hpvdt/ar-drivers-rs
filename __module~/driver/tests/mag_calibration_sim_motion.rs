@@ -93,7 +93,7 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
              mode={mode_label}, timestamp={last_timestamp}, eval_count={eval_count}, \
              current_confidence={}, max_confidence={max_confidence}, \
              quality_streak={quality_streak}, max_quality_streak={max_quality_streak}",
-            fusion.mag.get_confidence(),
+            fusion.magCalibrator.get_confidence(),
         );
         if validation_start.is_some_and(|start: Instant| start.elapsed() >= validation_duration) {
             break;
@@ -126,12 +126,12 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
             AttitudeMode::Never => None,
         };
         let result = fusion
-            .mag
+            .magCalibrator
             .evaluate_correct(raw_frd, gravity_direction, timestamp);
         eval_time += eval_start.elapsed();
         eval_count += 1;
         let confidence = result.as_ref().map_or_else(
-            |_| fusion.mag.get_confidence(),
+            |_| fusion.magCalibrator.get_confidence(),
             |result| result.confidence(),
         );
         confidence_sum += f64::from(confidence);

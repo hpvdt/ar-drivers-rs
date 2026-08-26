@@ -134,7 +134,7 @@ fn format_event(
                 "Magnetometer FRD: mag=[x={:+10.4}, y={:+10.4}, z={:+10.4}] timestamp={:>12}",
                 mag_frd.x, mag_frd.y, mag_frd.z, timestamp
             );
-            let calibration = match fusion.mag.evaluate_correct(mag_frd, None, timestamp) {
+            let calibration = match fusion.magCalibrator.evaluate_correct(mag_frd, None, timestamp) {
                 Ok(MagCalibrationResult::Calibrated {
                     direction,
                     confidence,

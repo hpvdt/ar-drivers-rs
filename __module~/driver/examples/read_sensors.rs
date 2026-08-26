@@ -46,7 +46,7 @@ fn main() {
                     mag_frd.x, mag_frd.y, mag_frd.z, timestamp
                 );
                 println!("  - converted from raw {:?}", event);
-                match fusion.mag.evaluate_correct(mag_frd, None, timestamp) {
+                match fusion.magCalibrator.evaluate_correct(mag_frd, None, timestamp) {
                     Ok(MagCalibrationResult::Calibrated {
                         direction,
                         confidence,

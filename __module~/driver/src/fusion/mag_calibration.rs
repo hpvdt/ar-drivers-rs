@@ -104,6 +104,7 @@ struct CalibrationCandidate {
 /// Result of evaluating one FRD magnetometer observation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MagCalibrationResult {
+    // TODO: can be simplified to be product of confidence and Option<Vector3<f32>> directly, thereby rendering the impl redundant
     /// No correction has passed the live quality gates yet.
     Pending {
         /// Current bounded calibration quality in `[0, 1]`.
@@ -127,7 +128,7 @@ impl MagCalibrationResult {
     }
 
     /// Returns the corrected direction only when a correction is published.
-    pub fn calibrated(self) -> Option<Vector3<f32>> {
+    pub fn corrected(self) -> Option<Vector3<f32>> {
         match self {
             Self::Pending { .. } => None,
             Self::Calibrated { direction, .. } => Some(direction),

@@ -12,7 +12,7 @@ fn update_mag_uses_shared_mag_calibrator() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let scale = Vector3::new(3.0, 2.0, 1.5);
-    fusion.state.mag = seeded_calibrator(offset, scale);
+    fusion.state.magCalibrator = seeded_calibrator(offset, scale);
     fusion.state.attitude = UnitQuaternion::identity();
     fusion.state.corrections.mag = Default::default();
 
@@ -29,7 +29,7 @@ fn update_mag_uses_shared_mag_calibrator() {
 #[test]
 fn update_mag_discards_ill_conditioned_calibration() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
-    fusion.state.mag = nearly_collinear_calibrator();
+    fusion.state.magCalibrator = nearly_collinear_calibrator();
     fusion.state.attitude = UnitQuaternion::identity();
     fusion.state.corrections.mag = Default::default();
 

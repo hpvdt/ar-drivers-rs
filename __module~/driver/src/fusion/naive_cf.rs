@@ -135,18 +135,18 @@ impl NaiveCF {
     }
 
     pub(super) fn update_mag(&mut self, mag_rub: &Vector3<f32>, t: u64) -> () {
-        let raw_mag = rub_to_frd(mag_rub); // reading is always muT (microTesla) pointing to north
+        let mag_raw = rub_to_frd(mag_rub); // reading is always muT (microTesla) pointing to north
 
         // gravity direction is already estimated by the acc complementary filter
-        let gravity_frd = self.state.attitude.inverse() * Self::UP_FRD;
-        let mag_north: Vector3<f32> = match self
+        let gravity_hint = Some(self.state.attitude.inverse() * Self::UP_FRD);
+        let mag_corrected: Vector3<f32> = match self
             .state
-            .mag
-            .evaluate_correct(raw_mag, Some(gravity_frd), t)
+            .magCalibrator
+            .evaluate_correct(mag_raw, gravity_hint, t)
             .ok()
-            .and_then(|result| result.calibrated())
+            .and_then(|result| result.corrected())
         {
-            Some(mag_north) => mag_north,
+            Some(r) => r,
             None => return,
         };
 
@@ -155,7 +155,7 @@ impl NaiveCF {
         let estimated_north = attitude.inverse() * north_frd;
         let correction_opt = UnitQuaternion::scaled_rotation_between(
             &estimated_north,
-            &mag_north,
+            &mag_corrected,
             Self::BASE_MAG_RATIO,
         );
 
@@ -327,7 +327,6 @@ impl Fusion for NaiveCF {
                 timestamp,
             } => {
                 self.update_gyro(&gyroscope, timestamp);
-                // TODO: need an update_acc that avoid yaw?
                 self.update_acc(&accelerometer, timestamp);
                 self.renormalize();
             }
@@ -336,6 +335,7 @@ impl Fusion for NaiveCF {
                 magnetometer,
                 timestamp,
             } => {
+                // TODO: need an update_mag that avoid the influence of vertical dip of magnetic north?
                 self.update_mag(&magnetometer, timestamp);
                 self.renormalize();
             }

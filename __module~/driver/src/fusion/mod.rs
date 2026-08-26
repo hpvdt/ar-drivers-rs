@@ -166,7 +166,7 @@ pub struct FusionState {
     // drift along the unobserved axis (seen as >20 deg worst-case heading
     // error in the SimMotion integration test with 255 samples).
     /// Magnetometer calibration state shared by all fusion implementations.
-    pub mag: MagCalibrator<1023>,
+    pub magCalibrator: MagCalibrator<1023>,
 }
 
 impl FusionState {
@@ -176,7 +176,7 @@ impl FusionState {
             glasses,
             attitude: UnitQuaternion::identity(),
             corrections: NineAxis::default(),
-            mag: MagCalibrator::new(),
+            magCalibrator: MagCalibrator::new(),
         }
     }
 }
