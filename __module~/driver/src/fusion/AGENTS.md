@@ -53,7 +53,7 @@ always reset it.
 ### Production cache size
 
 The cache must outlast one motion pattern, not merely contain enough rows for nine coefficients. With `N = 255`, one
-roughly ten-second dummy motion segment covers a near-planar circle and permits worst-case heading errors above
+roughly ten-second SimMotion segment covers a near-planar circle and permits worst-case heading errors above
 20 degrees. `FusionState` therefore uses `N = 1023`, spanning several motion segments and keeping the direct-solver
 baseline near 9 degrees worst case.
 
@@ -325,7 +325,7 @@ from `__module~/driver`:
 ```bash
 cargo test --package ar-drivers --no-default-features --lib fusion::mag_calibration_test
 cargo test --package ar-drivers --no-default-features --lib fusion::naive_cf_test
-cargo test --package ar-drivers --no-default-features --test mag_calibration_dummy regression -- --nocapture
+cargo test --package ar-drivers --no-default-features --test mag_calibration_sim_motion regression -- --nocapture
 ```
 
 Then run the applicable broad Rust checks from the parent guide.

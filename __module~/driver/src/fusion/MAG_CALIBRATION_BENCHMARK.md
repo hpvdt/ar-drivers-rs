@@ -2,7 +2,7 @@
 
 ## Method
 
-Use the deterministic `regression` cases in `tests/mag_calibration_dummy.rs`, once with co-timestamped accelerometer
+Use the deterministic `regression` cases in `tests/mag_calibration_sim_motion.rs`, once with co-timestamped accelerometer
 gravity and once without gravity.
 
 The integration test
@@ -13,7 +13,7 @@ Command:
 
 ```bash
 cargo test --package ar-drivers --no-default-features \
-  --test mag_calibration_dummy regression -- --nocapture
+  --test mag_calibration_sim_motion regression -- --nocapture
 ```
 
 These are debug test-profile timings, intended only for before/after comparisons on the same machine. Wall-clock time
@@ -193,7 +193,7 @@ schedule and does not remove per-call work.
 ## Occupancy-based coverage and publication hysteresis
 
 The four seeds added to the regression suite exposed two failures of the corrected-covariance coverage score. Seed
-`17611800246992533302` publishes at roughly twenty seconds, while the dummy still traverses only the first two of its
+`17611800246992533302` publishes at roughly twenty seconds, while SimMotion still traverses only the first two of its
 three ten-second constant-rate motion segments: the retained readings form two near-circular bands, whole-sphere probe
 error of the working candidate is `>170 degrees`, and the third segment then produces `30 degree` in-band errors. The
 coverage score nonetheless reports about `0.70`, because it grades `A C_raw A^T` - the fit's own reshaping of the
@@ -225,7 +225,7 @@ to `0.32` with a `0.24` reset floor lets its streak accumulate across its freque
 - **Test result:** 2 passed, 0 failed (nine-seed suite, both gravity modes)
 - **Complete benchmark duration:** 1115.47 s combined; a confirmation re-run aborted the with-gravity mode on
   wall-clock starvation while the without-gravity mode passed in the same process (974.67 s), and the with-gravity
-  mode then passed solo (551.57 s). The 120-second harness assert is wall-clock based while the dummy paces events in
+  mode then passed solo (551.57 s). The 120-second harness assert is wall-clock based while SimMotion paces events in
   real time, so heavy parallel machine load can starve a mode independently of calibration behavior.
 
 ### Nine-seed averages

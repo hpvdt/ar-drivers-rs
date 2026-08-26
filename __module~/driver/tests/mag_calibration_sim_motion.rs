@@ -1,8 +1,8 @@
 use std::time::{Duration, Instant};
 
 use ar_drivers::fusion::{rub_to_frd, FusionState, MagCalibrationResult};
-use ar_drivers::sim::dummy::Config;
-use ar_drivers::{ARGlasses, Dummy, GlassesEvent};
+use ar_drivers::sim::sim_motion::Config;
+use ar_drivers::{ARGlasses, GlassesEvent, SimMotion};
 use nalgebra::Vector3;
 use serial_test::serial;
 
@@ -53,8 +53,8 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         .clamp(-30.0f32.to_radians(), 30.0f32.to_radians());
     let magnetic_world_rub =
         Vector3::new(0.0, dip.sin(), -dip.cos()) * config.magnetic_field_strength;
-    let mut dummy = Dummy::with_config(config);
-    let mut fusion = FusionState::new(Box::new(Dummy::new()));
+    let mut sim_motion = SimMotion::with_config(config);
+    let mut fusion = FusionState::new(Box::new(SimMotion::new()));
     let required_validation_duration = Duration::from_secs(5);
     let validation_duration = Duration::from_secs(20);
     let warmup_duration = Duration::from_secs(5);
@@ -98,10 +98,10 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         if validation_start.is_some_and(|start: Instant| start.elapsed() >= validation_duration) {
             break;
         }
-        let ground_truth = dummy.snapshot();
+        let ground_truth = sim_motion.snapshot();
         let accelerometer_frd = (!ground_truth.next_event_is_acc_gyro)
-            .then(|| rub_to_frd(&dummy.accelerometer_reading()));
-        let event = dummy.read_event().unwrap();
+            .then(|| rub_to_frd(&sim_motion.accelerometer_reading()));
+        let event = sim_motion.read_event().unwrap();
         let (magnetometer, timestamp) = match event {
             GlassesEvent::AccGyro { .. } => continue,
             GlassesEvent::Magnetometer {
@@ -121,7 +121,7 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         let gravity_direction = match attitude_mode {
             AttitudeMode::Always => Some(
                 accelerometer_frd
-                    .expect("dummy magnetometer event did not have an accelerometer sample"),
+                    .expect("sim_motion magnetometer event did not have an accelerometer sample"),
             ),
             AttitudeMode::Never => None,
         };

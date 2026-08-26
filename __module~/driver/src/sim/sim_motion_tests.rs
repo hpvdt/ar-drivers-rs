@@ -27,9 +27,9 @@ fn moving_config() -> Config {
 
 #[test]
 fn starts_level_with_felt_gravity_up_frd() {
-    let mut dummy = Dummy::with_config(quiet_config());
+    let mut sim_motion = SimMotion::with_config(quiet_config());
 
-    match dummy.read_event().unwrap() {
+    match sim_motion.read_event().unwrap() {
         GlassesEvent::AccGyro {
             accelerometer,
             timestamp,
@@ -51,10 +51,10 @@ fn starts_level_with_felt_gravity_up_frd() {
 
 #[test]
 fn starts_with_magnetic_north_forward_frd() {
-    let mut dummy = Dummy::with_config(quiet_config());
-    let _ = dummy.read_event().unwrap();
+    let mut sim_motion = SimMotion::with_config(quiet_config());
+    let _ = sim_motion.read_event().unwrap();
 
-    match dummy.read_event().unwrap() {
+    match sim_motion.read_event().unwrap() {
         GlassesEvent::Magnetometer {
             magnetometer,
             timestamp,
@@ -75,7 +75,7 @@ fn starts_with_magnetic_north_forward_frd() {
 
 #[test]
 fn default_hard_iron_bias_is_under_50_microtesla() {
-    let hard_iron = Dummy::new().snapshot().hard_iron;
+    let hard_iron = SimMotion::new().snapshot().hard_iron;
 
     assert!(
         hard_iron.norm() < 50.0,
@@ -89,7 +89,7 @@ fn default_hard_iron_bias_is_under_50_microtesla() {
 fn default_body_rate_is_bounded_at_twenty_rpm_per_axis() {
     let config = Config::default();
     let max_rad_per_sec = config.max_body_rate_rpm * 2.0 * PI / SECONDS_PER_MINUTE;
-    let angular_rate = Dummy::new().snapshot().angular_rate_rub;
+    let angular_rate = SimMotion::new().snapshot().angular_rate_rub;
 
     assert_eq!(config.max_body_rate_rpm, 20.0);
     for component in angular_rate.iter() {
@@ -101,7 +101,7 @@ fn default_body_rate_is_bounded_at_twenty_rpm_per_axis() {
 fn default_motion_changes_ideal_magnetic_signal_more_than_configured_noise() {
     let default_config = Config::default();
     let configured_noise = default_config.mag_noise_std_dev;
-    let mut dummy = Dummy::with_config(Config {
+    let mut sim_motion = SimMotion::with_config(Config {
         linear_jerk_std_dev: 0.0,
         mag_noise_std_dev: 0.0,
         hard_iron_base: ZERO,
@@ -113,7 +113,7 @@ fn default_motion_changes_ideal_magnetic_signal_more_than_configured_noise() {
     let mut magnetometers = Vec::new();
 
     while magnetometers.len() < 2 {
-        if let GlassesEvent::Magnetometer { magnetometer, .. } = dummy.read_event().unwrap() {
+        if let GlassesEvent::Magnetometer { magnetometer, .. } = sim_motion.read_event().unwrap() {
             magnetometers.push(magnetometer);
         }
     }
@@ -129,15 +129,15 @@ fn default_motion_changes_ideal_magnetic_signal_more_than_configured_noise() {
 
 #[test]
 fn soft_iron_is_fixed_positive_definite_and_bounded() {
-    let mut dummy = Dummy::new();
-    let config = dummy.config.clone();
+    let mut sim_motion = SimMotion::new();
+    let config = sim_motion.config.clone();
     let lower_eigenvalue = config.soft_iron_min_eigenvalue;
     let upper_eigenvalue = config.soft_iron_max_eigenvalue;
-    let initial_soft_iron = dummy.snapshot().soft_iron;
+    let initial_soft_iron = sim_motion.snapshot().soft_iron;
 
     for sample in 0..=360 {
-        dummy.timestamp_us = config.hard_iron_drift_period_us * sample / 360;
-        let soft_iron = dummy.snapshot().soft_iron;
+        sim_motion.timestamp_us = config.hard_iron_drift_period_us * sample / 360;
+        let soft_iron = sim_motion.snapshot().soft_iron;
         let asymmetry = soft_iron - soft_iron.transpose();
 
         assert_eq!(soft_iron, initial_soft_iron);
@@ -161,13 +161,13 @@ fn gyro_matches_each_integrated_angular_rate() {
     let config = moving_config();
     let dt = config.event_period_us as f32 / MICROS_PER_SECOND;
     let max_rad_per_sec = config.max_body_rate_rpm * 2.0 * PI / SECONDS_PER_MINUTE;
-    let mut dummy = Dummy::with_config(config);
+    let mut sim_motion = SimMotion::with_config(config);
     let mut observed_rates = Vec::new();
 
     for _ in 0..350 {
-        let before = dummy.snapshot();
-        let event = dummy.read_event().unwrap();
-        let after = dummy.snapshot();
+        let before = sim_motion.snapshot();
+        let event = sim_motion.read_event().unwrap();
+        let after = sim_motion.snapshot();
         let expected_attitude =
             before.attitude * UnitQuaternion::from_scaled_axis(before.angular_rate_rub * dt);
 
@@ -200,15 +200,15 @@ fn gyro_matches_each_integrated_angular_rate() {
 
 #[test]
 fn trajectory_covers_roll_pitch_yaw_and_non_planar_magnetometer_space() {
-    let mut dummy = Dummy::with_config(moving_config());
+    let mut sim_motion = SimMotion::with_config(moving_config());
     let mut angle_min = Vector3::repeat(f32::INFINITY);
     let mut angle_max = Vector3::repeat(f32::NEG_INFINITY);
     let mut magnetometers = Vec::new();
 
     for _ in 0..3_600 {
-        if let GlassesEvent::Magnetometer { magnetometer, .. } = dummy.read_event().unwrap() {
+        if let GlassesEvent::Magnetometer { magnetometer, .. } = sim_motion.read_event().unwrap() {
             magnetometers.push(magnetometer);
-            let (roll, pitch, yaw) = dummy.snapshot().attitude.euler_angles();
+            let (roll, pitch, yaw) = sim_motion.snapshot().attitude.euler_angles();
             let angles = Vector3::new(roll, pitch, yaw);
             angle_min = angle_min.zip_map(&angles, f32::min);
             angle_max = angle_max.zip_map(&angles, f32::max);

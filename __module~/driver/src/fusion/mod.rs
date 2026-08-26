@@ -74,7 +74,7 @@ pub trait Fusion: Send + FusionInconsistency {
 }
 
 impl dyn Fusion {
-    /// Create a fusion instance over whichever glasses are connected, or the dummy device.
+    /// Create a fusion instance over whichever glasses are connected, or the SimMotion device.
     pub fn any_cf() -> Result<Box<dyn Fusion>> {
         // let glasses = any_glasses()?;
         let glasses = any_glasses_or_dummy()?;
@@ -164,7 +164,7 @@ pub struct FusionState {
     // it only spans one rotation segment, the retained readings cover a
     // near-planar circle on the sphere, and the ellipsoid fit is free to
     // drift along the unobserved axis (seen as >20 deg worst-case heading
-    // error in the dummy integration test with 255 samples).
+    // error in the SimMotion integration test with 255 samples).
     /// Magnetometer calibration state shared by all fusion implementations.
     pub mag: MagCalibrator<1023>,
 }

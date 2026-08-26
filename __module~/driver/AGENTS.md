@@ -15,7 +15,7 @@ output any TODO lists or "next steps" unless the user explicitly asks for a plan
 
 The crate is a single library built as both `rlib` and `cdylib`. Every supported glasses model implements one common
 device trait defined in the crate root. The root also owns the shared event, error, and display-mode types, runs device
-discovery across all enabled drivers, and can fall back to a simulated dummy device when no hardware is found. A
+discovery across all enabled drivers, and can fall back to a simulated SimMotion device when no hardware is found. A
 singleton connection layer runs sensor fusion on a background thread, and a C ABI layer exposes the library to the
 Unity integration.
 
@@ -141,7 +141,7 @@ All features are enabled by default.
 ## Testing
 
 Hardware paths require physical devices; discovery reports a not-found error when no supported glasses are connected.
-The deterministic dummy fixture in `src/sim/` is the fallback for development and testing without hardware, and most
+The deterministic SimMotion fixture in `src/sim/` is the fallback for development and testing without hardware, and most
 integration tests run against it.
 
 ### Test Layout

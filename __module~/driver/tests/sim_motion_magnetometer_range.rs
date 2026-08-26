@@ -1,11 +1,11 @@
-use ar_drivers::sim::dummy::Config;
-use ar_drivers::{ARGlasses, Dummy, GlassesEvent};
+use ar_drivers::sim::sim_motion::Config;
+use ar_drivers::{ARGlasses, GlassesEvent, SimMotion};
 use nalgebra::Vector3;
 
 const DEFAULT_MAGNETOMETER_RANGE: f32 = 2_000.0;
 
 fn magnetometer_for_range(range: f32, hard_iron: Vector3<f32>) -> Vector3<f32> {
-    let mut dummy = Dummy::with_config(Config {
+    let mut sim_motion = SimMotion::with_config(Config {
         max_body_rate_rpm: 0.0,
         linear_jerk_std_dev: 0.0,
         mag_noise_std_dev: 0.0,
@@ -18,8 +18,8 @@ fn magnetometer_for_range(range: f32, hard_iron: Vector3<f32>) -> Vector3<f32> {
         ..Config::default()
     });
 
-    dummy.read_event().unwrap();
-    match dummy.read_event().unwrap() {
+    sim_motion.read_event().unwrap();
+    match sim_motion.read_event().unwrap() {
         GlassesEvent::Magnetometer { magnetometer, .. } => magnetometer,
         event => panic!("expected Magnetometer, got {:?}", event),
     }
