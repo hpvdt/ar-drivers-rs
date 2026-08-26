@@ -1,6 +1,11 @@
 //! Deterministic simulated AR glasses for integration tests.
+//!
+//! Events are precomputed by a background generator thread into a small
+//! bounded buffer, so [`ARGlasses::read_event`] only loads from that buffer
+//! while the simulation cost stays off the caller's critical path.
 
 use std::f32::consts::PI;
+use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -9,7 +14,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use rand_distr::{Distribution, Normal};
 
-use crate::{ARGlasses, DisplayMode, GlassesEvent, Result, Side};
+use crate::{ARGlasses, DisplayMode, Error, GlassesEvent, Result, Side};
 
 /// The physical gravity direction for a level stationary fixture in RUB.
 pub static GRAVITY_DOWN: Vector3<f32> = Vector3::new(0.0, -9.81, 0.0);
@@ -32,6 +37,10 @@ const DEFAULT_MAGNETOMETER_RANGE: f32 = 2_000.0;
 /// Upper bound for the wall-clock pacing delay applied per event. Events with
 /// a longer virtual period are emitted immediately.
 const MAX_EVENT_PACING_DELAY: Duration = Duration::from_millis(20);
+
+/// How many computed events the background generator may queue ahead of
+/// `read_event`, bounding both memory and generator CPU usage.
+const GENERATOR_BUFFERED_EVENTS: usize = 4;
 
 /// Configuration for [`SimMotion`].
 #[derive(Clone, Debug)]
@@ -148,6 +157,11 @@ pub struct Snapshot {
 }
 
 /// Public deterministic AR glasses simulator.
+///
+/// The fixture owns a synchronous mirror of the simulation state for
+/// [`Self::snapshot`] and [`Self::accelerometer_reading`], while a background
+/// generator thread runs an identically seeded copy to precompute the event
+/// stream into a bounded buffer.
 pub struct SimMotion {
     config: Config,
     rng: StdRng,
@@ -162,6 +176,7 @@ pub struct SimMotion {
     timestamp_us: u64,
     next_event_is_acc_gyro: bool,
     display_mode: DisplayMode,
+    receiver: Receiver<GlassesEvent>,
     last_event_at: Option<Instant>,
 }
 
@@ -180,8 +195,29 @@ impl SimMotion {
     }
 
     /// Creates a deterministic SimMotion fixture using the provided configuration.
+    ///
+    /// Spawns a background generator thread that computes sensor events ahead
+    /// of the reader into a bounded buffer, so [`ARGlasses::read_event`] spends
+    /// only the time needed to load one event from that buffer.
     pub fn with_config(config: Config) -> Self {
         let config = normalize_config(config);
+        let (sender, receiver) = mpsc::sync_channel(GENERATOR_BUFFERED_EVENTS);
+
+        // The generator copy never consumes events, so it gets a dead receiver.
+        let (_, dead_receiver) = mpsc::channel();
+        let mut generator = Self::build(config.clone(), dead_receiver);
+        thread::spawn(move || {
+            while let Ok(event) = generator.next_event() {
+                if sender.send(event).is_err() {
+                    break;
+                }
+            }
+        });
+
+        Self::build(config, receiver)
+    }
+
+    fn build(config: Config, receiver: Receiver<GlassesEvent>) -> Self {
         let mut rng = StdRng::seed_from_u64(config.seed);
         let angular_rate_schedule =
             sample_angular_rate_schedule(&mut rng, config.max_body_rate_rpm);
@@ -208,6 +244,7 @@ impl SimMotion {
             timestamp_us: 0,
             next_event_is_acc_gyro: true,
             display_mode: DisplayMode::SameOnBoth,
+            receiver,
             last_event_at: None,
         }
     }
@@ -227,6 +264,43 @@ impl SimMotion {
             hard_iron: self.current_hard_iron(),
             soft_iron: self.current_soft_iron(),
         }
+    }
+
+    /// Computes the next event synchronously: paces emissions to the
+    /// configured event period in wall time, samples the sensors, and advances
+    /// the simulation. Used by the background generator thread; the public
+    /// [`ARGlasses::read_event`] loads precomputed events from the buffer.
+    fn next_event(&mut self) -> Result<GlassesEvent> {
+        if let Some(last) = self.last_event_at {
+            let period = Duration::from_micros(self.config.event_period_us);
+            if period <= MAX_EVENT_PACING_DELAY {
+                let delay = period.saturating_sub(last.elapsed());
+                if !delay.is_zero() {
+                    thread::sleep(delay);
+                }
+            }
+        }
+        self.last_event_at = Some(Instant::now());
+
+        let timestamp = self.timestamp_us;
+        let result = if self.next_event_is_acc_gyro {
+            self.next_event_is_acc_gyro = false;
+            GlassesEvent::AccGyro {
+                accelerometer: self.accelerometer_reading(),
+                gyroscope: self.gyroscope_reading(),
+                timestamp,
+            }
+        } else {
+            self.next_event_is_acc_gyro = true;
+            GlassesEvent::Magnetometer {
+                magnetometer: self.magnetometer_reading(),
+                timestamp,
+            }
+        };
+
+        self.advance_state();
+
+        Ok(result)
     }
 
     fn advance_state(&mut self) {
@@ -329,11 +403,14 @@ impl ARGlasses for SimMotion {
         Ok(String::from("sim_motion!"))
     }
 
-    /// Blocks briefly to pace emissions to the configured event period:
-    /// sleeps for the period minus the wall time elapsed since the previous
-    /// event, clamped to zero. Virtual periods longer than
+    /// Blocks briefly to pace emissions to the configured event period, then
+    /// loads the next event from the buffer that the background generator
+    /// thread keeps filled ahead of the reader. Simulation cost is therefore
+    /// not paid on this call path. Virtual periods longer than
     /// [`MAX_EVENT_PACING_DELAY`] cannot be represented this way, so events
     /// are emitted immediately instead.
+    ///
+    /// Returns [`Error::Other`] if the generator thread has stopped.
     fn read_event(&mut self) -> Result<GlassesEvent> {
         if let Some(last) = self.last_event_at {
             let period = Duration::from_micros(self.config.event_period_us);
@@ -346,23 +423,15 @@ impl ARGlasses for SimMotion {
         }
         self.last_event_at = Some(Instant::now());
 
-        let timestamp = self.timestamp_us;
-        let result = if self.next_event_is_acc_gyro {
-            self.next_event_is_acc_gyro = false;
-            GlassesEvent::AccGyro {
-                accelerometer: self.accelerometer_reading(),
-                gyroscope: self.gyroscope_reading(),
-                timestamp,
-            }
-        } else {
-            self.next_event_is_acc_gyro = true;
-            GlassesEvent::Magnetometer {
-                magnetometer: self.magnetometer_reading(),
-                timestamp,
-            }
-        };
+        let result = self
+            .receiver
+            .recv()
+            .map_err(|_| Error::Other("sim_motion event generator stopped"))?;
 
+        // Advance the mirror state once per consumed event so `snapshot()`
+        // keeps matching the emitted event sequence exactly.
         self.advance_state();
+        self.next_event_is_acc_gyro = !self.next_event_is_acc_gyro;
 
         Ok(result)
     }
