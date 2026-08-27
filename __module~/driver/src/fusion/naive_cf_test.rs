@@ -2,6 +2,7 @@ use nalgebra::{UnitQuaternion, Vector3};
 
 use super::mag_calibrator::MagCalibrator;
 use super::naive_cf::NaiveCF;
+use super::Fusion;
 
 fn frd_to_rub(v: Vector3<f32>) -> Vector3<f32> {
     Vector3::new(v.y, -v.z, -v.x)
@@ -12,7 +13,7 @@ fn update_mag_uses_shared_mag_calibrator() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let scale = Vector3::new(3.0, 2.0, 1.5);
-    fusion.state.magCalibrator = seeded_calibrator(offset, scale);
+    fusion.state.magCalibrator = Box::new(seeded_calibrator(offset, scale));
     fusion.state.attitude = UnitQuaternion::identity();
     fusion.state.corrections.mag = Default::default();
 
@@ -29,7 +30,7 @@ fn update_mag_uses_shared_mag_calibrator() {
 #[test]
 fn update_mag_discards_ill_conditioned_calibration() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
-    fusion.state.magCalibrator = nearly_collinear_calibrator();
+    fusion.state.magCalibrator = Box::new(nearly_collinear_calibrator());
     fusion.state.attitude = UnitQuaternion::identity();
     fusion.state.corrections.mag = Default::default();
 
@@ -64,6 +65,48 @@ fn nearly_collinear_calibrator() -> MagCalibrator<1023> {
         );
     }
     calibrator
+}
+
+/// `NaiveCF` embeds the ~104 KB `MagCalibrator<1023>` inline in `FusionState`
+/// and is constructed by value through `Default::default()` -> `new()` ->
+/// `FusionState::new()` -> `NaiveCF::new()` -> `Box::new`. In debug builds
+/// each layer keeps its own copy (plus one temporary per large array field)
+/// live on the stack, peaking above 1 MiB; `examples/sensor_fusion.rs`
+/// overflows the 1 MiB Windows main-thread stack inside `any_cf()`, before
+/// the first `update()`. The struct must become pointer-sized so by-value
+/// constructor moves stay cheap. This assertion fails cleanly while the
+/// calibrator is stored inline.
+#[test]
+fn naive_cf_is_small_enough_for_by_value_construction() {
+    assert!(
+        std::mem::size_of::<NaiveCF>() <= 1024,
+        "NaiveCF is {} bytes; by-value constructor moves overflow a 1 MiB \
+         main-thread stack in debug builds",
+        std::mem::size_of::<NaiveCF>()
+    );
+}
+
+/// End-to-end reproduction of the `sensor_fusion.rs` overflow: construction
+/// plus a mixed acc/gyro/mag update stream must fit in a bounded stack.
+/// With the calibrator stored inline this aborts the test process with a
+/// stack overflow (debug construction peaks above 1 MiB) rather than failing
+/// cleanly. With it boxed, the measured debug peak is 256-320 KiB: one
+/// ~104 KB calibrator instance plus its per-field temporaries during
+/// `default()`, then the update path's ~64-128 KiB.
+#[test]
+fn construction_and_update_fit_bounded_stack() {
+    const STACK_BUDGET: usize = 384 * 1024;
+    std::thread::Builder::new()
+        .stack_size(STACK_BUDGET)
+        .spawn(|| {
+            let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
+            for _ in 0..20 {
+                fusion.update();
+            }
+        })
+        .expect("spawn fusion thread")
+        .join()
+        .expect("fusion thread panicked");
 }
 
 fn sample_direction(i: usize) -> Vector3<f32> {

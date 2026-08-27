@@ -322,8 +322,12 @@ impl Fusion for NaiveCF {
     fn update(&mut self) -> () {
         let event = self.next_event();
         match event {
-            // TODO: one of the following estimation caused the stack overflow when running [example/sensor_fusion.rs]
-            // identify the cause
+            // Stack overflow seen in [example/sensor_fusion.rs] is NOT caused by these
+            // update paths (they need only ~64-128 KiB in debug). The crash happens in
+            // `NaiveCF::new` construction: the ~104 KB inline `MagCalibrator<1023>` is
+            // moved by value through five constructor layers, whose debug temporaries
+            // exceed the 1 MiB Windows main-thread stack. See `naive_cf_test` and
+            // `fusion/TODO.md`.
             GlassesEvent::AccGyro {
                 accelerometer,
                 gyroscope,

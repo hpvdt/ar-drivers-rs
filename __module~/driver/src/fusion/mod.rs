@@ -162,7 +162,11 @@ pub struct FusionState {
     // drift along the unobserved axis (seen as >20 deg worst-case heading
     // error in the SimMotion integration test with 255 samples).
     /// Magnetometer calibration state shared by all fusion implementations.
-    pub magCalibrator: MagCalibrator<1023>,
+    ///
+    /// Boxed: the calibrator is ~104 KB inline, and constructing it by value
+    /// through the `FusionState::new`/`NaiveCF::new` chain overflowed the
+    /// 1 MiB Windows main-thread stack in debug builds.
+    pub magCalibrator: Box<MagCalibrator<1023>>,
 }
 
 impl FusionState {
@@ -172,7 +176,7 @@ impl FusionState {
             glasses,
             attitude: UnitQuaternion::identity(),
             corrections: NineAxis::default(),
-            magCalibrator: MagCalibrator::new(),
+            magCalibrator: Box::new(MagCalibrator::new()),
         }
     }
 }
