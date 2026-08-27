@@ -8,13 +8,24 @@ use std::io::stdout;
 use std::time::{Duration, Instant};
 
 use ar_drivers::any_glasses_or_dummy;
-use ar_drivers::fusion::{rub_to_frd, FusionState, MagCalibrationResult};
+use ar_drivers::fusion::{rub_to_frd, CalibrationQuality, FusionState, MagCalibrationResult};
 use ar_drivers::GlassesEvent;
 use ratatui::backend::CrosstermBackend;
 use ratatui::widgets::{Block, Clear, Paragraph, Widget};
 use ratatui::{Terminal, TerminalOptions, Viewport};
 
 const FOOTER_HEIGHT: u16 = 8;
+
+fn format_quality(quality: &CalibrationQuality) -> String {
+    format!(
+        "confidence={:.3}, coverage={:.3}, fitness={:.3}, radial_fitness={:.3}, gravity_fitness={:.3}",
+        quality.confidence,
+        quality.coverage,
+        quality.fitness,
+        quality.radial_fitness,
+        quality.gravity_fitness
+    )
+}
 
 struct LatestReadings {
     acc_gyro: String,
@@ -139,11 +150,14 @@ fn format_event(
                     quality,
                     direction: Some(direction),
                 }) => format!(
-                    "Magnetometer FRD (Calibrated, quality={:.3}): [x={:+10.4}, y={:+10.4}, z={:+10.4}]",
-                    quality.confidence, direction.x, direction.y, direction.z
+                    "Magnetometer FRD (Calibrated, {}): [x={:+10.4}, y={:+10.4}, z={:+10.4}]",
+                    format_quality(&quality),
+                    direction.x,
+                    direction.y,
+                    direction.z
                 ),
                 Ok(MagCalibrationResult { quality, .. }) => {
-                    format!("Magnetometer calibration pending: quality={:.3}", quality.confidence)
+                    format!("Magnetometer calibration pending: {}", format_quality(&quality))
                 }
                 Err(cause) => format!("Magnetometer calibration unavailable: {:?}", cause),
             };

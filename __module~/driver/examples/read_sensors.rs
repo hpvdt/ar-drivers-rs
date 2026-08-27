@@ -3,8 +3,19 @@
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
 use ar_drivers::any_glasses_or_dummy;
-use ar_drivers::fusion::{rub_to_frd, FusionState, MagCalibrationResult};
+use ar_drivers::fusion::{rub_to_frd, CalibrationQuality, FusionState, MagCalibrationResult};
 use ar_drivers::GlassesEvent;
+
+fn format_quality(quality: &CalibrationQuality) -> String {
+    format!(
+        "confidence={:.3}, coverage={:.3}, fitness={:.3}, radial_fitness={:.3}, gravity_fitness={:.3}",
+        quality.confidence,
+        quality.coverage,
+        quality.fitness,
+        quality.radial_fitness,
+        quality.gravity_fitness
+    )
+}
 
 fn main() {
     let mut glasses = any_glasses_or_dummy().unwrap();
@@ -51,12 +62,15 @@ fn main() {
                         quality,
                         direction: Some(direction),
                     }) => println!(
-                        "Magnetometer FRD (Calibrated, quality={:.3}): [x={:+10.4}, y={:+10.4}, z={:+10.4}]",
-                        quality.confidence, direction.x, direction.y, direction.z
+                        "Magnetometer FRD (Calibrated, {}): [x={:+10.4}, y={:+10.4}, z={:+10.4}]",
+                        format_quality(&quality),
+                        direction.x,
+                        direction.y,
+                        direction.z
                     ),
                     Ok(MagCalibrationResult { quality, .. }) => println!(
-                        "Magnetometer calibration pending: quality={:.3}",
-                        quality.confidence
+                        "Magnetometer calibration pending: {}",
+                        format_quality(&quality)
                     ),
                     Err(cause) => println!("Magnetometer calibration unavailable: {:?}", cause),
                 }
