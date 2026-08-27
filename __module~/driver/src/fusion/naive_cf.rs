@@ -92,7 +92,7 @@ impl NaiveCF {
 
     //CAUTION: right-multiplication means rotation, unconventionally
 
-    fn update_gyro(&mut self, gyro_rub: &Vector3<f32>, t: u64) -> () {
+    fn integrate_gyro(&mut self, gyro_rub: &Vector3<f32>, t: u64) -> () {
         let gyro = rub_to_frd(gyro_rub);
 
         let d_t1 = t - self.prev_gyro.1;
@@ -108,7 +108,7 @@ impl NaiveCF {
         self.prev_gyro = (gyro, t);
     }
 
-    fn update_acc(&mut self, acc_rub: &Vector3<f32>, _t: u64) -> () {
+    fn integrate_acc(&mut self, acc_rub: &Vector3<f32>, _t: u64) -> () {
         let acc = rub_to_frd(acc_rub);
 
         if acc.norm() < 1.0 {
@@ -134,7 +134,7 @@ impl NaiveCF {
         }
     }
 
-    pub(super) fn update_mag(&mut self, mag_rub: &Vector3<f32>, t: u64) -> () {
+    pub(super) fn integrate_mag(&mut self, mag_rub: &Vector3<f32>, t: u64) -> () {
         let mag_raw = rub_to_frd(mag_rub); // reading is always muT (microTesla) pointing to north
 
         // gravity direction is already estimated by the acc complementary filter
@@ -154,9 +154,22 @@ impl NaiveCF {
         let north_frd = Vector3::new(1.0, 0.0, 0.0);
         let estimated_north = attitude.inverse() * north_frd;
 
+        // magnetic north dips below the horizon by a location-dependent inclination
+        // angle; correcting against the full field vector would tip the level the acc
+        // filter already maintains, so only the field's horizontal component is compared.
+        // both vectors are then perpendicular to estimated up, making the correction a
+        // pure heading rotation about the up axis.
+        let up_body = attitude.inverse() * Self::UP_FRD.normalize();
+        let mag_horizontal = mag_corrected - mag_corrected.dot(&up_body) * up_body;
+
+        // near the magnetic poles the field is almost vertical and carries no usable heading
+        if mag_horizontal.norm_squared() < 0.01 {
+            return;
+        }
+
         let correction_opt = UnitQuaternion::scaled_rotation_between(
             &estimated_north,
-            &mag_corrected,
+            &mag_horizontal,
             Self::BASE_MAG_RATIO,
         );
 
@@ -322,19 +335,13 @@ impl Fusion for NaiveCF {
     fn update(&mut self) -> () {
         let event = self.next_event();
         match event {
-            // Stack overflow seen in [example/sensor_fusion.rs] is NOT caused by these
-            // update paths (they need only ~64-128 KiB in debug). The crash happens in
-            // `NaiveCF::new` construction: the ~104 KB inline `MagCalibrator<1023>` is
-            // moved by value through five constructor layers, whose debug temporaries
-            // exceed the 1 MiB Windows main-thread stack. See `naive_cf_test` and
-            // `fusion/TODO.md`.
             GlassesEvent::AccGyro {
                 accelerometer,
                 gyroscope,
                 timestamp,
             } => {
-                self.update_gyro(&gyroscope, timestamp);
-                self.update_acc(&accelerometer, timestamp);
+                self.integrate_gyro(&gyroscope, timestamp);
+                self.integrate_acc(&accelerometer, timestamp);
                 self.renormalize();
             }
 
@@ -342,7 +349,7 @@ impl Fusion for NaiveCF {
                 magnetometer,
                 timestamp,
             } => {
-                self.update_mag(&magnetometer, timestamp);
+                self.integrate_mag(&magnetometer, timestamp);
                 self.renormalize();
             }
 
