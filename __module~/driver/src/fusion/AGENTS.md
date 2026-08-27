@@ -271,8 +271,19 @@ scores near zero, so a two-circle pancake cannot inflate coverage the way the co
 Physical radial fitness uses the
 running mean square of `||A (x - b)|| - 1`, evaluated for each valid current sample after its online update with the
 same working candidate. Its update weight is `1 / min(sample_count, minibatch_size)`; the statistic resets whenever
-working optimizer state resets. Fitness is a linear ramp from `1` at radial RMS `0` to `0` at radial RMS `0.1`. Live
-confidence is coverage times fitness, clamped to `[0, 1]`.
+working optimizer state resets. Radial fitness is a linear ramp from `1` at radial RMS `0` to `0` at radial RMS `0.1`.
+
+Gravity fitness applies the same running statistic and update weight to the optimizer's gravity-projection residual
+`psi(u, g)^T theta - kappa` of each valid current sample that carries a valid gravity direction, and ramps linearly
+from `1` at the `0.1` RMS floor to `0` at the `0.3` ceiling. The floor absorbs the surrogate's known anisotropic
+soft-iron bias: even a perfect fit keeps an irreducible residual, and it must not drag down a good calibration. A
+missing or unusable gravity statistic maps to a neutral `1` rather than `0`: gravity is optional, so an absent or
+disabled (`gravity_weight(0)`) gravity term never penalizes a magnetometer-only calibration, unlike the mandatory
+radial statistic whose absence scores `0`.
+
+Live fitness is the product of the radial and gravity factors, and live confidence is coverage times fitness, clamped
+to `[0, 1]`. `MagCalibrationResult` reports every factor: `confidence`, `coverage`, `fitness`, `radial_fitness`, and
+`gravity_fitness`.
 
 Working coefficients and published correction parameters are separate. The hard-iron offset and soft-iron correction
 change only after 110 valid updates at confidence at least `0.03`, including while the cache is partial. Confidence

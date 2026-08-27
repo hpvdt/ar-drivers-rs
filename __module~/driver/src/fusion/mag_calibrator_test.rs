@@ -514,7 +514,7 @@ fn mag_calibrator_scores_direction_coverage() {
         let near_planar = Vector3::new(theta.cos() * 0.866, theta.sin() * 0.866, 0.5).normalize();
         calibrator.evaluate_sample_vec(offset + near_planar, None, i as u64);
     }
-    let (valid, coverage, _) = calibrator.working_quality_components();
+    let (valid, coverage, _, _) = calibrator.working_quality_components();
     assert!(valid, "planar sweep produced no working candidate");
     assert!(
         coverage < MIN_PUBLICATION_CONFIDENCE,
@@ -532,8 +532,8 @@ fn mag_calibrator_scores_direction_coverage() {
         identity.evaluate_sample_vec(offset + direction, None, i as u64);
         distorted.evaluate_sample_vec(offset + distortion * direction, None, i as u64);
     }
-    let (identity_valid, identity_coverage, _) = identity.working_quality_components();
-    let (distorted_valid, distorted_coverage, _) = distorted.working_quality_components();
+    let (identity_valid, identity_coverage, _, _) = identity.working_quality_components();
+    let (distorted_valid, distorted_coverage, _, _) = distorted.working_quality_components();
     assert!(identity_valid && distorted_valid);
     assert!(
         (identity_coverage - distorted_coverage).abs() < 0.2,
@@ -630,6 +630,116 @@ fn live_quality_ramps_and_running_mean_square_match_the_specification() {
     assert_eq!(
         MagCalibrator::<9>::running_mean_square_for_test(None, f32::INFINITY, 0.25),
         None
+    );
+}
+
+#[test]
+fn gravity_fitness_ramps_between_floor_and_ceiling_and_defaults_to_one() {
+    // 1 at and below the 0.1 RMS floor, 0 at and beyond the 0.3 ceiling,
+    // linear in between.
+    assert_eq!(
+        MagCalibrator::<9>::gravity_fitness_score_for_test(Some(0.0)),
+        1.0
+    );
+    assert_eq!(
+        MagCalibrator::<9>::gravity_fitness_score_for_test(Some(0.1f32.powi(2))),
+        1.0
+    );
+    let fitness = MagCalibrator::<9>::gravity_fitness_score_for_test(Some(0.2f32.powi(2)));
+    assert!((fitness - 0.5).abs() < 1.0e-6, "fitness={fitness}");
+    assert_eq!(
+        MagCalibrator::<9>::gravity_fitness_score_for_test(Some(0.3f32.powi(2))),
+        0.0
+    );
+    // Unlike the radial score, a missing or unusable statistic is neutral:
+    // gravity is optional and must not penalize magnetometer-only input.
+    assert_eq!(
+        MagCalibrator::<9>::gravity_fitness_score_for_test(None),
+        1.0
+    );
+    assert_eq!(
+        MagCalibrator::<9>::gravity_fitness_score_for_test(Some(f32::NAN)),
+        1.0
+    );
+    assert_eq!(
+        MagCalibrator::<9>::gravity_fitness_score_for_test(Some(-1.0)),
+        1.0
+    );
+}
+
+#[test]
+fn mag_calibrator_reports_confidence_factors() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+
+    // Without gravity the gravity factor stays neutral and confidence
+    // factors multiply out exactly.
+    let mut plain = MagCalibrator::<63>::new();
+    let mut plain_result = None;
+    for i in 0..16 * 63 {
+        let raw = offset + distortion * sample_direction(i % 63, 63);
+        plain_result = Some(plain.evaluate_correct(raw, None, i as u64).unwrap());
+    }
+    let plain = plain_result.unwrap();
+    assert_eq!(plain.gravity_fitness, 1.0);
+    assert_eq!(plain.fitness, plain.radial_fitness);
+    assert_eq!(
+        plain.confidence,
+        (plain.coverage * plain.fitness).clamp(0.0, 1.0)
+    );
+
+    // With a consistent co-rotating gravity direction the gravity factor is
+    // live in [0, 1] and confidence is the three-factor product. Gravity
+    // fixed in the body frame while the attitude rotates is physically
+    // contradictory: no constant dip angle exists, the projection residual
+    // stays large, and the factor drops.
+    let world_mag = Vector3::new(0.8, 0.1, 0.5).normalize();
+    let world_gravity = Vector3::z();
+    let mut refined = MagCalibrator::<63>::new();
+    let mut opposed = MagCalibrator::<63>::new();
+    let mut refined_result = None;
+    let mut opposed_result = None;
+    for i in 0..16 * 63 {
+        let j = i % 63;
+        let attitude = UnitQuaternion::from_euler_angles(
+            0.25 * (j as f32 * 0.7).sin(),
+            0.35 * (j as f32 * 1.7).sin(),
+            j as f32 * 2.4,
+        );
+        let body_mag = attitude.inverse() * world_mag;
+        let body_gravity = attitude.inverse() * world_gravity;
+        let raw = offset + distortion * body_mag;
+        refined_result = Some(
+            refined
+                .evaluate_correct(raw, Some(body_gravity), i as u64)
+                .unwrap(),
+        );
+        opposed_result = Some(
+            opposed
+                .evaluate_correct(raw, Some(Vector3::z()), i as u64)
+                .unwrap(),
+        );
+    }
+    let refined = refined_result.unwrap();
+    let opposed = opposed_result.unwrap();
+    assert!(
+        (0.0..1.0).contains(&refined.gravity_fitness),
+        "gravity_fitness={}",
+        refined.gravity_fitness
+    );
+    assert_eq!(
+        refined.fitness,
+        refined.radial_fitness * refined.gravity_fitness
+    );
+    assert_eq!(
+        refined.confidence,
+        (refined.coverage * refined.fitness).clamp(0.0, 1.0)
+    );
+    assert!(
+        opposed.gravity_fitness < refined.gravity_fitness,
+        "opposed={} refined={}",
+        opposed.gravity_fitness,
+        refined.gravity_fitness
     );
 }
 

@@ -14,6 +14,17 @@ const SHAPE_REGULARIZATION: f32 = 1.0e-3;
 const SHAPE_PRIOR_SCALE: f32 = 2.0;
 const MAX_CORRECTION_CONDITION: f32 = 1.0e1;
 const MAX_RADIAL_RMS: f32 = 0.1;
+/// Gravity-projection RMS residual below which the gravity fitness is 1.
+/// The normal-projection surrogate is biased under anisotropic soft iron, so
+/// even a perfect fit keeps an irreducible residual; the floor keeps that
+/// bias from dragging down a good calibration.
+const GRAVITY_RMS_FLOOR: f32 = 0.1;
+/// Gravity-projection RMS residual at which the gravity fitness reaches 0,
+/// ramping linearly down from 1 at `GRAVITY_RMS_FLOOR`. Residuals live in
+/// normalized ellipsoid-equation units; both constants are calibrated
+/// against the synthetic consistent/contradictory gravity test (steady-state
+/// RMS ~0.14 consistent, ~0.25 contradictory) pending benchmark validation.
+const MAX_GRAVITY_RMS: f32 = 0.3;
 /// Confidence required for a working candidate to advance the publication
 /// streak. With E-optimality coverage this sits in the gap between a
 /// calibrator whose retained motion genuinely fills a broad region (whose
@@ -110,9 +121,17 @@ pub struct MagCalibrationResult {
     /// Directional coverage factor of the confidence in `[0, 1]`: the
     /// E-optimality score of the retained mean-centered unit directions.
     pub coverage: f32,
-    /// Radial fitness factor of the confidence in `[0, 1]`: the bounded
-    /// fit of the working correction over recent valid samples.
+    /// Combined fitness factor of the confidence in `[0, 1]`:
+    /// `radial_fitness * gravity_fitness`.
     pub fitness: f32,
+    /// Radial fitness sub-factor in `[0, 1]`: the bounded fit of the
+    /// working correction over recent valid samples.
+    pub radial_fitness: f32,
+    /// Gravity-consistency fitness sub-factor in `[0, 1]`: the bounded
+    /// running fit of the gravity-projection surrogate. `1.0` while no
+    /// valid gravity direction has been seen or the gravity term is
+    /// disabled, so a magnetometer-only stream is never penalized.
+    pub gravity_fitness: f32,
     /// Corrected and normalized FRD magnetic direction, produced by the
     /// published correction; `None` while no correction has passed the live
     /// quality gates yet.
@@ -157,9 +176,12 @@ pub struct MagCalibrator<const N: usize> {
     raw_sample_sum: Vector3<f64>,
     raw_outer_product_sum: Matrix3<f64>,
     radial_residual_mean_square: Option<f32>,
+    gravity_residual_mean_square: Option<f32>,
     confidence: f32,
     coverage: f32,
     fitness: f32,
+    radial_fitness: f32,
+    gravity_fitness: f32,
     publication_quality_streak: usize,
 }
 
@@ -193,9 +215,12 @@ impl<const N: usize> Default for MagCalibrator<N> {
             raw_sample_sum: Vector3::zeros(),
             raw_outer_product_sum: Matrix3::zeros(),
             radial_residual_mean_square: None,
+            gravity_residual_mean_square: None,
             confidence: 0.0,
             coverage: 0.0,
             fitness: 0.0,
+            radial_fitness: 0.0,
+            gravity_fitness: 0.0,
             publication_quality_streak: 0,
         }
     }
@@ -353,9 +378,12 @@ impl<const N: usize> MagCalibrator<N> {
         self.gravity_projection_initialized = false;
         self.optimizer_steps = 0;
         self.radial_residual_mean_square = None;
+        self.gravity_residual_mean_square = None;
         self.confidence = 0.0;
         self.coverage = 0.0;
         self.fitness = 0.0;
+        self.radial_fitness = 0.0;
+        self.gravity_fitness = 0.0;
         self.publication_quality_streak = 0;
     }
 
@@ -891,6 +919,22 @@ impl<const N: usize> MagCalibrator<N> {
             .unwrap()
     }
 
+    /// Normalizes an optional co-timestamped direction; non-finite and zero
+    /// directions are dropped.
+    fn normalized_direction(direction: Option<Vector3<f32>>) -> Option<Vector3<f32>> {
+        direction.and_then(|direction| {
+            let norm = direction.norm();
+            if norm.is_finite()
+                && direction.iter().all(|value| value.is_finite())
+                && norm > f32::EPSILON
+            {
+                Some(direction / norm)
+            } else {
+                None
+            }
+        })
+    }
+
     /// Add a sample if it is deemed more useful than the least useful sample.
     ///
     /// `gravity_direction` is an optional co-timestamped body-frame FRD
@@ -903,12 +947,14 @@ impl<const N: usize> MagCalibrator<N> {
         gravity_direction: Option<Vector3<f32>>,
         timestamp_us: u64,
     ) {
+        let gravity_direction = Self::normalized_direction(gravity_direction);
         let valid_current_sample = self.ingest_sample(x, gravity_direction, timestamp_us);
-        self.update_publication(valid_current_sample.then_some(x));
+        self.update_publication(valid_current_sample.then_some(x), gravity_direction);
     }
 
     /// Updates the cache and online optimizer, returning whether the current
-    /// magnetometer observation was finite and nonzero.
+    /// magnetometer observation was finite and nonzero. `gravity_direction`
+    /// must already be normalized (see `Self::normalized_direction`).
     fn ingest_sample(
         &mut self,
         x: Vector3<f32>,
@@ -955,17 +1001,6 @@ impl<const N: usize> MagCalibrator<N> {
             }
             return false;
         }
-        let gravity_direction = gravity_direction.and_then(|gravity| {
-            let norm = gravity.norm();
-            if norm.is_finite()
-                && gravity.iter().all(|value| value.is_finite())
-                && norm > f32::EPSILON
-            {
-                Some(gravity / norm)
-            } else {
-                None
-            }
-        });
         if N == 0 {
             return false;
         }
@@ -1154,6 +1189,8 @@ impl<const N: usize> MagCalibrator<N> {
                 confidence: self.confidence,
                 coverage: self.coverage,
                 fitness: self.fitness,
+                radial_fitness: self.radial_fitness,
+                gravity_fitness: self.gravity_fitness,
                 direction: None,
             });
         }
@@ -1170,14 +1207,20 @@ impl<const N: usize> MagCalibrator<N> {
                 confidence: self.confidence,
                 coverage: self.coverage,
                 fitness: self.fitness,
+                radial_fitness: self.radial_fitness,
+                gravity_fitness: self.gravity_fitness,
                 direction: Some(mag.normalize()),
             })
         }
     }
 
-    fn update_publication(&mut self, current_sample: Option<Vector3<f32>>) {
+    fn update_publication(
+        &mut self,
+        current_sample: Option<Vector3<f32>>,
+        current_gravity: Option<Vector3<f32>>,
+    ) {
         let current_sample_valid = current_sample.is_some();
-        let candidate = self.update_quality(current_sample);
+        let candidate = self.update_quality(current_sample, current_gravity);
         if !current_sample_valid || candidate.is_none() {
             // Invalid observations and unusable candidates always reset the
             // streak: they are evidence against publishing, not jitter.
@@ -1295,16 +1338,40 @@ impl<const N: usize> MagCalibrator<N> {
         }
     }
 
-    /// Updates the live radial statistic and quality for the current working
-    /// candidate. All cache-dependent data comes from maintained moments.
+    /// Gravity fitness in `[0, 1]`: a linear ramp from 1 at the
+    /// `GRAVITY_RMS_FLOOR` residual to 0 at `MAX_GRAVITY_RMS`, applied to
+    /// the running mean square of the gravity-projection residual
+    /// `psi^T theta - kappa`. Unlike the radial score, a missing
+    /// statistic maps to a neutral 1: gravity is optional, so an absent or
+    /// disabled gravity term must never penalize a magnetometer-only
+    /// calibration. The residual measures constancy of the ellipsoid-normal
+    /// projection, which matches the corrected-direction dot product only
+    /// for isotropic correction; the score inherits the surrogate's
+    /// anisotropic soft-iron bias.
+    fn gravity_fitness_score(mean_square: Option<f32>) -> f32 {
+        match mean_square {
+            Some(mean_square) if mean_square.is_finite() && mean_square >= 0.0 => {
+                let rms = mean_square.sqrt();
+                ((MAX_GRAVITY_RMS - rms) / (MAX_GRAVITY_RMS - GRAVITY_RMS_FLOOR)).clamp(0.0, 1.0)
+            }
+            _ => 1.0,
+        }
+    }
+
+    /// Updates the live radial and gravity statistics and quality for the
+    /// current working candidate. All cache-dependent data comes from
+    /// maintained moments.
     fn update_quality(
         &mut self,
         current_sample: Option<Vector3<f32>>,
+        current_gravity: Option<Vector3<f32>>,
     ) -> Option<CalibrationCandidate> {
         if self.matrix_filled < CALIBRATION_PARAMETER_COUNT {
             self.confidence = 0.0;
             self.coverage = 0.0;
             self.fitness = 0.0;
+            self.radial_fitness = 0.0;
+            self.gravity_fitness = 0.0;
             return None;
         }
         let candidate = match self.working_candidate() {
@@ -1313,6 +1380,8 @@ impl<const N: usize> MagCalibrator<N> {
                 self.confidence = 0.0;
                 self.coverage = 0.0;
                 self.fitness = 0.0;
+                self.radial_fitness = 0.0;
+                self.gravity_fitness = 0.0;
                 return None;
             }
         };
@@ -1324,19 +1393,41 @@ impl<const N: usize> MagCalibrator<N> {
                 self.radial_residual_mean_square,
                 residual_squared,
                 alpha,
-            )             else {
+            ) else {
                 self.radial_residual_mean_square = None;
                 self.confidence = 0.0;
                 self.coverage = 0.0;
                 self.fitness = 0.0;
+                self.radial_fitness = 0.0;
+                self.gravity_fitness = 0.0;
                 return None;
             };
             self.radial_residual_mean_square = Some(mean_square);
+            if let Some(gravity) = current_gravity
+                .filter(|_| self.gravity_projection_initialized && self.gravity_weight > 0.0)
+            {
+                let residual = Self::gravity_features(self.normalized_sample(sample), gravity)
+                    .dot(&self.parameters)
+                    - self.gravity_projection;
+                // Gravity is optional: a failed update keeps the previous
+                // statistic instead of zeroing the live quality.
+                if let Some(mean_square) = Self::update_running_mean_square(
+                    self.gravity_residual_mean_square,
+                    residual * residual,
+                    alpha,
+                ) {
+                    self.gravity_residual_mean_square = Some(mean_square);
+                }
+            }
         }
         let coverage = self.mean_centered_coverage();
-        let fitness = Self::fitness_score(self.radial_residual_mean_square);
+        let radial_fitness = Self::fitness_score(self.radial_residual_mean_square);
+        let gravity_fitness = Self::gravity_fitness_score(self.gravity_residual_mean_square);
+        let fitness = radial_fitness * gravity_fitness;
         let quality = coverage * fitness;
         self.coverage = coverage;
+        self.radial_fitness = radial_fitness;
+        self.gravity_fitness = gravity_fitness;
         self.fitness = fitness;
         self.confidence = if quality.is_finite() {
             quality.clamp(0.0, 1.0)
@@ -1369,13 +1460,14 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     #[cfg(test)]
-    pub(super) fn working_quality_components(&self) -> (bool, f32, f32) {
+    pub(super) fn working_quality_components(&self) -> (bool, f32, f32, f32) {
         let Ok(_candidate) = self.working_candidate() else {
-            return (false, 0.0, 0.0);
+            return (false, 0.0, 0.0, 0.0);
         };
         let coverage = self.mean_centered_coverage();
-        let fitness = Self::fitness_score(self.radial_residual_mean_square);
-        (true, coverage, fitness)
+        let radial_fitness = Self::fitness_score(self.radial_residual_mean_square);
+        let gravity_fitness = Self::gravity_fitness_score(self.gravity_residual_mean_square);
+        (true, coverage, radial_fitness, gravity_fitness)
     }
 
     #[cfg(test)]
@@ -1412,6 +1504,11 @@ impl<const N: usize> MagCalibrator<N> {
     #[cfg(test)]
     pub(super) fn fitness_score_for_test(mean_square: Option<f32>) -> f32 {
         Self::fitness_score(mean_square)
+    }
+
+    #[cfg(test)]
+    pub(super) fn gravity_fitness_score_for_test(mean_square: Option<f32>) -> f32 {
+        Self::gravity_fitness_score(mean_square)
     }
 
     #[cfg(test)]
