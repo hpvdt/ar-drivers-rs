@@ -177,7 +177,7 @@ pub struct MagCalibrator<const N: usize> {
     raw_outer_product_sum: Matrix3<f64>,
     radial_residual_mean_square: Option<f32>,
     gravity_residual_mean_square: Option<f32>,
-    confidence: f32,
+    confidence: f32, // TODO: these 5 states (confidence to gravity_fitness) can be grouped into a structure and be used in multiple occasions
     coverage: f32,
     fitness: f32,
     radial_fitness: f32,
