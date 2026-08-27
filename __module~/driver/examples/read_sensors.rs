@@ -57,7 +57,11 @@ fn main() {
                     mag_frd.x, mag_frd.y, mag_frd.z, timestamp
                 );
                 println!("  - converted from raw {:?}", event);
-                match fusion.magCalibrator.evaluate_correct(mag_frd, None, timestamp) {
+                // TODO: evaluate_correct should use convert accelerator reading to gravity direction, then read it
+                match fusion
+                    .magCalibrator
+                    .evaluate_correct(mag_frd, None, timestamp)
+                {
                     Ok(MagCalibrationResult {
                         quality,
                         direction: Some(direction),
