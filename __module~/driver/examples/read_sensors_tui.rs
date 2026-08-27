@@ -138,6 +138,7 @@ fn format_event(
                 Ok(MagCalibrationResult {
                     direction: Some(direction),
                     confidence,
+                    ..
                 }) => format!(
                     "Magnetometer FRD (Calibrated, quality={confidence:.3}): [x={:+10.4}, y={:+10.4}, z={:+10.4}]",
                     direction.x, direction.y, direction.z

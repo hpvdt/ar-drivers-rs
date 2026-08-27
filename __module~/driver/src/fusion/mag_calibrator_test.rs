@@ -84,7 +84,8 @@ fn mag_calibrator_stays_pending_with_underconstrained_or_degenerate_data() {
         single,
         Ok(MagCalibrationResult {
             confidence: 0.0,
-            direction: None
+            direction: None,
+            ..
         })
     ));
     let result = (1..9)
@@ -96,7 +97,8 @@ fn mag_calibrator_stays_pending_with_underconstrained_or_degenerate_data() {
         result,
         Ok(MagCalibrationResult {
             confidence: 0.0,
-            direction: None
+            direction: None,
+            ..
         })
     ));
     assert_eq!(calibrator.get_confidence(), 0.0);
@@ -171,7 +173,8 @@ fn mag_calibrator_rejects_nearly_collinear_samples() {
         result.unwrap(),
         Ok(MagCalibrationResult {
             confidence: 0.0,
-            direction: None
+            direction: None,
+            ..
         })
     ));
 }
@@ -357,7 +360,8 @@ fn mag_calibrator_accepts_zero_components_and_rejects_bad_vectors() {
             result,
             Ok(MagCalibrationResult {
                 confidence: 0.0,
-                direction: None
+                direction: None,
+                ..
             })
         ));
     }
@@ -380,7 +384,8 @@ fn mag_calibrator_defaults_sample_lifespan_to_one_hour() {
         result,
         MagCalibrationResult {
             confidence: 0.0,
-            direction: Some(_)
+            direction: Some(_),
+            ..
         }
     ));
 }
@@ -398,7 +403,8 @@ fn mag_calibrator_uses_configured_sample_lifespan() {
         result,
         MagCalibrationResult {
             confidence: 0.0,
-            direction: Some(_)
+            direction: Some(_),
+            ..
         }
     ));
 }

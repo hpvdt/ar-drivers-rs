@@ -104,9 +104,15 @@ struct CalibrationCandidate {
 /// Result of evaluating one FRD magnetometer observation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MagCalibrationResult {
-    // TODO: this result should also contain every factor used to compute the confidence score
-    /// Current bounded calibration quality in `[0, 1]`.
+    /// Current bounded calibration quality in `[0, 1]`: the clamped product
+    /// of `coverage` and `fitness`.
     pub confidence: f32,
+    /// Directional coverage factor of the confidence in `[0, 1]`: the
+    /// E-optimality score of the retained mean-centered unit directions.
+    pub coverage: f32,
+    /// Radial fitness factor of the confidence in `[0, 1]`: the bounded
+    /// fit of the working correction over recent valid samples.
+    pub fitness: f32,
     /// Corrected and normalized FRD magnetic direction, produced by the
     /// published correction; `None` while no correction has passed the live
     /// quality gates yet.
@@ -152,6 +158,8 @@ pub struct MagCalibrator<const N: usize> {
     raw_outer_product_sum: Matrix3<f64>,
     radial_residual_mean_square: Option<f32>,
     confidence: f32,
+    coverage: f32,
+    fitness: f32,
     publication_quality_streak: usize,
 }
 
@@ -186,6 +194,8 @@ impl<const N: usize> Default for MagCalibrator<N> {
             raw_outer_product_sum: Matrix3::zeros(),
             radial_residual_mean_square: None,
             confidence: 0.0,
+            coverage: 0.0,
+            fitness: 0.0,
             publication_quality_streak: 0,
         }
     }
@@ -344,6 +354,8 @@ impl<const N: usize> MagCalibrator<N> {
         self.optimizer_steps = 0;
         self.radial_residual_mean_square = None;
         self.confidence = 0.0;
+        self.coverage = 0.0;
+        self.fitness = 0.0;
         self.publication_quality_streak = 0;
     }
 
@@ -1140,6 +1152,8 @@ impl<const N: usize> MagCalibrator<N> {
         if !self.calibration_initialized {
             return Ok(MagCalibrationResult {
                 confidence: self.confidence,
+                coverage: self.coverage,
+                fitness: self.fitness,
                 direction: None,
             });
         }
@@ -1154,6 +1168,8 @@ impl<const N: usize> MagCalibrator<N> {
         } else {
             Ok(MagCalibrationResult {
                 confidence: self.confidence,
+                coverage: self.coverage,
+                fitness: self.fitness,
                 direction: Some(mag.normalize()),
             })
         }
@@ -1287,12 +1303,16 @@ impl<const N: usize> MagCalibrator<N> {
     ) -> Option<CalibrationCandidate> {
         if self.matrix_filled < CALIBRATION_PARAMETER_COUNT {
             self.confidence = 0.0;
+            self.coverage = 0.0;
+            self.fitness = 0.0;
             return None;
         }
         let candidate = match self.working_candidate() {
             Ok(candidate) => candidate,
             Err(_) => {
                 self.confidence = 0.0;
+                self.coverage = 0.0;
+                self.fitness = 0.0;
                 return None;
             }
         };
@@ -1304,9 +1324,11 @@ impl<const N: usize> MagCalibrator<N> {
                 self.radial_residual_mean_square,
                 residual_squared,
                 alpha,
-            ) else {
+            )             else {
                 self.radial_residual_mean_square = None;
                 self.confidence = 0.0;
+                self.coverage = 0.0;
+                self.fitness = 0.0;
                 return None;
             };
             self.radial_residual_mean_square = Some(mean_square);
@@ -1314,6 +1336,8 @@ impl<const N: usize> MagCalibrator<N> {
         let coverage = self.mean_centered_coverage();
         let fitness = Self::fitness_score(self.radial_residual_mean_square);
         let quality = coverage * fitness;
+        self.coverage = coverage;
+        self.fitness = fitness;
         self.confidence = if quality.is_finite() {
             quality.clamp(0.0, 1.0)
         } else {

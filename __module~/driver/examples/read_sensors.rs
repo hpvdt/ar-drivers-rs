@@ -50,6 +50,7 @@ fn main() {
                     Ok(MagCalibrationResult {
                         direction: Some(direction),
                         confidence,
+                        ..
                     }) => println!(
                         "Magnetometer FRD (Calibrated, quality={confidence:.3}): [x={:+10.4}, y={:+10.4}, z={:+10.4}]",
                         direction.x, direction.y, direction.z
