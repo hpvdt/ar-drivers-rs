@@ -47,14 +47,14 @@ fn main() {
                 );
                 println!("  - converted from raw {:?}", event);
                 match fusion.magCalibrator.evaluate_correct(mag_frd, None, timestamp) {
-                    Ok(MagCalibrationResult::Calibrated {
-                        direction,
+                    Ok(MagCalibrationResult {
+                        direction: Some(direction),
                         confidence,
                     }) => println!(
                         "Magnetometer FRD (Calibrated, quality={confidence:.3}): [x={:+10.4}, y={:+10.4}, z={:+10.4}]",
                         direction.x, direction.y, direction.z
                     ),
-                    Ok(MagCalibrationResult::Pending { confidence }) => println!(
+                    Ok(MagCalibrationResult { confidence, .. }) => println!(
                         "Magnetometer calibration pending: quality={confidence:.3}"
                     ),
                     Err(cause) => println!("Magnetometer calibration unavailable: {:?}", cause),

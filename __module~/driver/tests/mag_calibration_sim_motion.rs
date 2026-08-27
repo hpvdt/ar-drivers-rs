@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use ar_drivers::fusion::{rub_to_frd, FusionState, MagCalibrationResult};
+use ar_drivers::fusion::{rub_to_frd, FusionState};
 use ar_drivers::sim::sim_motion::Config;
 use ar_drivers::{ARGlasses, GlassesEvent, SimMotion};
 use nalgebra::Vector3;
@@ -132,7 +132,7 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         eval_count += 1;
         let confidence = result.as_ref().map_or_else(
             |_| fusion.magCalibrator.get_confidence(),
-            |result| result.confidence(),
+            |result| result.confidence,
         );
         confidence_sum += f64::from(confidence);
         confidence_count += 1;
@@ -143,10 +143,7 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         } else {
             quality_streak = 0;
         }
-        let corrected = result.as_ref().ok().and_then(|result| match result {
-            MagCalibrationResult::Pending { .. } => None,
-            MagCalibrationResult::Calibrated { direction, .. } => Some(*direction),
-        });
+        let corrected = result.as_ref().ok().and_then(|result| result.direction);
         let angle_degrees =
             corrected.map(|direction| direction.angle(&ideal_body_frd).to_degrees());
         if let Some(angle_degrees) = angle_degrees {

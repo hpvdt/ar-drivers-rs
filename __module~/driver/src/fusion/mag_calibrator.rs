@@ -101,44 +101,15 @@ struct CalibrationCandidate {
     correction: Matrix3<f32>,
 }
 
-pub struct ResultV2 {
-    confidence: f32,
-    direction: Option<Vector3<f32>>,
-}
-
 /// Result of evaluating one FRD magnetometer observation.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum MagCalibrationResult {
-    // TODO: can be simplified to ResultV2, which is a product of confidence and Option<Vector3<f32>> directly, thereby rendering the impl redundant
-    /// No correction has passed the live quality gates yet.
-    Pending {
-        /// Current bounded calibration quality in `[0, 1]`.
-        confidence: f32,
-    },
-    /// A published correction produced a normalized FRD magnetic direction.
-    Calibrated {
-        /// Corrected and normalized FRD magnetic direction.
-        direction: Vector3<f32>,
-        /// Current bounded working-candidate quality in `[0, 1]`.
-        confidence: f32,
-    },
-}
-
-impl MagCalibrationResult {
-    /// Returns the current bounded calibration quality in `[0, 1]`.
-    pub fn confidence(self) -> f32 {
-        match self {
-            Self::Pending { confidence } | Self::Calibrated { confidence, .. } => confidence,
-        }
-    }
-
-    /// Returns the corrected direction only when a correction is published.
-    pub fn corrected(self) -> Option<Vector3<f32>> {
-        match self {
-            Self::Pending { .. } => None,
-            Self::Calibrated { direction, .. } => Some(direction),
-        }
-    }
+pub struct MagCalibrationResult {
+    /// Current bounded calibration quality in `[0, 1]`.
+    pub confidence: f32,
+    /// Corrected and normalized FRD magnetic direction, produced by the
+    /// published correction; `None` while no correction has passed the live
+    /// quality gates yet.
+    pub direction: Option<Vector3<f32>>,
 }
 
 /// Online regularized ellipsoid fit for a hard-iron offset and full SPD
@@ -1166,8 +1137,9 @@ impl<const N: usize> MagCalibrator<N> {
     ) -> Result<MagCalibrationResult, BadMagCause> {
         self.evaluate_sample_vec(raw_mag, gravity_direction, timestamp_us);
         if !self.calibration_initialized {
-            return Ok(MagCalibrationResult::Pending {
+            return Ok(MagCalibrationResult {
                 confidence: self.confidence,
+                direction: None,
             });
         }
         let mag = self.soft_iron_correction * (raw_mag - self.hard_iron_offset);
@@ -1179,9 +1151,9 @@ impl<const N: usize> MagCalibrator<N> {
                 min_norm: MIN_MAG_NORM,
             }))
         } else {
-            Ok(MagCalibrationResult::Calibrated {
-                direction: mag.normalize(),
+            Ok(MagCalibrationResult {
                 confidence: self.confidence,
+                direction: Some(mag.normalize()),
             })
         }
     }

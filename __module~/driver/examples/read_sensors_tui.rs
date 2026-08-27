@@ -135,14 +135,14 @@ fn format_event(
                 mag_frd.x, mag_frd.y, mag_frd.z, timestamp
             );
             let calibration = match fusion.magCalibrator.evaluate_correct(mag_frd, None, timestamp) {
-                Ok(MagCalibrationResult::Calibrated {
-                    direction,
+                Ok(MagCalibrationResult {
+                    direction: Some(direction),
                     confidence,
                 }) => format!(
                     "Magnetometer FRD (Calibrated, quality={confidence:.3}): [x={:+10.4}, y={:+10.4}, z={:+10.4}]",
                     direction.x, direction.y, direction.z
                 ),
-                Ok(MagCalibrationResult::Pending { confidence }) => {
+                Ok(MagCalibrationResult { confidence, .. }) => {
                     format!("Magnetometer calibration pending: quality={confidence:.3}")
                 }
                 Err(cause) => format!("Magnetometer calibration unavailable: {:?}", cause),

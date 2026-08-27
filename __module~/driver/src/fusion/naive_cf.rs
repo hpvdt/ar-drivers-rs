@@ -144,7 +144,7 @@ impl NaiveCF {
             .magCalibrator
             .evaluate_correct(mag_raw, gravity_hint, t)
             .ok()
-            .and_then(|result| result.corrected())
+            .and_then(|result| result.direction)
         {
             Some(r) => r,
             None => return,
