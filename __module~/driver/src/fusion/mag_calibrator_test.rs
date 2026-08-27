@@ -1,10 +1,140 @@
 use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 
-use super::bad_mag_cause::BadMagCause;
-use super::mag_calibrator::{
-    CalibrationQuality, MagCalibrationResult, MagCalibrator, MIN_PUBLICATION_CONFIDENCE,
-    MIN_PUBLICATION_STREAK,
+use super::super::BadMagCause;
+use super::{
+    CalibrationQuality, DesignMatrix, MagCalibrationResult, MagCalibrator,
+    MIN_PUBLICATION_CONFIDENCE, MIN_PUBLICATION_STREAK,
 };
+
+impl<const N: usize> MagCalibrator<N> {
+    fn working_quality_components(&self) -> (bool, f32, f32, f32) {
+        let Ok(_candidate) = self.working_candidate() else {
+            return (false, 0.0, 0.0, 0.0);
+        };
+        let coverage = self.mean_centered_coverage();
+        let radial_fitness = Self::radial_fitness_score(self.radial_residual_mean_square);
+        let gravity_fitness = Self::gravity_fitness_score(self.gravity_residual_mean_square);
+        (true, coverage, radial_fitness, gravity_fitness)
+    }
+
+    fn correct_working_for_test(&self, raw_mag: Vector3<f32>) -> Option<Vector3<f32>> {
+        let candidate = self.working_candidate().ok()?;
+        let corrected = candidate.correction * (raw_mag - candidate.offset);
+        let norm = corrected.norm();
+        (norm.is_finite() && norm > f32::EPSILON).then(|| corrected / norm)
+    }
+
+    fn publication_quality_streak_for_test(&self) -> usize {
+        self.publication_quality_streak
+    }
+
+    fn coverage_scores_for_test(design_matrix: &DesignMatrix, matrix_filled: usize) -> f32 {
+        Self::coverage_from_design(design_matrix, matrix_filled)
+    }
+
+    fn design_matrix_for_test(directions: &[Vector3<f32>]) -> DesignMatrix {
+        let mut design = DesignMatrix::zeros();
+        for &direction in directions {
+            let phi = Self::direction_feature(direction);
+            design += phi * phi.transpose();
+        }
+        design
+    }
+
+    fn fitness_score_for_test(mean_square: Option<f32>) -> f32 {
+        Self::radial_fitness_score(mean_square)
+    }
+
+    fn gravity_fitness_score_for_test(mean_square: Option<f32>) -> f32 {
+        Self::gravity_fitness_score(mean_square)
+    }
+
+    fn running_mean_square_for_test(
+        current: Option<f32>,
+        residual_squared: f32,
+        alpha: f32,
+    ) -> Option<f32> {
+        Self::update_running_mean_square(current, residual_squared, alpha)
+    }
+
+    fn radial_residual_mean_square_for_test(&self) -> Option<f32> {
+        self.radial_residual_mean_square
+    }
+
+    fn raw_moments_for_test(&self) -> (usize, Vector3<f64>, Matrix3<f64>) {
+        (
+            self.matrix_filled,
+            self.raw_sample_sum,
+            self.raw_outer_product_sum,
+        )
+    }
+
+    /// Verifies maintained raw moments against a direct current-cache sum.
+    fn check_raw_moments(&self) -> Result<(), String> {
+        let (sum, outer_sum) = (0..self.matrix_filled).fold(
+            (Vector3::<f64>::zeros(), Matrix3::<f64>::zeros()),
+            |(sum, outer_sum), row| {
+                let sample = self.sample(row).cast::<f64>();
+                (sum + sample, outer_sum + sample * sample.transpose())
+            },
+        );
+        let scale = sum.norm().max(outer_sum.norm()).max(1.0);
+        let error = (self.raw_sample_sum - sum)
+            .norm()
+            .max((self.raw_outer_product_sum - outer_sum).norm());
+        if error <= 1.0e-12 * scale {
+            Ok(())
+        } else {
+            Err(format!("raw moment error={error} scale={scale}"))
+        }
+    }
+
+    /// Verifies the neighbor-cache invariant against the current buffer
+    /// contents: for every buffered row, the cached entries must reference
+    /// distinct live rows with exactly matching squared distances, be sorted
+    /// ascending, and their distance values must equal the `len` smallest
+    /// true distances to the row's other buffered rows. Read-only; used by
+    /// tests to cross-check the incremental cache maintenance.
+    fn check_neighbor_cache(&self) -> Result<(), String> {
+        for row in 0..self.matrix_filled {
+            let len = self.neighbor_cache_len[row] as usize;
+            let cache = &self.neighbor_cache[row][..len];
+            let mut true_dists: Vec<f32> = (0..self.matrix_filled)
+                .filter(|&j| j != row)
+                .map(|j| {
+                    let diff = self.sample(row) - self.sample(j);
+                    diff.dot(&diff)
+                })
+                .collect();
+            true_dists.sort_unstable_by(|a, b| a.total_cmp(b));
+            for (i, entry) in cache.iter().enumerate() {
+                if entry.row as usize >= self.matrix_filled || entry.row as usize == row {
+                    return Err(format!("row {row}: entry {i} references row {}", entry.row));
+                }
+                if i > 0 && cache[i - 1].squared_distance > entry.squared_distance {
+                    return Err(format!("row {row}: entry {i} out of order"));
+                }
+                if cache[..i].iter().any(|e| e.row == entry.row) {
+                    return Err(format!("row {row}: duplicate entry for row {}", entry.row));
+                }
+                let diff = self.sample(row) - self.sample(entry.row as usize);
+                if diff.dot(&diff) != entry.squared_distance {
+                    return Err(format!("row {row}: stale distance for row {}", entry.row));
+                }
+                if true_dists.get(i) != cache.get(i).map(|e| &e.squared_distance) {
+                    return Err(format!(
+                        "row {row}: entry {i} is not the true {}-nearest neighbor",
+                        i + 1
+                    ));
+                }
+            }
+            if len > true_dists.len() {
+                return Err(format!("row {row}: cache longer than the neighbor pool"));
+            }
+        }
+        Ok(())
+    }
+}
 
 #[test]
 fn mag_calibrator_corrects_synthetic_full_spd_distortion() {
@@ -84,7 +214,10 @@ fn mag_calibrator_stays_pending_with_underconstrained_or_degenerate_data() {
     assert!(matches!(
         single,
         Ok(MagCalibrationResult {
-            quality: CalibrationQuality { confidence: 0.0, .. },
+            quality: CalibrationQuality {
+                confidence: 0.0,
+                ..
+            },
             direction: None,
         })
     ));
@@ -96,7 +229,10 @@ fn mag_calibrator_stays_pending_with_underconstrained_or_degenerate_data() {
     assert!(matches!(
         result,
         Ok(MagCalibrationResult {
-            quality: CalibrationQuality { confidence: 0.0, .. },
+            quality: CalibrationQuality {
+                confidence: 0.0,
+                ..
+            },
             direction: None,
         })
     ));
@@ -171,7 +307,10 @@ fn mag_calibrator_rejects_nearly_collinear_samples() {
     assert!(matches!(
         result.unwrap(),
         Ok(MagCalibrationResult {
-            quality: CalibrationQuality { confidence: 0.0, .. },
+            quality: CalibrationQuality {
+                confidence: 0.0,
+                ..
+            },
             direction: None,
         })
     ));
@@ -357,7 +496,10 @@ fn mag_calibrator_accepts_zero_components_and_rejects_bad_vectors() {
         assert!(matches!(
             result,
             Ok(MagCalibrationResult {
-                quality: CalibrationQuality { confidence: 0.0, .. },
+                quality: CalibrationQuality {
+                    confidence: 0.0,
+                    ..
+                },
                 direction: None,
             })
         ));
@@ -380,7 +522,10 @@ fn mag_calibrator_defaults_sample_lifespan_to_one_hour() {
     assert!(matches!(
         result,
         MagCalibrationResult {
-            quality: CalibrationQuality { confidence: 0.0, .. },
+            quality: CalibrationQuality {
+                confidence: 0.0,
+                ..
+            },
             direction: Some(_),
         }
     ));
@@ -398,7 +543,10 @@ fn mag_calibrator_uses_configured_sample_lifespan() {
     assert!(matches!(
         result,
         MagCalibrationResult {
-            quality: CalibrationQuality { confidence: 0.0, .. },
+            quality: CalibrationQuality {
+                confidence: 0.0,
+                ..
+            },
             direction: Some(_),
         }
     ));
