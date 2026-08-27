@@ -104,6 +104,7 @@ struct CalibrationCandidate {
 /// Result of evaluating one FRD magnetometer observation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MagCalibrationResult {
+    // TODO: this result should also contain every factor used to compute the confidence score
     /// Current bounded calibration quality in `[0, 1]`.
     pub confidence: f32,
     /// Corrected and normalized FRD magnetic direction, produced by the
