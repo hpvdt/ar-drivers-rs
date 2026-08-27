@@ -148,6 +148,11 @@ integration tests run against it.
 
 - Unit test suites live in a sibling file next to the implementation, wired in behind `#[cfg(test)]`. Use the
   `_tests` filename suffix for new suites (some older files use `_test`).
+- Test-only code belongs in the test suite file, never in the production source. The only `#[cfg(test)]` gate
+  allowed in a production file is the `mod foo_test;` wiring; gating individual methods, helpers, constants, or
+  imports with `#[cfg(test)]` is forbidden. Suites that need private state are wired with
+  `#[cfg(test)] #[path = "foo_tests.rs"] mod foo_tests;` inside the implementation file (see `sim_motion.rs`), so
+  the suite itself can hold the test-only `impl` block or free functions.
 - Tests covering success, malformed input, boundary values, and error variants of the same behavior belong in the
   same suite.
 - Use integration tests under `tests/` for behavior exercised through the public API.
