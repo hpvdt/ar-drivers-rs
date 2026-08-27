@@ -2,7 +2,8 @@ use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 
 use super::bad_mag_cause::BadMagCause;
 use super::mag_calibrator::{
-    MagCalibrationResult, MagCalibrator, MIN_PUBLICATION_CONFIDENCE, MIN_PUBLICATION_STREAK,
+    CalibrationQuality, MagCalibrationResult, MagCalibrator, MIN_PUBLICATION_CONFIDENCE,
+    MIN_PUBLICATION_STREAK,
 };
 
 #[test]
@@ -83,9 +84,8 @@ fn mag_calibrator_stays_pending_with_underconstrained_or_degenerate_data() {
     assert!(matches!(
         single,
         Ok(MagCalibrationResult {
-            confidence: 0.0,
+            quality: CalibrationQuality { confidence: 0.0, .. },
             direction: None,
-            ..
         })
     ));
     let result = (1..9)
@@ -96,9 +96,8 @@ fn mag_calibrator_stays_pending_with_underconstrained_or_degenerate_data() {
     assert!(matches!(
         result,
         Ok(MagCalibrationResult {
-            confidence: 0.0,
+            quality: CalibrationQuality { confidence: 0.0, .. },
             direction: None,
-            ..
         })
     ));
     assert_eq!(calibrator.get_confidence(), 0.0);
@@ -172,9 +171,8 @@ fn mag_calibrator_rejects_nearly_collinear_samples() {
     assert!(matches!(
         result.unwrap(),
         Ok(MagCalibrationResult {
-            confidence: 0.0,
+            quality: CalibrationQuality { confidence: 0.0, .. },
             direction: None,
-            ..
         })
     ));
 }
@@ -359,9 +357,8 @@ fn mag_calibrator_accepts_zero_components_and_rejects_bad_vectors() {
         assert!(matches!(
             result,
             Ok(MagCalibrationResult {
-                confidence: 0.0,
+                quality: CalibrationQuality { confidence: 0.0, .. },
                 direction: None,
-                ..
             })
         ));
     }
@@ -383,9 +380,8 @@ fn mag_calibrator_defaults_sample_lifespan_to_one_hour() {
     assert!(matches!(
         result,
         MagCalibrationResult {
-            confidence: 0.0,
+            quality: CalibrationQuality { confidence: 0.0, .. },
             direction: Some(_),
-            ..
         }
     ));
 }
@@ -402,9 +398,8 @@ fn mag_calibrator_uses_configured_sample_lifespan() {
     assert!(matches!(
         result,
         MagCalibrationResult {
-            confidence: 0.0,
+            quality: CalibrationQuality { confidence: 0.0, .. },
             direction: Some(_),
-            ..
         }
     ));
 }

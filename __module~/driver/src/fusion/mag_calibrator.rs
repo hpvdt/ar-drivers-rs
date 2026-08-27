@@ -112,9 +112,12 @@ struct CalibrationCandidate {
     correction: Matrix3<f32>,
 }
 
-/// Result of evaluating one FRD magnetometer observation.
+/// Live calibration quality factors of the current working candidate, all
+/// bounded in `[0, 1]`. Kept as one unit because they are stored as state,
+/// reset together, and reported together as the quality half of
+/// [`MagCalibrationResult`].
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct MagCalibrationResult {
+pub struct CalibrationQuality {
     /// Current bounded calibration quality in `[0, 1]`: the clamped product
     /// of `coverage` and `fitness`.
     pub confidence: f32,
@@ -132,10 +135,61 @@ pub struct MagCalibrationResult {
     /// valid gravity direction has been seen or the gravity term is
     /// disabled, so a magnetometer-only stream is never penalized.
     pub gravity_fitness: f32,
+}
+
+impl CalibrationQuality {
+    const ZERO: Self = Self {
+        confidence: 0.0,
+        coverage: 0.0,
+        fitness: 0.0,
+        radial_fitness: 0.0,
+        gravity_fitness: 0.0,
+    };
+
+    fn new(coverage: f32, radial_fitness: f32, gravity_fitness: f32) -> Self {
+        let fitness = radial_fitness * gravity_fitness;
+        let quality = coverage * fitness;
+        Self {
+            confidence: if quality.is_finite() {
+                quality.clamp(0.0, 1.0)
+            } else {
+                0.0
+            },
+            coverage,
+            fitness,
+            radial_fitness,
+            gravity_fitness,
+        }
+    }
+}
+
+/// Result of evaluating one FRD magnetometer observation.
+///
+/// The quality factors are exposed directly through [`Deref`] to
+/// [`CalibrationQuality`], so `result.confidence` reads the same as
+/// `result.quality.confidence`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MagCalibrationResult {
+    /// Live calibration quality factors of the current working candidate.
+    pub quality: CalibrationQuality,
     /// Corrected and normalized FRD magnetic direction, produced by the
     /// published correction; `None` while no correction has passed the live
     /// quality gates yet.
     pub direction: Option<Vector3<f32>>,
+}
+
+impl std::ops::Deref for MagCalibrationResult {
+    type Target = CalibrationQuality;
+
+    fn deref(&self) -> &Self::Target {
+        &self.quality
+    }
+}
+
+impl MagCalibrationResult {
+    fn from_quality(quality: CalibrationQuality, direction: Option<Vector3<f32>>) -> Self {
+        Self { quality, direction }
+    }
 }
 
 /// Online regularized ellipsoid fit for a hard-iron offset and full SPD
@@ -177,11 +231,7 @@ pub struct MagCalibrator<const N: usize> {
     raw_outer_product_sum: Matrix3<f64>,
     radial_residual_mean_square: Option<f32>,
     gravity_residual_mean_square: Option<f32>,
-    confidence: f32, // TODO: these 5 states (confidence to gravity_fitness) can be grouped into a structure and be used in multiple occasions
-    coverage: f32,
-    fitness: f32,
-    radial_fitness: f32,
-    gravity_fitness: f32,
+    quality: CalibrationQuality,
     publication_quality_streak: usize,
 }
 
@@ -216,11 +266,7 @@ impl<const N: usize> Default for MagCalibrator<N> {
             raw_outer_product_sum: Matrix3::zeros(),
             radial_residual_mean_square: None,
             gravity_residual_mean_square: None,
-            confidence: 0.0,
-            coverage: 0.0,
-            fitness: 0.0,
-            radial_fitness: 0.0,
-            gravity_fitness: 0.0,
+            quality: CalibrationQuality::ZERO,
             publication_quality_streak: 0,
         }
     }
@@ -379,11 +425,7 @@ impl<const N: usize> MagCalibrator<N> {
         self.optimizer_steps = 0;
         self.radial_residual_mean_square = None;
         self.gravity_residual_mean_square = None;
-        self.confidence = 0.0;
-        self.coverage = 0.0;
-        self.fitness = 0.0;
-        self.radial_fitness = 0.0;
-        self.gravity_fitness = 0.0;
+        self.quality = CalibrationQuality::ZERO;
         self.publication_quality_streak = 0;
     }
 
@@ -1169,7 +1211,7 @@ impl<const N: usize> MagCalibrator<N> {
     /// previously published correction can remain available while this value
     /// is zero after a rejected later candidate.
     pub fn get_confidence(&self) -> f32 {
-        self.confidence
+        self.quality.confidence
     }
 
     /// Calibrates a magnetometer vector that has already been converted to FRD.
@@ -1185,14 +1227,7 @@ impl<const N: usize> MagCalibrator<N> {
     ) -> Result<MagCalibrationResult, BadMagCause> {
         self.evaluate_sample_vec(raw_mag, gravity_direction, timestamp_us);
         if !self.calibration_initialized {
-            return Ok(MagCalibrationResult {
-                confidence: self.confidence,
-                coverage: self.coverage,
-                fitness: self.fitness,
-                radial_fitness: self.radial_fitness,
-                gravity_fitness: self.gravity_fitness,
-                direction: None,
-            });
+            return Ok(MagCalibrationResult::from_quality(self.quality, None));
         }
         let mag = self.soft_iron_correction * (raw_mag - self.hard_iron_offset);
 
@@ -1203,14 +1238,10 @@ impl<const N: usize> MagCalibrator<N> {
                 min_norm: MIN_MAG_NORM,
             }))
         } else {
-            Ok(MagCalibrationResult {
-                confidence: self.confidence,
-                coverage: self.coverage,
-                fitness: self.fitness,
-                radial_fitness: self.radial_fitness,
-                gravity_fitness: self.gravity_fitness,
-                direction: Some(mag.normalize()),
-            })
+            Ok(MagCalibrationResult::from_quality(
+                self.quality,
+                Some(mag.normalize()),
+            ))
         }
     }
 
@@ -1225,9 +1256,9 @@ impl<const N: usize> MagCalibrator<N> {
             // Invalid observations and unusable candidates always reset the
             // streak: they are evidence against publishing, not jitter.
             self.publication_quality_streak = 0;
-        } else if self.confidence >= MIN_PUBLICATION_CONFIDENCE {
+        } else if self.quality.confidence >= MIN_PUBLICATION_CONFIDENCE {
             self.publication_quality_streak = self.publication_quality_streak.saturating_add(1);
-        } else if self.confidence < PUBLICATION_STREAK_RESET_CONFIDENCE {
+        } else if self.quality.confidence < PUBLICATION_STREAK_RESET_CONFIDENCE {
             // Only a genuine quality collapse restarts the streak; a short
             // dip in live quality while the optimizer absorbs newly visited
             // directions merely pauses it.
@@ -1329,7 +1360,7 @@ impl<const N: usize> MagCalibrator<N> {
         updated.is_finite().then_some(updated.max(0.0))
     }
 
-    fn fitness_score(mean_square: Option<f32>) -> f32 {
+    fn radial_fitness_score(mean_square: Option<f32>) -> f32 {
         match mean_square {
             Some(mean_square) if mean_square.is_finite() && mean_square >= 0.0 => {
                 (1.0 - mean_square.sqrt() / MAX_RADIAL_RMS).clamp(0.0, 1.0)
@@ -1367,21 +1398,13 @@ impl<const N: usize> MagCalibrator<N> {
         current_gravity: Option<Vector3<f32>>,
     ) -> Option<CalibrationCandidate> {
         if self.matrix_filled < CALIBRATION_PARAMETER_COUNT {
-            self.confidence = 0.0;
-            self.coverage = 0.0;
-            self.fitness = 0.0;
-            self.radial_fitness = 0.0;
-            self.gravity_fitness = 0.0;
+            self.quality = CalibrationQuality::ZERO;
             return None;
         }
         let candidate = match self.working_candidate() {
             Ok(candidate) => candidate,
             Err(_) => {
-                self.confidence = 0.0;
-                self.coverage = 0.0;
-                self.fitness = 0.0;
-                self.radial_fitness = 0.0;
-                self.gravity_fitness = 0.0;
+                self.quality = CalibrationQuality::ZERO;
                 return None;
             }
         };
@@ -1395,11 +1418,7 @@ impl<const N: usize> MagCalibrator<N> {
                 alpha,
             ) else {
                 self.radial_residual_mean_square = None;
-                self.confidence = 0.0;
-                self.coverage = 0.0;
-                self.fitness = 0.0;
-                self.radial_fitness = 0.0;
-                self.gravity_fitness = 0.0;
+                self.quality = CalibrationQuality::ZERO;
                 return None;
             };
             self.radial_residual_mean_square = Some(mean_square);
@@ -1421,19 +1440,9 @@ impl<const N: usize> MagCalibrator<N> {
             }
         }
         let coverage = self.mean_centered_coverage();
-        let radial_fitness = Self::fitness_score(self.radial_residual_mean_square);
+        let radial_fitness = Self::radial_fitness_score(self.radial_residual_mean_square);
         let gravity_fitness = Self::gravity_fitness_score(self.gravity_residual_mean_square);
-        let fitness = radial_fitness * gravity_fitness;
-        let quality = coverage * fitness;
-        self.coverage = coverage;
-        self.radial_fitness = radial_fitness;
-        self.gravity_fitness = gravity_fitness;
-        self.fitness = fitness;
-        self.confidence = if quality.is_finite() {
-            quality.clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
+        self.quality = CalibrationQuality::new(coverage, radial_fitness, gravity_fitness);
         Some(candidate)
     }
 
@@ -1465,7 +1474,7 @@ impl<const N: usize> MagCalibrator<N> {
             return (false, 0.0, 0.0, 0.0);
         };
         let coverage = self.mean_centered_coverage();
-        let radial_fitness = Self::fitness_score(self.radial_residual_mean_square);
+        let radial_fitness = Self::radial_fitness_score(self.radial_residual_mean_square);
         let gravity_fitness = Self::gravity_fitness_score(self.gravity_residual_mean_square);
         (true, coverage, radial_fitness, gravity_fitness)
     }
@@ -1503,7 +1512,7 @@ impl<const N: usize> MagCalibrator<N> {
 
     #[cfg(test)]
     pub(super) fn fitness_score_for_test(mean_square: Option<f32>) -> f32 {
-        Self::fitness_score(mean_square)
+        Self::radial_fitness_score(mean_square)
     }
 
     #[cfg(test)]
