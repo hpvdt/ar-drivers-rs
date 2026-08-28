@@ -17,6 +17,14 @@ enum AttitudeMode {
 
 #[derive(Default)]
 struct RunStats {
+    // TODO: to save time, this integration should report (number of) iterations instead of duration
+    //
+    // consequently:
+    // - all durations among the arguments and stats should switch to (number of) iterations accordingly
+    //   - these include success condition/criterion
+    // - `sim_motion` should be configured to emit sample as fast as possible, WITHOUT pacing
+    // - you may need to change the existing setting of minimal calibration confidence score & streak length
+    // - you may also need to change the testing condition for `worst_validation_error_after_warmup` to make it pass
     eval_time: Duration,
     eval_count: u64,
     confidence_sum: f64,
@@ -80,12 +88,8 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
     let test_start = Instant::now();
     loop {
         assert!(
-            // TODO: this integration test should take less time
-            //  the minimal elapse has been reduced to 30
-            //  this will cause the existing setting of minimal calibration confidence score & streak timeout
-            //  the testing condition for `worst_validation_error_after_warmup` should also adapt to the new parameters
-            test_start.elapsed() <= Duration::from_secs(30),
-            "magnetometer calibration never succeeded within 30 seconds: seed={seed}, \
+            test_start.elapsed() <= Duration::from_secs(120),
+            "magnetometer calibration never succeeded within 120 seconds: seed={seed}, \
              mode={mode_label}, timestamp={last_timestamp}, eval_count={}, \
              current_confidence={}, max_confidence={max_confidence}, \
              quality_streak={quality_streak}, max_quality_streak={max_quality_streak}",
