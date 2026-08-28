@@ -345,3 +345,43 @@ after the third motion segment enters the cache. Average `evaluate_correct` time
 eigendecomposition per quality update is cheaper than the bin bookkeeping was. The `0.03` threshold was placed
 empirically above the observed confined-phase level (`< 0.02` sustained) and below the lowest broad-motion plateau
 (`0.042`); hardware validation should re-check that gap before relying on the same constant.
+
+## Shorter publication streak and 2000-evaluation budget
+
+The integration test's hang guard drops from `5000` to `2000` magnetometer evaluations to bound its runtime. A passing
+run needs `first success + 125 warm-up + 500 validation` evaluations, so every seed must publish within about `1375`
+evaluations; the near-planar seed `308857554940434960` previously needed `1252` with gravity (`1877` total), leaving
+too little headroom for the random-seed `short`/`long` cases. The publication streak was halved from `110` to `55`
+valid updates; the `0.03` threshold and `0.02` reset floor are unchanged, as is every other calibrator parameter.
+
+Harness-method change since the prior stage: commit `87d6759` made the simulator run unpaced, so per-call computation
+times and wall-clock phase durations are no longer reported; only evaluation counts and angular errors are comparable
+with prior stages. Both tables below were measured in this session on the same machine, the `110`-streak row on the
+unmodified prior code as a like-for-like baseline.
+
+- **Implementation commit:** working tree superseding `85416b1`
+- **Publication streak:** `55` valid updates (was `110`); threshold `0.03`, reset floor `0.02` unchanged
+- **Harness budget:** `MAX_EVAL_COUNT = 2000` (was `5000`)
+- **Date:** 2026-08-28
+- **Test result:** 2 passed, 0 failed (regression command); the full `short`/`long`/`regression` file also passes
+  6/6, including twenty fresh random seeds under the `2000`-evaluation budget
+- **Complete benchmark duration:** 128.00 seconds (regression command; baseline `110`-streak code took 142.68 seconds
+  on the same machine); full test file 201.62 seconds
+
+### Nine-seed averages
+
+| Metric | With gravity, streak 110 | With gravity, streak 55 | Without gravity, streak 110 | Without gravity, streak 55 |
+|---|---:|---:|---:|---:|
+| Average successful error | 2.897 deg | 2.928 deg | 2.904 deg | 2.992 deg |
+| Worst successful error | 13.473 deg | 14.074 deg | 13.646 deg | 14.492 deg |
+| Average post-warm-up error | 2.871 deg | 2.891 deg | 2.858 deg | 2.913 deg |
+| Worst post-warm-up error | 13.473 deg | 14.074 deg | 13.646 deg | 13.659 deg |
+| Samples until first success | 765 | 683 | 709 | 654 |
+| Average samples per run | 1390 | 1308 | 1334 | 1279 |
+
+Halving the streak moves average first success about `55`-`80` evaluations earlier, and the slowest seed
+`308857554940434960` improves most (`1252` to `959` with gravity) because its plateau confidence hovers just above
+the `0.03` threshold where hysteresis pauses dominated the wait; every run now totals at most `1584` evaluations, a
+`20%` margin under the `2000`-evaluation budget. As the harness TODO anticipated, post-warm-up error rises only
+slightly (worst `13.5` to `14.1` degrees with gravity, average within `0.06 degree` of baseline), staying well below
+the `25`-degree worst-case and `10`-degree average limits, which therefore remain unchanged.

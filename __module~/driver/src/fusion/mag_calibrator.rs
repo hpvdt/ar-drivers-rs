@@ -39,7 +39,12 @@ pub(super) const MIN_PUBLICATION_CONFIDENCE: f32 = 0.03;
 /// optimizer absorbs a newly visited motion segment) pauses the streak
 /// instead of restarting it, while a genuine quality collapse resets it.
 const PUBLICATION_STREAK_RESET_CONFIDENCE: f32 = 0.02;
-pub(super) const MIN_PUBLICATION_STREAK: usize = 110;
+/// Valid updates a working candidate must hold at least
+/// `MIN_PUBLICATION_CONFIDENCE` before publishing. Halved from 110 so the
+/// SimMotion integration benchmark completes within its 2000-evaluation
+/// budget; the hysteresis floor still rejects jitter, and 55 valid updates
+/// is about 1.1 s of sustained quality at the 50 Hz magnetometer rate.
+pub(super) const MIN_PUBLICATION_STREAK: usize = 55;
 /// Uniform-sphere reference for directional coverage: the smallest
 /// eigenvalue of `E[phi(d) phi(d)^T]` over uniformly distributed unit
 /// directions, where `phi` is the quadratic feature vector shared with the
