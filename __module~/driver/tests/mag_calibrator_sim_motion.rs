@@ -10,6 +10,10 @@ const CONFIDENCE_THRESHOLD: f32 = 0.4;
 /// as fast as the hardware allows. Zero would freeze the attitude simulation
 /// (dt = `event_period_us` seconds), so it must stay positive.
 const EVENT_PERIOD_US: u64 = 20_001;
+// TODO: reduce MAX_EVAL_COUNT to 5000, current test is too slow
+//  the minimal threshold and streak length to yield the first successful corrected reading should be lowered accordingly to avoid timeout
+//  this will leads to a higher validation_error_after_warmup, but should still be consistently below current WORST_VALIDATION_ERROR_CRITERION & AVG_VALIDATION_ERROR_AFTER_CRITERION
+//  - if the above hypothesis is not true, increase these criterions accordingly.
 /// Hang guard bounding the whole benchmark in magnetometer evaluations.
 const MAX_EVAL_COUNT: u64 = 20_000;
 /// Magnetometer evaluations to wait after the first successful correction.
@@ -18,6 +22,10 @@ const WARMUP_EVAL_COUNT: u64 = 125;
 const REQUIRED_VALIDATION_EVAL_COUNT: u64 = 125;
 /// Magnetometer evaluations to validate in total, ending the run.
 const VALIDATION_EVAL_COUNT: u64 = 500;
+
+const WORST_VALIDATION_ERROR_CRITERION: f32 = 25.0;
+
+const AVG_VALIDATION_ERROR_AFTER_CRITERION: f64 = 10.0;
 
 /// Whether the calibrator is fed a co-timestamped simulated accelerometer reading with each sample.
 #[derive(Clone, Copy)]
@@ -247,22 +255,22 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
     println!("  - sampling/optimization warm-up: {warmup_count} evaluations");
     println!("  - verification: {} evaluations", stats.verified_count);
 
-    let avg_error_after_warmup =
+    let avg_validation_error_after_warmup =
         stats.sum_validation_error_after_warmup / stats.validation_error_count.max(1) as f64;
 
     assert!(
-        stats.worst_validation_error_after_warmup <= 25.0,
-        "worst corrected magnetometer error exceeded 25 degrees: seed={seed}, mode={mode_label}, \
+        stats.worst_validation_error_after_warmup <= WORST_VALIDATION_ERROR_CRITERION,
+        "worst corrected magnetometer error exceeded {WORST_VALIDATION_ERROR_CRITERION} degrees: seed={seed}, mode={mode_label}, \
          timestamp={timestamp_at_worst_validation_error}, \
          confidence={confidence_at_worst_validation_error}, \
          worst_angle_degrees={}",
         stats.worst_validation_error_after_warmup
     );
     assert!(
-        avg_error_after_warmup <= 10.0,
-        "average corrected magnetometer error exceeded 10 degrees: seed={seed}, mode={mode_label}, \
+        avg_validation_error_after_warmup <= AVG_VALIDATION_ERROR_AFTER_CRITERION,
+        "average corrected magnetometer error exceeded {AVG_VALIDATION_ERROR_AFTER_CRITERION} degrees: seed={seed}, mode={mode_label}, \
          avg_validation_confidence={}, \
-         avg_validation_error_degrees={avg_error_after_warmup}",
+         avg_validation_error_degrees={avg_validation_error_after_warmup}",
         stats.validation_confidence_sum / stats.validation_confidence_count.max(1) as f64,
     );
 
