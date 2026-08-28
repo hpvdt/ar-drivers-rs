@@ -16,17 +16,19 @@ enum AttitudeMode {
 }
 
 struct RunStats {
+    // TODO: many stats are duplicated in run_calibration, only with different mutability
+    //  they should be merged, a stats should not be declared twice, even with different mutability
     eval_time: Duration,
     eval_count: u64,
     confidence_sum: f64,
     confidence_count: u64,
     error_sum_degrees: f64,
     error_count: u64,
-    worst_error_degrees: f32,
+    worst_error: f32,
     first_success_confidence: f32,
-    validation_error_sum_degrees: f64,
+    sum_error_after_warmup: f64, // TODO: is this name adequate?
     validation_error_count: u64,
-    worst_validation_error_degrees: f32,
+    worst_error_after_warmup: f32,
     validation_confidence_sum: f64,
     validation_confidence_count: u64,
     min_validation_confidence: f32,
@@ -62,9 +64,9 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
     let mut validation_start = None;
     let mut completed_required_validation = false;
 
-    // TODO: the following 2 stats are functionally identical, only one of them should remain
-    let mut worst_angle_degrees = 0.0f32;
-    let mut worst_error_degrees = 0.0f32;
+    // all-run worst feeds MAG_CALIBRATION_BENCHMARK.md; post-warmup worst is the asserted gate
+    let mut worst_error_after_warmup = 0.0f32;
+    let mut worst_error = 0.0f32;
 
     let mut eval_count = 0u64;
     let mut eval_time = Duration::ZERO;
@@ -76,7 +78,7 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
     let mut last_timestamp = 0u64;
     let mut error_sum_degrees = 0.0f64;
     let mut error_count = 0u64;
-    let mut sum_validation_error_degrees = 0.0f64;
+    let mut sum_error_after_warmup = 0.0f64;
     let mut validation_error_count = 0u64;
     let mut validation_confidence_sum = 0.0f64;
     let mut validation_confidence_count = 0u64;
@@ -155,7 +157,7 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         if let Some(angle_degrees) = angle_degrees {
             error_sum_degrees += f64::from(angle_degrees);
             error_count += 1;
-            worst_error_degrees = worst_error_degrees.max(angle_degrees);
+            worst_error = worst_error.max(angle_degrees);
         }
 
         let warmed_up =
@@ -188,15 +190,15 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
                  timestamp={timestamp}, confidence={confidence}"
             )
         });
-        sum_validation_error_degrees += f64::from(angle_degrees);
+        sum_error_after_warmup += f64::from(angle_degrees);
         validation_error_count += 1;
         validation_confidence_sum += f64::from(confidence);
         validation_confidence_count += 1;
         min_validation_confidence = min_validation_confidence.min(confidence);
         max_validation_confidence = max_validation_confidence.max(confidence);
         let start = *validation_start.get_or_insert_with(Instant::now);
-        if angle_degrees > worst_angle_degrees {
-            worst_angle_degrees = angle_degrees;
+        if angle_degrees > worst_error_after_warmup {
+            worst_error_after_warmup = angle_degrees;
             confidence_at_worst_validation_error = confidence;
             timestamp_at_worst_validation_error = timestamp;
         }
@@ -207,7 +209,7 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
 
     assert!(
         completed_required_validation,
-        "corrected magnetometer did not complete the required 5-second validation; worst_angle_degrees={worst_angle_degrees}"
+        "corrected magnetometer did not complete the required 5-second validation; worst_error_after_warmup={worst_error_after_warmup}"
     );
 
     let total_time = test_start.elapsed();
@@ -230,12 +232,12 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         "  - avg error: {:.3} deg over {error_count} successful calls",
         error_sum_degrees / error_count as f64,
     );
-    println!("  - worst error: {worst_error_degrees:.3} deg");
+    println!("  - worst error: {worst_error:.3} deg");
     println!(
         "  - avg post-warmup error: {:.3} deg over {validation_error_count} calls",
-        sum_validation_error_degrees / validation_error_count.max(1) as f64,
+        sum_error_after_warmup / validation_error_count.max(1) as f64,
     );
-    println!("  - worst post-warmup error: {worst_angle_degrees:.3} deg");
+    println!("  - worst post-warmup error: {worst_error_after_warmup:.3} deg");
     println!(
         "  - avg post-warmup confidence: {:.6} over {validation_confidence_count} calls",
         validation_confidence_sum / validation_confidence_count.max(1) as f64,
@@ -256,20 +258,20 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
     println!("  - sampling/optimization warm-up: {warmup_time:.2?} / {warmup_count} iterations");
     println!("  - verification: {verified_time:.2?} / {verified_count} iterations");
 
-    let avg_validation_error_degrees =
-        sum_validation_error_degrees / validation_error_count.max(1) as f64;
+    let avg_error_after_warmup = sum_error_after_warmup / validation_error_count.max(1) as f64;
+
     assert!(
-        worst_angle_degrees <= 25.0,
-        "worst corrected magnetometer error exceeded 18 degrees: seed={seed}, mode={mode_label}, \
+        worst_error_after_warmup <= 25.0,
+        "worst corrected magnetometer error exceeded 25 degrees: seed={seed}, mode={mode_label}, \
          timestamp={timestamp_at_worst_validation_error}, \
          confidence={confidence_at_worst_validation_error}, \
-         worst_angle_degrees={worst_angle_degrees}"
+         worst_angle_degrees={worst_error_after_warmup}"
     );
     assert!(
-        avg_validation_error_degrees <= 10.0,
+        avg_error_after_warmup <= 10.0,
         "average corrected magnetometer error exceeded 10 degrees: seed={seed}, mode={mode_label}, \
          avg_validation_confidence={}, \
-         avg_validation_error_degrees={avg_validation_error_degrees}",
+         avg_validation_error_degrees={avg_error_after_warmup}",
         validation_confidence_sum / validation_confidence_count.max(1) as f64,
     );
 
@@ -280,11 +282,11 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         confidence_count,
         error_sum_degrees,
         error_count,
-        worst_error_degrees,
+        worst_error,
         first_success_confidence: first_success_confidence.unwrap(),
-        validation_error_sum_degrees: sum_validation_error_degrees,
+        sum_error_after_warmup,
         validation_error_count,
-        worst_validation_error_degrees: worst_angle_degrees,
+        worst_error_after_warmup,
         validation_confidence_sum,
         validation_confidence_count,
         min_validation_confidence,
@@ -312,19 +314,16 @@ fn print_avg_stats(runs: &[RunStats]) {
     let total_confidence_count: u64 = runs.iter().map(|r| r.confidence_count).sum();
     let total_error_sum: f64 = runs.iter().map(|r| r.error_sum_degrees).sum();
     let total_error_count: u64 = runs.iter().map(|r| r.error_count).sum();
-    let total_validation_error_sum: f64 = runs.iter().map(|r| r.validation_error_sum_degrees).sum();
+    let total_validation_error_sum: f64 = runs.iter().map(|r| r.sum_error_after_warmup).sum();
     let total_validation_error_count: u64 = runs.iter().map(|r| r.validation_error_count).sum();
     let total_validation_confidence_sum: f64 =
         runs.iter().map(|r| r.validation_confidence_sum).sum();
     let total_validation_confidence_count: u64 =
         runs.iter().map(|r| r.validation_confidence_count).sum();
-    let worst_error_degrees: f32 = runs
-        .iter()
-        .map(|r| r.worst_error_degrees)
-        .fold(0.0, f32::max);
+    let worst_error_degrees: f32 = runs.iter().map(|r| r.worst_error).fold(0.0, f32::max);
     let worst_validation_error_degrees: f32 = runs
         .iter()
-        .map(|r| r.worst_validation_error_degrees)
+        .map(|r| r.worst_error_after_warmup)
         .fold(0.0, f32::max);
     let min_validation_confidence = runs
         .iter()
