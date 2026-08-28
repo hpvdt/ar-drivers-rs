@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use ar_drivers::fusion::{rub_to_frd, FusionState};
 use ar_drivers::sim::sim_motion::Config;
 use ar_drivers::{ARGlasses, GlassesEvent, SimMotion};
@@ -34,6 +36,7 @@ enum AttitudeMode {
 
 #[derive(Default)]
 struct RunStats {
+    eval_time: Duration,
     eval_count: u64,
     confidence_sum: f64,
     confidence_count: u64,
@@ -126,9 +129,11 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
             ),
             AttitudeMode::Never => None,
         };
+        let eval_start = Instant::now();
         let result = fusion
             .magCalibrator
             .evaluate_correct(raw_frd, gravity_direction, timestamp);
+        stats.eval_time += eval_start.elapsed();
         stats.eval_count += 1;
         let confidence = result.as_ref().map_or_else(
             |_| fusion.magCalibrator.get_confidence(),
@@ -212,6 +217,11 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
 
     println!("- evaluate_correct");
     println!(
+        "  - avg computation time: {:.3} ms over {} calls",
+        stats.eval_time.as_secs_f64() * 1e3 / stats.eval_count as f64,
+        stats.eval_count,
+    );
+    println!(
         "  - avg confidence: {:.6} over {} calls",
         stats.confidence_sum / stats.confidence_count as f64,
         stats.confidence_count,
@@ -279,6 +289,8 @@ fn print_avg_stats(runs: &[RunStats]) {
     let n = runs.len() as f64;
     let avg_count =
         |f: fn(&RunStats) -> u64| (runs.iter().map(|r| f(r)).sum::<u64>() as f64 / n).round();
+    let total_eval_time: f64 = runs.iter().map(|r| r.eval_time.as_secs_f64()).sum();
+    let total_eval_count: u64 = runs.iter().map(|r| r.eval_count).sum();
     let total_confidence_sum: f64 = runs.iter().map(|r| r.confidence_sum).sum();
     let total_confidence_count: u64 = runs.iter().map(|r| r.confidence_count).sum();
     let total_error_sum: f64 = runs.iter().map(|r| r.error_sum_degrees).sum();
@@ -309,6 +321,11 @@ fn print_avg_stats(runs: &[RunStats]) {
     println!("  ======================================================================  ");
     println!("# Average stats over {} runs", runs.len());
     println!("- evaluate_correct");
+    println!(
+        "  - avg computation time: {:.3} ms over {} calls",
+        total_eval_time * 1e3 / total_eval_count as f64,
+        avg_count(|r| r.eval_count),
+    );
     println!(
         "  - avg confidence: {:.6} over {} calls",
         total_confidence_sum / total_confidence_count as f64,
