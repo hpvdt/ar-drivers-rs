@@ -61,6 +61,8 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
     let mut first_success_at = None;
     let mut validation_start = None;
     let mut completed_required_validation = false;
+
+    // TODO: the following 2 stats are functionally identical, only one of them should remain
     let mut worst_angle_degrees = 0.0f32;
     let mut worst_error_degrees = 0.0f32;
 
@@ -74,7 +76,7 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
     let mut last_timestamp = 0u64;
     let mut error_sum_degrees = 0.0f64;
     let mut error_count = 0u64;
-    let mut validation_error_sum_degrees = 0.0f64;
+    let mut sum_validation_error_degrees = 0.0f64;
     let mut validation_error_count = 0u64;
     let mut validation_confidence_sum = 0.0f64;
     let mut validation_confidence_count = 0u64;
@@ -88,8 +90,12 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
     let test_start = Instant::now();
     loop {
         assert!(
-            test_start.elapsed() <= Duration::from_secs(120),
-            "magnetometer calibration never succeeded within 120 seconds: seed={seed}, \
+            // TODO: this integration test should take less time
+            //  the minimal elapse has been reduced to 30
+            //  this will cause the existing setting of minimal calibration confidence score & streak timeout
+            //  the testing condition for worst_angle_degrees should also adapt to the new parameters
+            test_start.elapsed() <= Duration::from_secs(30),
+            "magnetometer calibration never succeeded within 30 seconds: seed={seed}, \
              mode={mode_label}, timestamp={last_timestamp}, eval_count={eval_count}, \
              current_confidence={}, max_confidence={max_confidence}, \
              quality_streak={quality_streak}, max_quality_streak={max_quality_streak}",
@@ -182,7 +188,7 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
                  timestamp={timestamp}, confidence={confidence}"
             )
         });
-        validation_error_sum_degrees += f64::from(angle_degrees);
+        sum_validation_error_degrees += f64::from(angle_degrees);
         validation_error_count += 1;
         validation_confidence_sum += f64::from(confidence);
         validation_confidence_count += 1;
@@ -227,7 +233,7 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
     println!("  - worst error: {worst_error_degrees:.3} deg");
     println!(
         "  - avg post-warmup error: {:.3} deg over {validation_error_count} calls",
-        validation_error_sum_degrees / validation_error_count.max(1) as f64,
+        sum_validation_error_degrees / validation_error_count.max(1) as f64,
     );
     println!("  - worst post-warmup error: {worst_angle_degrees:.3} deg");
     println!(
@@ -251,7 +257,7 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
     println!("  - verification: {verified_time:.2?} / {verified_count} iterations");
 
     let avg_validation_error_degrees =
-        validation_error_sum_degrees / validation_error_count.max(1) as f64;
+        sum_validation_error_degrees / validation_error_count.max(1) as f64;
     assert!(
         worst_angle_degrees <= 25.0,
         "worst corrected magnetometer error exceeded 18 degrees: seed={seed}, mode={mode_label}, \
@@ -276,7 +282,7 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         error_count,
         worst_error_degrees,
         first_success_confidence: first_success_confidence.unwrap(),
-        validation_error_sum_degrees,
+        validation_error_sum_degrees: sum_validation_error_degrees,
         validation_error_count,
         worst_validation_error_degrees: worst_angle_degrees,
         validation_confidence_sum,
