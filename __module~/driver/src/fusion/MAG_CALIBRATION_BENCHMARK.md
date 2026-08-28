@@ -2,7 +2,7 @@
 
 ## Method
 
-Use the deterministic `regression` cases in `tests/mag_calibration_sim_motion.rs`, once with co-timestamped accelerometer
+Use the deterministic `regression` cases in `mag_calibrator_sim_motion.rs`, once with co-timestamped accelerometer
 gravity and once without gravity.
 
 The integration test
@@ -13,7 +13,7 @@ Command:
 
 ```bash
 cargo test --package ar-drivers --no-default-features \
-  --test mag_calibration_sim_motion regression -- --nocapture
+  --test mag_calibrator_sim_motion regression -- --nocapture
 ```
 
 These are debug test-profile timings, intended only for before/after comparisons on the same machine. Wall-clock time
