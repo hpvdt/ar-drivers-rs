@@ -10,12 +10,12 @@ const CONFIDENCE_THRESHOLD: f32 = 0.4;
 /// as fast as the hardware allows. Zero would freeze the attitude simulation
 /// (dt = `event_period_us` seconds), so it must stay positive.
 const EVENT_PERIOD_US: u64 = 20_001;
-// TODO: reduce MAX_EVAL_COUNT to 5000, current test is too slow
+// TODO: reduce MAX_EVAL_COUNT to 2000, current test is too slow
 //  the minimal threshold and streak length to yield the first successful corrected reading should be lowered accordingly to avoid timeout
 //  this will leads to a higher validation_error_after_warmup, but should still be consistently below current WORST_VALIDATION_ERROR_CRITERION & AVG_VALIDATION_ERROR_AFTER_CRITERION
-//  - if the above hypothesis is not true, increase these criterions accordingly.
+//  - if the above hypothesis is not true, increase these criteria accordingly.
 /// Hang guard bounding the whole benchmark in magnetometer evaluations.
-const MAX_EVAL_COUNT: u64 = 20_000;
+const MAX_EVAL_COUNT: u64 = 5_000;
 /// Magnetometer evaluations to wait after the first successful correction.
 const WARMUP_EVAL_COUNT: u64 = 125;
 /// Magnetometer evaluations to validate before the run can end early.
