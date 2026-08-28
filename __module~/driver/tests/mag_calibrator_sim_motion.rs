@@ -25,9 +25,9 @@ struct RunStats {
     error_count: u64,
     worst_error: f32,
     first_success_confidence: f32,
-    validation_error_after_warmup_sum: f64,
+    sum_validation_error_after_warmup: f64,
+    worst_validation_error_after_warmup: f32,
     validation_error_count: u64,
-    worst_error_after_warmup: f32,
     validation_confidence_sum: f64,
     validation_confidence_count: u64,
     min_validation_confidence: f32,
@@ -83,7 +83,7 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
             // TODO: this integration test should take less time
             //  the minimal elapse has been reduced to 30
             //  this will cause the existing setting of minimal calibration confidence score & streak timeout
-            //  the testing condition for worst_angle_degrees should also adapt to the new parameters
+            //  the testing condition for `worst_validation_error_after_warmup` should also adapt to the new parameters
             test_start.elapsed() <= Duration::from_secs(30),
             "magnetometer calibration never succeeded within 30 seconds: seed={seed}, \
              mode={mode_label}, timestamp={last_timestamp}, eval_count={}, \
@@ -179,15 +179,15 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
                  timestamp={timestamp}, confidence={confidence}"
             )
         });
-        stats.validation_error_after_warmup_sum += f64::from(angle_degrees);
+        stats.sum_validation_error_after_warmup += f64::from(angle_degrees);
         stats.validation_error_count += 1;
         stats.validation_confidence_sum += f64::from(confidence);
         stats.validation_confidence_count += 1;
         stats.min_validation_confidence = stats.min_validation_confidence.min(confidence);
         stats.max_validation_confidence = stats.max_validation_confidence.max(confidence);
         let start = *validation_start.get_or_insert_with(Instant::now);
-        if angle_degrees > stats.worst_error_after_warmup {
-            stats.worst_error_after_warmup = angle_degrees;
+        if angle_degrees > stats.worst_validation_error_after_warmup {
+            stats.worst_validation_error_after_warmup = angle_degrees;
             confidence_at_worst_validation_error = confidence;
             timestamp_at_worst_validation_error = timestamp;
         }
@@ -200,7 +200,7 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         completed_required_validation,
         "corrected magnetometer did not complete the required 5-second validation; \
          worst_error_after_warmup={}",
-        stats.worst_error_after_warmup,
+        stats.worst_validation_error_after_warmup,
     );
 
     let total_time = test_start.elapsed();
@@ -235,12 +235,12 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
     println!("  - worst error: {:.3} deg", stats.worst_error);
     println!(
         "  - avg post-warmup error: {:.3} deg over {} calls",
-        stats.validation_error_after_warmup_sum / stats.validation_error_count.max(1) as f64,
+        stats.sum_validation_error_after_warmup / stats.validation_error_count.max(1) as f64,
         stats.validation_error_count,
     );
     println!(
         "  - worst post-warmup error: {:.3} deg",
-        stats.worst_error_after_warmup
+        stats.worst_validation_error_after_warmup
     );
     println!(
         "  - avg post-warmup confidence: {:.6} over {} calls",
@@ -271,15 +271,15 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
     );
 
     let avg_error_after_warmup =
-        stats.validation_error_after_warmup_sum / stats.validation_error_count.max(1) as f64;
+        stats.sum_validation_error_after_warmup / stats.validation_error_count.max(1) as f64;
 
     assert!(
-        stats.worst_error_after_warmup <= 25.0,
+        stats.worst_validation_error_after_warmup <= 25.0,
         "worst corrected magnetometer error exceeded 25 degrees: seed={seed}, mode={mode_label}, \
          timestamp={timestamp_at_worst_validation_error}, \
          confidence={confidence_at_worst_validation_error}, \
          worst_angle_degrees={}",
-        stats.worst_error_after_warmup
+        stats.worst_validation_error_after_warmup
     );
     assert!(
         avg_error_after_warmup <= 10.0,
@@ -307,7 +307,7 @@ fn print_avg_stats(runs: &[RunStats]) {
     let total_error_count: u64 = runs.iter().map(|r| r.error_count).sum();
     let total_validation_error_sum: f64 = runs
         .iter()
-        .map(|r| r.validation_error_after_warmup_sum)
+        .map(|r| r.sum_validation_error_after_warmup)
         .sum();
     let total_validation_error_count: u64 = runs.iter().map(|r| r.validation_error_count).sum();
     let total_validation_confidence_sum: f64 =
@@ -317,7 +317,7 @@ fn print_avg_stats(runs: &[RunStats]) {
     let worst_error_degrees: f32 = runs.iter().map(|r| r.worst_error).fold(0.0, f32::max);
     let worst_validation_error_degrees: f32 = runs
         .iter()
-        .map(|r| r.worst_error_after_warmup)
+        .map(|r| r.worst_validation_error_after_warmup)
         .fold(0.0, f32::max);
     let min_validation_confidence = runs
         .iter()
