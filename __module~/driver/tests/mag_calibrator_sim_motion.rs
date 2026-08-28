@@ -1,5 +1,3 @@
-use std::time::{Duration, Instant};
-
 use ar_drivers::fusion::{rub_to_frd, FusionState};
 use ar_drivers::sim::sim_motion::Config;
 use ar_drivers::{ARGlasses, GlassesEvent, SimMotion};
@@ -7,6 +5,18 @@ use nalgebra::Vector3;
 use serial_test::serial;
 
 const CONFIDENCE_THRESHOLD: f32 = 0.4;
+/// Unpaced virtual period: SimMotion skips the wall-clock pacing sleep once the
+/// event period exceeds the built-in 20 ms pacing bound, so the benchmark runs
+/// as fast as the hardware allows.
+const EVENT_PERIOD_US: u64 = 20_001;
+/// Hang guard bounding the whole benchmark in magnetometer evaluations.
+const MAX_EVAL_COUNT: u64 = 20_000;
+/// Magnetometer evaluations to wait after the first successful correction.
+const WARMUP_EVAL_COUNT: u64 = 125;
+/// Magnetometer evaluations to validate before the run can end early.
+const REQUIRED_VALIDATION_EVAL_COUNT: u64 = 125;
+/// Magnetometer evaluations to validate in total, ending the run.
+const VALIDATION_EVAL_COUNT: u64 = 500;
 
 /// Whether the calibrator is fed a co-timestamped simulated accelerometer reading with each sample.
 #[derive(Clone, Copy)]
@@ -17,15 +27,6 @@ enum AttitudeMode {
 
 #[derive(Default)]
 struct RunStats {
-    // TODO: to save time, this integration should report (number of) iterations instead of duration
-    //
-    // consequently:
-    // - all durations among the arguments and stats should switch to (number of) iterations accordingly
-    //   - these include success condition/criterion
-    // - `sim_motion` should be configured to emit sample as fast as possible, WITHOUT pacing
-    // - you may need to change the existing setting of minimal calibration confidence score & streak length
-    // - you may also need to change the testing condition for `worst_validation_error_after_warmup` to make it pass
-    eval_time: Duration,
     eval_count: u64,
     confidence_sum: f64,
     confidence_count: u64,
@@ -40,12 +41,8 @@ struct RunStats {
     validation_confidence_count: u64,
     min_validation_confidence: f32,
     max_validation_confidence: f32,
-    total_time: Duration,
-    time_until_first_success: Duration,
     count_until_first_success: u64,
-    warmup_time: Duration,
     warmup_count: u64,
-    verified_time: Duration,
     verified_count: u64,
 }
 
@@ -64,11 +61,8 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         Vector3::new(0.0, dip.sin(), -dip.cos()) * config.magnetic_field_strength;
     let mut sim_motion = SimMotion::with_config(config);
     let mut fusion = FusionState::new(Box::new(SimMotion::new()));
-    let required_validation_duration = Duration::from_secs(5);
-    let validation_duration = Duration::from_secs(20);
-    let warmup_duration = Duration::from_secs(5);
-    let mut first_success_at = None;
-    let mut validation_start = None;
+    let mut first_success_count = None;
+    let mut validation_start_count = None;
     let mut completed_required_validation = false;
 
     let mut stats = RunStats {
@@ -82,21 +76,21 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
     let mut last_timestamp = 0u64;
     let mut confidence_at_worst_validation_error = 0.0f32;
     let mut timestamp_at_worst_validation_error = 0u64;
-    let mut until_first_success: Option<(Duration, u64)> = None;
+    let mut count_until_first_success = None;
     let mut first_success_confidence = None;
-    let mut warmup_span: Option<(Duration, u64)> = None;
-    let test_start = Instant::now();
+    let mut warmup_count = None;
     loop {
         assert!(
-            test_start.elapsed() <= Duration::from_secs(120),
-            "magnetometer calibration never succeeded within 120 seconds: seed={seed}, \
-             mode={mode_label}, timestamp={last_timestamp}, eval_count={}, \
+            stats.eval_count <= MAX_EVAL_COUNT,
+            "magnetometer calibration never succeeded within {MAX_EVAL_COUNT} evaluations: \
+             seed={seed}, mode={mode_label}, timestamp={last_timestamp}, \
              current_confidence={}, max_confidence={max_confidence}, \
              quality_streak={quality_streak}, max_quality_streak={max_quality_streak}",
-            stats.eval_count,
             fusion.magCalibrator.get_confidence(),
         );
-        if validation_start.is_some_and(|start: Instant| start.elapsed() >= validation_duration) {
+        if validation_start_count
+            .is_some_and(|start| stats.eval_count - start >= VALIDATION_EVAL_COUNT)
+        {
             break;
         }
         let ground_truth = sim_motion.snapshot();
@@ -118,7 +112,6 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         let ideal_body_frd = rub_to_frd(&ideal_body_rub).normalize();
         let raw_frd = rub_to_frd(&magnetometer);
 
-        let eval_start = Instant::now();
         let gravity_direction = match attitude_mode {
             AttitudeMode::Always => Some(
                 accelerometer_frd
@@ -129,7 +122,6 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         let result = fusion
             .magCalibrator
             .evaluate_correct(raw_frd, gravity_direction, timestamp);
-        stats.eval_time += eval_start.elapsed();
         stats.eval_count += 1;
         let confidence = result.as_ref().map_or_else(
             |_| fusion.magCalibrator.get_confidence(),
@@ -154,21 +146,18 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         }
 
         let warmed_up =
-            first_success_at.is_some_and(|instant: Instant| instant.elapsed() >= warmup_duration);
+            first_success_count.is_some_and(|count| stats.eval_count - count >= WARMUP_EVAL_COUNT);
         if !warmed_up {
-            if corrected.is_some() && first_success_at.is_none() {
-                first_success_at = Some(Instant::now());
-                until_first_success = Some((test_start.elapsed(), stats.eval_count));
+            if corrected.is_some() && first_success_count.is_none() {
+                first_success_count = Some(stats.eval_count);
+                count_until_first_success = Some(stats.eval_count);
                 first_success_confidence = Some(confidence);
             }
             continue;
         }
-        if warmup_span.is_none() {
-            let (_, count_at_first_success) = until_first_success.unwrap();
-            warmup_span = Some((
-                first_success_at.unwrap().elapsed(),
-                stats.eval_count - count_at_first_success,
-            ));
+        if warmup_count.is_none() {
+            let count_at_first_success = first_success_count.unwrap();
+            warmup_count = Some(stats.eval_count - count_at_first_success);
         }
 
         if let Err(error) = result {
@@ -189,43 +178,32 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         stats.validation_confidence_count += 1;
         stats.min_validation_confidence = stats.min_validation_confidence.min(confidence);
         stats.max_validation_confidence = stats.max_validation_confidence.max(confidence);
-        let start = *validation_start.get_or_insert_with(Instant::now);
+        let start = *validation_start_count.get_or_insert(stats.eval_count);
         if angle_degrees > stats.worst_validation_error_after_warmup {
             stats.worst_validation_error_after_warmup = angle_degrees;
             confidence_at_worst_validation_error = confidence;
             timestamp_at_worst_validation_error = timestamp;
         }
-        if start.elapsed() >= required_validation_duration {
+        if stats.eval_count - start >= REQUIRED_VALIDATION_EVAL_COUNT {
             completed_required_validation = true;
         }
     }
 
     assert!(
         completed_required_validation,
-        "corrected magnetometer did not complete the required 5-second validation; \
-         worst_error_after_warmup={}",
+        "corrected magnetometer did not complete the required {REQUIRED_VALIDATION_EVAL_COUNT}-evaluation \
+         validation; worst_error_after_warmup={}",
         stats.worst_validation_error_after_warmup,
     );
 
-    let total_time = test_start.elapsed();
-    let (time_until_first_success, count_until_first_success) =
-        until_first_success.expect("no successful correction");
-    let (warmup_time, warmup_count) = warmup_span.expect("warm-up never completed");
+    let count_until_first_success = count_until_first_success.expect("no successful correction");
+    let warmup_count = warmup_count.expect("warm-up never completed");
     stats.verified_count = stats.eval_count - count_until_first_success - warmup_count;
-    stats.verified_time = total_time - time_until_first_success - warmup_time;
-    stats.total_time = total_time;
-    stats.time_until_first_success = time_until_first_success;
     stats.count_until_first_success = count_until_first_success;
-    stats.warmup_time = warmup_time;
     stats.warmup_count = warmup_count;
     stats.first_success_confidence = first_success_confidence.unwrap();
 
     println!("- evaluate_correct");
-    println!(
-        "  - avg computation time: {:.3} ms over {} calls",
-        stats.eval_time.as_secs_f64() * 1e3 / stats.eval_count as f64,
-        stats.eval_count,
-    );
     println!(
         "  - avg confidence: {:.6} over {} calls",
         stats.confidence_sum / stats.confidence_count as f64,
@@ -259,20 +237,14 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         "  - worst post-warmup sample: timestamp={timestamp_at_worst_validation_error}, \
          confidence={confidence_at_worst_validation_error:.6}"
     );
+    println!("- total: {} evaluations", stats.eval_count);
     println!(
-        "- total: {total_time:.2?} / {} iterations",
-        stats.eval_count
-    );
-    println!(
-        "  - until first successful correction: {time_until_first_success:.2?} / \
-         {count_until_first_success} iterations / confidence={:.6}",
+        "  - until first successful correction: {} evaluations / confidence={:.6}",
+        count_until_first_success,
         first_success_confidence.unwrap(),
     );
-    println!("  - sampling/optimization warm-up: {warmup_time:.2?} / {warmup_count} iterations");
-    println!(
-        "  - verification: {:.2?} / {} iterations",
-        stats.verified_time, stats.verified_count
-    );
+    println!("  - sampling/optimization warm-up: {warmup_count} evaluations");
+    println!("  - verification: {} evaluations", stats.verified_count);
 
     let avg_error_after_warmup =
         stats.sum_validation_error_after_warmup / stats.validation_error_count.max(1) as f64;
@@ -298,13 +270,8 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
 
 fn print_avg_stats(runs: &[RunStats]) {
     let n = runs.len() as f64;
-    let avg_dur = |f: fn(&RunStats) -> Duration| {
-        Duration::from_secs_f64(runs.iter().map(|r| f(r).as_secs_f64()).sum::<f64>() / n)
-    };
     let avg_count =
         |f: fn(&RunStats) -> u64| (runs.iter().map(|r| f(r)).sum::<u64>() as f64 / n).round();
-    let total_eval_time: f64 = runs.iter().map(|r| r.eval_time.as_secs_f64()).sum();
-    let total_eval_count: u64 = runs.iter().map(|r| r.eval_count).sum();
     let total_confidence_sum: f64 = runs.iter().map(|r| r.confidence_sum).sum();
     let total_confidence_count: u64 = runs.iter().map(|r| r.confidence_count).sum();
     let total_error_sum: f64 = runs.iter().map(|r| r.error_sum_degrees).sum();
@@ -336,11 +303,6 @@ fn print_avg_stats(runs: &[RunStats]) {
     println!("# Average stats over {} runs", runs.len());
     println!("- evaluate_correct");
     println!(
-        "  - avg computation time: {:.3} ms over {} calls",
-        total_eval_time * 1e3 / total_eval_count as f64,
-        avg_count(|r| r.eval_count),
-    );
-    println!(
         "  - avg confidence: {:.6} over {} calls",
         total_confidence_sum / total_confidence_count as f64,
         avg_count(|r| r.confidence_count),
@@ -365,14 +327,9 @@ fn print_avg_stats(runs: &[RunStats]) {
     println!(
         "  - post-warmup confidence range: {min_validation_confidence:.6}..={max_validation_confidence:.6}"
     );
+    println!("- total: {} evaluations", avg_count(|r| r.eval_count));
     println!(
-        "- total: {:.2?} / {} iterations",
-        avg_dur(|r| r.total_time),
-        avg_count(|r| r.eval_count),
-    );
-    println!(
-        "  - until first successful correction: {:.2?} / {} iterations / avg confidence={:.6}",
-        avg_dur(|r| r.time_until_first_success),
+        "  - until first successful correction: {} evaluations / avg confidence={:.6}",
         avg_count(|r| r.count_until_first_success),
         runs.iter()
             .map(|r| f64::from(r.first_success_confidence))
@@ -380,13 +337,11 @@ fn print_avg_stats(runs: &[RunStats]) {
             / n,
     );
     println!(
-        "  - sampling/optimization warm-up: {:.2?} / {} iterations",
-        avg_dur(|r| r.warmup_time),
+        "  - sampling/optimization warm-up: {} evaluations",
         avg_count(|r| r.warmup_count),
     );
     println!(
-        "  - verification: {:.2?} / {} iterations",
-        avg_dur(|r| r.verified_time),
+        "  - verification: {} evaluations",
         avg_count(|r| r.verified_count),
     );
 }
@@ -398,6 +353,7 @@ fn run_seeds(attitude_mode: AttitudeMode, seeds: impl IntoIterator<Item = u64>) 
         .map(|seed| {
             let config = Config {
                 seed,
+                event_period_us: EVENT_PERIOD_US,
                 ..Config::default()
             };
             run_calibration(config, attitude_mode)
