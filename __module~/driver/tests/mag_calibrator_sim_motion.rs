@@ -7,7 +7,8 @@ use serial_test::serial;
 const CONFIDENCE_THRESHOLD: f32 = 0.4;
 /// Unpaced virtual period: SimMotion skips the wall-clock pacing sleep once the
 /// event period exceeds the built-in 20 ms pacing bound, so the benchmark runs
-/// as fast as the hardware allows.
+/// as fast as the hardware allows. Zero would freeze the attitude simulation
+/// (dt = `event_period_us` seconds), so it must stay positive.
 const EVENT_PERIOD_US: u64 = 20_001;
 /// Hang guard bounding the whole benchmark in magnetometer evaluations.
 const MAX_EVAL_COUNT: u64 = 20_000;
