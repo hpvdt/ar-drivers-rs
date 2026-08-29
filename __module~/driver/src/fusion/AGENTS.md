@@ -46,8 +46,8 @@ expired; cache normalization is derived from these fixed-size statistics without
 recomputed from the current cache on each quality update: the smallest eigenvalue of the `9 x 9` design matrix of the
 mean-centered unit directions. Before nine retained samples, calibration is explicitly pending
 with confidence zero. After that model minimum, a finite SPD working candidate must raise live confidence to at least
-`0.03` for 55 valid updates before it can publish from a partially filled cache. Confidence dips below `0.03` pause
-that streak instead of resetting it while they stay above a `0.02` floor; invalid observations and unusable candidates
+`0.0125` for 55 valid updates before it can publish from a partially filled cache. Confidence dips below `0.0125` pause
+that streak instead of resetting it while they stay above a `0.01` floor; invalid observations and unusable candidates
 always reset it.
 
 ### Production cache size
@@ -286,8 +286,8 @@ to `[0, 1]`. `MagCalibrationResult` reports every factor: `confidence`, `coverag
 `gravity_fitness`.
 
 Working coefficients and published correction parameters are separate. The hard-iron offset and soft-iron correction
-change only after 55 valid updates at confidence at least `0.03`, including while the cache is partial. Confidence
-between the `0.02` reset floor and `0.03` pauses the streak; invalid observations, unusable candidates, and confidence
+change only after 55 valid updates at confidence at least `0.0125`, including while the cache is partial. Confidence
+between the `0.01` reset floor and `0.0125` pauses the streak; invalid observations, unusable candidates, and confidence
 below the floor reset that O(1) streak. Before first publication,
 `evaluate_correct` returns a non-error `Pending` result and no vector. After publication, a candidate without the
 required streak reports its current confidence while leaving the last published correction in use. Fusion callers use

@@ -13,8 +13,8 @@ const CONFIDENCE_THRESHOLD: f32 = 0.4;
 /// (dt = `event_period_us` seconds), so it must stay positive.
 const EVENT_PERIOD_US: u64 = 20_001;
 /// Hang guard bounding the whole benchmark in magnetometer evaluations.
-/// Leaves headroom over the slowest observed run (about 1600 evaluations on
-/// the near-planar regression seed with the 55-update publication streak).
+/// Leaves headroom over the slowest observed fixed-seed run (under 1800
+/// evaluations with the 55-update publication streak).
 const MAX_EVAL_COUNT: u64 = 2_000;
 /// Magnetometer evaluations to wait after the first successful correction.
 const WARMUP_EVAL_COUNT: u64 = 125;
@@ -416,7 +416,6 @@ fn regression(attitude_mode: AttitudeMode) {
             15214809500125664723,
             4333660961526349397,
             17611800246992533302,
-            // TODO: these seed caused timeout, try to relax `calibration_initialized` condition
             9399375230094018656,
             10758804304863325866,
         ],

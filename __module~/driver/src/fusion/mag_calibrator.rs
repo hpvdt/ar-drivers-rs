@@ -26,19 +26,15 @@ const GRAVITY_RMS_FLOOR: f32 = 0.1;
 /// RMS ~0.14 consistent, ~0.25 contradictory) pending benchmark validation.
 const MAX_GRAVITY_RMS: f32 = 0.3;
 /// Confidence required for a working candidate to advance the publication
-/// streak. With E-optimality coverage this sits in the gap between a
-/// calibrator whose retained motion genuinely fills a broad region (whose
-/// live confidence plateaus at 0.042 or above even when it never visits a
-/// third axis) and one still confined to the first motion segments (whose
-/// near-planar support leaves the design matrix rank-deficient and the
-/// confidence below 0.02 sustained).
-pub(super) const MIN_PUBLICATION_CONFIDENCE: f32 = 0.03;
+/// streak. This is the highest tested threshold at which every fixed SimMotion
+/// regression seed completes the 2000-evaluation budget; the rank-deficient
+/// planar regression remains below it.
+pub(super) const MIN_PUBLICATION_CONFIDENCE: f32 = 0.0125;
 /// Confidence floor below which the publication streak resets. This
 /// hysteresis keeps a qualifying candidate from losing its streak to
-/// threshold jitter: a short dip in live quality (for example while the
-/// optimizer absorbs a newly visited motion segment) pauses the streak
-/// instead of restarting it, while a genuine quality collapse resets it.
-const PUBLICATION_STREAK_RESET_CONFIDENCE: f32 = 0.02;
+/// threshold jitter: confidence in `[0.01, 0.0125)` pauses the streak while a
+/// drop below `0.01` resets it.
+const PUBLICATION_STREAK_RESET_CONFIDENCE: f32 = 0.01;
 /// Valid updates a working candidate must hold at least
 /// `MIN_PUBLICATION_CONFIDENCE` before publishing. Halved from 110 so the
 /// SimMotion integration benchmark completes within its 2000-evaluation

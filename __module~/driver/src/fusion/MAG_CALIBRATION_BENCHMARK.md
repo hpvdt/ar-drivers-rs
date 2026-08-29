@@ -385,3 +385,42 @@ the `0.03` threshold where hysteresis pauses dominated the wait; every run now t
 `20%` margin under the `2000`-evaluation budget. As the harness TODO anticipated, post-warm-up error rises only
 slightly (worst `13.5` to `14.1` degrees with gravity, average within `0.06 degree` of baseline), staying well below
 the `25`-degree worst-case and `10`-degree average limits, which therefore remain unchanged.
+
+## Eleven-seed publication-threshold regression
+
+Two added fixed seeds exposed a late-publication failure under the `2000`-evaluation budget. At the prior `0.03`
+publication threshold and `0.02` reset floor, seed `10758804304863325866` with gravity reached the hang guard before
+publishing early enough to finish the fixed `125`-evaluation warm-up and `500`-evaluation validation. The threshold is
+now `0.0125` with a `0.01` reset floor; the 55-update streak, hang guard, warm-up, validation length, and error criteria
+are unchanged. The planar unit regression still remains below the publication threshold.
+
+This change is structurally non-slowing. Before first publication, lowering only the advance and reset thresholds can
+never put the new publication streak behind the old one on the same deterministic observations. First publication is
+therefore no later; after publication, the calibrator disables its cache-replay updates. The integration-test loop and
+its fixed post-publication work are unchanged.
+
+- **Implementation commit:** working tree superseding `0880ff9`
+- **Publication threshold:** `0.0125` (was `0.03`); reset floor `0.01` (was `0.02`); streak length `55` unchanged
+- **Harness budget:** `MAX_EVAL_COUNT = 2000`, with `125` warm-up and `500` validation evaluations unchanged
+- **Date:** 2026-08-29
+- **Test result:** 2 passed, 0 failed (11-seed regression command, both gravity modes)
+- **Complete benchmark duration:** 129.08 seconds
+- **Timing caveat:** the simulator is unpaced; computation times are debug-build wall-clock observations on this host
+
+### Eleven-seed averages
+
+| Metric | With gravity | Without gravity |
+|---|---:|---:|
+| Average `evaluate_correct` time | 4.088 ms | 5.008 ms |
+| Average successful error | 3.206 deg | 3.335 deg |
+| Worst successful error | 14.511 deg | 17.325 deg |
+| Average post-warm-up error | 3.076 deg | 3.211 deg |
+| Worst post-warm-up error | 13.760 deg | 17.325 deg |
+| Samples until first success | 686 | 632 |
+| Average samples per run | 1311 | 1257 |
+
+For the formerly timing-out worst case (`10758804304863325866`, with gravity), three same-host baseline trials all
+failed at `2001` evaluations with a median wall time of `15.88 s`. Three candidate trials all passed at `1786`
+evaluations with a median wall time of `10.66 s`, a roughly `33%` reduction. Across the complete suite, every run
+finishes under the unchanged budget; the slowest retains `214` evaluations of headroom. Accuracy remains well inside
+the unchanged `25`-degree worst-case and `10`-degree average post-warm-up criteria.
