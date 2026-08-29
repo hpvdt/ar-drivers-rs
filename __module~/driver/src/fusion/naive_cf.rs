@@ -134,6 +134,17 @@ impl NaiveCF {
         }
     }
 
+    pub(super) fn integrate_no_roll(&mut self, correction_ratio: f32) -> () {
+        if !correction_ratio.is_finite() {
+            return;
+        }
+
+        let correction_ratio = correction_ratio.clamp(0.0, 1.0);
+        let (roll, pitch, yaw) = self.state.attitude.euler_angles();
+        let corrected_roll = roll * (1.0 - correction_ratio);
+        self.state.attitude = UnitQuaternion::from_euler_angles(corrected_roll, pitch, yaw);
+    }
+
     pub(super) fn integrate_mag(
         &mut self,
         mag_rub: &Vector3<f32>,
