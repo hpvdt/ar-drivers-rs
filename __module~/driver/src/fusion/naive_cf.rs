@@ -87,6 +87,8 @@ impl NaiveCF {
 
     const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; //microseconds
 
+    const NO_ROLL_FACTOR: Option<f32> = None;
+
     const G_ACC_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -9.81);
     //const NORTH_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -1.0);
 
@@ -379,8 +381,10 @@ impl Fusion for NaiveCF {
                 self.integrate_mag(&magnetometer, true, true, timestamp);
                 self.renormalize();
             }
-
-            _ => {}
+            _ => {
+                // TODO: handle KeyPress signal
+            }
         }
+        // self.integrate_no_roll();
     }
 }
