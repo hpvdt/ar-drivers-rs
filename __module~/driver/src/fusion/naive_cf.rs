@@ -340,7 +340,7 @@ impl Fusion for NaiveCF {
                 gyroscope,
                 timestamp,
             } => {
-                self.integrate_gyro(&gyroscope, timestamp);
+                // self.integrate_gyro(&gyroscope, timestamp);
                 self.integrate_acc(&accelerometer, timestamp);
                 self.renormalize();
             }

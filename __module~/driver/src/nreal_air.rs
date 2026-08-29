@@ -522,16 +522,15 @@ impl ImuDevice {
         // Magnetometer comes online separately from the IMU, check for useful data
         // before sending the events.
         if mag_x != 0 || mag_y != 0 || mag_z != 0 {
-            let mag = self.gyro_q_mag
-                * Vector3::new(
-                    mag_x.wrapping_sub(32768) as i16 as f32 * mag_mul / mag_div,
-                    mag_y.wrapping_sub(32768) as i16 as f32 * mag_mul / mag_div,
-                    mag_z.wrapping_sub(32768) as i16 as f32 * mag_mul / mag_div,
-                );
-            // gyro_q_mag rotates the reading into the calibration frame, but the
-            // GlassesEvent contract is RUB. Apply the same wire->RUB axis mapping
-            // as gyro/acc (Monado's pre/post swaps) so mag and gravity agree.
-            let magnetometer = Vector3::new(-mag.x, mag.z, mag.y);
+            let mag = Vector3::new(
+                mag_x.wrapping_sub(32768) as i16 as f32 * mag_mul / mag_div,
+                mag_y.wrapping_sub(32768) as i16 as f32 * mag_mul / mag_div,
+                mag_z.wrapping_sub(32768) as i16 as f32 * mag_mul / mag_div,
+            );
+            // Magnetometer raw->RUB frame: cyclic permutation (-y, z, x), winner
+            // of a 24-mapping probe; det -1 keeps the same chirality as the
+            // gyro/acc map (-x, z, y).
+            let magnetometer = Vector3::new(-mag.y, mag.z, mag.x);
 
             // Send magnetometer event first so that clients can match the most
             // recent magnetometer event to the most recent accgyro event and not get
