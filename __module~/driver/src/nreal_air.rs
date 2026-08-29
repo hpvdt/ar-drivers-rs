@@ -531,7 +531,9 @@ impl ImuDevice {
             // gyro_q_mag rotates the reading into the calibration frame, but the
             // GlassesEvent contract is RUB. Apply the same wire->RUB axis mapping
             // as gyro/acc (Monado's pre/post swaps) so mag and gravity agree.
-            let magnetometer = Vector3::new(-mag.x, mag.y, mag.z);
+            // TODO: output should be RUB reference frame, but it is wrong
+            //  figure out how to correct it
+            let magnetometer = Vector3::new(-mag.x, -mag.y, mag.z);
 
             // Send magnetometer event first so that clients can match the most
             // recent magnetometer event to the most recent accgyro event and not get
