@@ -969,6 +969,8 @@ impl<const N: usize> MagCalibrator<N> {
     /// Normalizes an optional co-timestamped direction; non-finite and zero
     /// directions are dropped.
     fn normalized_direction(direction: Option<Vector3<f32>>) -> Option<Vector3<f32>> {
+        // TODO: used only once, should be inline
+        // TODO: should use builtin "normalise" function
         direction.and_then(|direction| {
             let norm = direction.norm();
             if norm.is_finite()
@@ -991,10 +993,10 @@ impl<const N: usize> MagCalibrator<N> {
     pub fn evaluate_sample_vec(
         &mut self,
         x: Vector3<f32>,
-        gravity_direction: Option<Vector3<f32>>,
+        gravity_hint: Option<Vector3<f32>>,
         timestamp_us: u64,
     ) {
-        let gravity_direction = Self::normalized_direction(gravity_direction);
+        let gravity_direction = Self::normalized_direction(gravity_hint);
         let valid_current_sample = self.ingest_sample(x, gravity_direction, timestamp_us);
         self.update_publication(valid_current_sample.then_some(x), gravity_direction);
     }
@@ -1227,10 +1229,10 @@ impl<const N: usize> MagCalibrator<N> {
     pub fn evaluate_correct(
         &mut self,
         raw_mag: Vector3<f32>,
-        gravity_direction: Option<Vector3<f32>>,
+        gravity_hint: Option<Vector3<f32>>,
         timestamp_us: u64,
     ) -> Result<MagCalibrationResult, BadMagCause> {
-        self.evaluate_sample_vec(raw_mag, gravity_direction, timestamp_us);
+        self.evaluate_sample_vec(raw_mag, gravity_hint, timestamp_us);
         if !self.calibration_initialized {
             return Ok(MagCalibrationResult::from_quality(self.quality, None));
         }
@@ -1452,7 +1454,7 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     fn sample(&self, row: usize) -> Vector3<f32> {
-        // TODO: this should be a linear algebra operation, avoid elementwise operations
+        // TODO: should be a linear algebra operation, avoid elementwise operations
         Vector3::new(
             self.matrix[(row, 0)],
             self.matrix[(row, 1)],
