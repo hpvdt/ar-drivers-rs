@@ -7,7 +7,7 @@ PLUGINS_DIR="../../Plugins"
 
 cd "$CRATE_DIR"
 
-cargo clean
+#cargo clean
 
 echo "[Start Compiling]"
 cargo build --release

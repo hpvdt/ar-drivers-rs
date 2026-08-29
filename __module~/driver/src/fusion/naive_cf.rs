@@ -379,7 +379,8 @@ impl Fusion for NaiveCF {
                 magnetometer,
                 timestamp,
             } => {
-                self.integrate_mag(&magnetometer, true, true, timestamp);
+                self.integrate_mag(&magnetometer, false, false, timestamp);
+                // self.integrate_mag(&magnetometer, true, true, timestamp); TODO: use this
                 self.renormalize();
             }
             _ => {
