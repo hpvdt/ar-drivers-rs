@@ -416,6 +416,9 @@ fn regression(attitude_mode: AttitudeMode) {
             15214809500125664723,
             4333660961526349397,
             17611800246992533302,
+            // TODO: these seed caused timeout, try to relax `calibration_initialized` condition
+            9399375230094018656,
+            10758804304863325866,
         ],
     );
 }
