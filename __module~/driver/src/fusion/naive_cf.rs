@@ -87,7 +87,7 @@ impl NaiveCF {
 
     const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; //microseconds
 
-    const NO_ROLL_FACTOR: f32 = 0.0;
+    const REGRESS_ROLL_FACTOR: f32 = 0.05; // TODO: should be zero
 
     const G_ACC_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -9.81);
     //const NORTH_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -1.0);
@@ -136,12 +136,12 @@ impl NaiveCF {
         }
     }
 
-    pub(super) fn integrate_no_roll(&mut self) -> () {
-        if !Self::NO_ROLL_FACTOR.is_finite() || (Self::NO_ROLL_FACTOR <= 0.0) {
+    pub(super) fn integrate_regress_roll(&mut self) -> () {
+        if !Self::REGRESS_ROLL_FACTOR.is_finite() || (Self::REGRESS_ROLL_FACTOR <= 0.0) {
             return;
         }
 
-        let no_roll_factor = Self::NO_ROLL_FACTOR.clamp(0.0, 1.0);
+        let no_roll_factor = Self::REGRESS_ROLL_FACTOR.clamp(0.0, 1.0);
         let (roll, pitch, yaw) = self.state.attitude.euler_angles();
         let corrected_roll = roll * (1.0 - no_roll_factor);
         self.state.attitude = UnitQuaternion::from_euler_angles(corrected_roll, pitch, yaw);
@@ -342,6 +342,7 @@ impl NaiveCF {
 
     fn renormalize(&mut self) {
         // self.attitude.renormalize_fast(); // TODO: switch to it after rigorous testing
+        self.integrate_regress_roll();
         self.state.attitude.renormalize();
     }
 }
@@ -385,6 +386,5 @@ impl Fusion for NaiveCF {
                 // TODO: handle KeyPress signal
             }
         }
-        self.integrate_no_roll();
     }
 }

@@ -14,7 +14,7 @@ fn integrate_no_roll_skips_when_factor_is_none() {
     let attitude = UnitQuaternion::from_euler_angles(0.8, -0.4, 1.1);
     fusion.state.attitude = attitude;
 
-    fusion.integrate_no_roll();
+    fusion.integrate_regress_roll();
 
     assert!(fusion.state.attitude.angle_to(&attitude) < 1.0e-5);
 }
