@@ -8,38 +8,15 @@ fn frd_to_rub(v: Vector3<f32>) -> Vector3<f32> {
     Vector3::new(v.y, -v.z, -v.x)
 }
 
-fn assert_angle_close(actual: f32, expected: f32) {
-    assert!(
-        (actual - expected).abs() < 1.0e-5,
-        "expected {expected}, got {actual}"
-    );
-}
-
 #[test]
-fn integrate_no_roll_reduces_only_roll() {
+fn integrate_no_roll_skips_when_factor_is_none() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
-    let pitch = -0.4;
-    let yaw = 1.1;
-    fusion.state.attitude = UnitQuaternion::from_euler_angles(0.8, pitch, yaw);
+    let attitude = UnitQuaternion::from_euler_angles(0.8, -0.4, 1.1);
+    fusion.state.attitude = attitude;
 
-    fusion.integrate_no_roll(0.25);
+    fusion.integrate_no_roll();
 
-    let (
-        roll_after_partial_correction,
-        pitch_after_partial_correction,
-        yaw_after_partial_correction,
-    ) = fusion.state.attitude.euler_angles();
-    assert_angle_close(roll_after_partial_correction, 0.6);
-    assert_angle_close(pitch_after_partial_correction, pitch);
-    assert_angle_close(yaw_after_partial_correction, yaw);
-
-    fusion.integrate_no_roll(1.0);
-
-    let (roll_after_full_correction, pitch_after_full_correction, yaw_after_full_correction) =
-        fusion.state.attitude.euler_angles();
-    assert_angle_close(roll_after_full_correction, 0.0);
-    assert_angle_close(pitch_after_full_correction, pitch);
-    assert_angle_close(yaw_after_full_correction, yaw);
+    assert!(fusion.state.attitude.angle_to(&attitude) < 1.0e-5);
 }
 
 #[test]
