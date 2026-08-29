@@ -59,15 +59,3 @@
     - **Recommended fix:** After selecting the victim, exclude `low_index` from the candidate's distance scratch before
       selecting its `k` nearest neighbors. Compare both scores against the same `N - 1` retained rows, then update the
       incremental neighbor cache only after accepting the replacement.
-
-- [ ] Avoid full-cache publication validation after unchanged optimizer state
-
-    - **Summary:** Full covariance and radial validation can remain `O(N)` even when an online step is rejected.
-    - **Affected module:** `src/fusion/mag_calibration.rs`
-    - **Severity:** Medium
-    - **Description:** The online gradient is bounded by `minibatch_size`, but deriving and validating a publication
-      candidate still scans all retained rows. Revalidating after an invalid input or rejected optimizer step provides
-      no new calibration information and can hide the fitting-cost reduction in end-to-end timing.
-    - **Recommended fix:** Track a working-parameter revision and rerun full publication validation only after that
-      revision or the cache changes. When expiry removes enough support to invalidate the working candidate, update the
-      live pending/quality state without restoring a full-buffer `InsufficientSamples` gate.

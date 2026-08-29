@@ -364,6 +364,7 @@ impl<const N: usize> MagCalibrator<N> {
     fn shape_and_linear(
         parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>,
     ) -> (Matrix3<f32>, Vector3<f32>) {
+        // TODO: use nalgebra views and constructors instead of elementwise parameter unpacking
         (
             Matrix3::new(
                 parameters[0],
@@ -381,6 +382,7 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     fn features(sample: Vector3<f32>) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
+        // TODO: use nalgebra outer-product and vector-view operations instead of elementwise feature construction
         SVector::from_row_slice(&[
             sample.x * sample.x,
             sample.y * sample.y,
@@ -401,6 +403,7 @@ impl<const N: usize> MagCalibrator<N> {
         sample: Vector3<f32>,
         gravity: Vector3<f32>,
     ) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
+        // TODO: use nalgebra outer-product and vector-view operations instead of elementwise feature construction
         SVector::from_row_slice(&[
             gravity.x * sample.x,
             gravity.y * sample.y,
@@ -415,6 +418,7 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     fn regularization_loss(parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>) -> f32 {
+        // TODO: use the shape matrix's built-in squared norm instead of an elementwise weighted sum
         let prior = Self::parameter_prior();
         let weights = [1.0, 1.0, 1.0, 2.0, 2.0, 2.0];
         0.5 * SHAPE_REGULARIZATION
@@ -501,6 +505,7 @@ impl<const N: usize> MagCalibrator<N> {
             let equation_scale = 1.0 - shift.dot(&(shape * shift)) - linear.dot(&shift);
             let rebased_shape = scale * scale / equation_scale * shape;
             let rebased_linear = scale / equation_scale * (linear + 2.0 * shape * shift);
+            // TODO: use nalgebra views and constructors instead of elementwise parameter repacking
             let mut rebased = self.parameters;
             rebased[0] = rebased_shape[(0, 0)];
             rebased[1] = rebased_shape[(1, 1)];
@@ -590,6 +595,7 @@ impl<const N: usize> MagCalibrator<N> {
         gravity_projection: f32,
         minibatch: MinibatchSpec,
     ) -> f32 {
+        // TODO: use batched feature matrices and residual norms instead of scalar accumulation
         let mut random_state = minibatch.random_state;
         let mut radial_squared = 0.0;
         let mut gravity_squared = 0.0;
@@ -690,6 +696,7 @@ impl<const N: usize> MagCalibrator<N> {
     /// observation or no usable descent direction leaves the working state
     /// unchanged.
     fn apply_minibatch_update(&mut self, minibatch: MinibatchSpec) -> bool {
+        // TODO: use batched feature matrices and matrix products instead of accumulating vectors one at a time
         let mut next_random_state = minibatch.random_state;
         let mut gradient = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
         let mut gradient_scale = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
@@ -746,6 +753,7 @@ impl<const N: usize> MagCalibrator<N> {
         }
 
         let prior = Self::parameter_prior();
+        // TODO: use fixed vector views and component-wise operations instead of indexed scalar updates
         for (index, weight) in [1.0, 1.0, 1.0, 2.0, 2.0, 2.0].into_iter().enumerate() {
             gradient[index] += SHAPE_REGULARIZATION * weight * (parameters[index] - prior[index]);
             gradient_scale[index] += SHAPE_REGULARIZATION * weight;
@@ -757,6 +765,7 @@ impl<const N: usize> MagCalibrator<N> {
         } else {
             0.0
         };
+        // TODO: use built-in norm operations instead of manually combining vector and scalar squared norms
         let direction_norm =
             (direction.norm_squared() + gravity_direction * gravity_direction).sqrt();
         if !direction_norm.is_finite() || direction_norm <= f32::EPSILON {
@@ -791,6 +800,7 @@ impl<const N: usize> MagCalibrator<N> {
     /// sample buffer. Entries at and beyond `count` are set to infinity so
     /// selection never picks them.
     fn squared_distances_to(&self, x: Vector3<f32>, count: usize) -> [f32; N] {
+        // TODO: use nalgebra row iteration and squared norms instead of rebuilding and dotting each row
         let mut squared_dists = [f32::INFINITY; N];
         for (j, dist) in squared_dists.iter_mut().enumerate().take(count) {
             let diff = x - self.sample(j);
@@ -810,6 +820,7 @@ impl<const N: usize> MagCalibrator<N> {
         squared.select_nth_unstable_by(k - 1, |a, b| a.total_cmp(b));
         let smallest = &mut squared[..k];
         smallest.sort_unstable_by(|a, b| a.total_cmp(b));
+        // TODO: use a built-in sum reduction instead of a manual fold
         smallest.iter().rev().fold(0., |acc, &d| acc + d.sqrt()) / k as f32
     }
 
@@ -900,6 +911,7 @@ impl<const N: usize> MagCalibrator<N> {
             self.rebuild_row_cache(row);
         }
         let cache = &self.neighbor_cache[row];
+        // TODO: use a built-in sum reduction instead of a manual fold
         (0..k)
             .rev()
             .fold(0., |acc, i| acc + cache[i].squared_distance.sqrt())
@@ -949,6 +961,7 @@ impl<const N: usize> MagCalibrator<N> {
     /// Is used when replacing the least useful value in the array.
     fn lowest_mean_distance_by_index(&mut self) -> (usize, f32) {
         let k = self.k.min(N.saturating_sub(1));
+        // TODO: use nalgebra vector construction, mean, and arg-min operations instead of manual array processing
         let mut mean_dist: [f32; N] = [0.; N];
         for (i, mean) in mean_dist.iter_mut().enumerate() {
             *mean = self.row_mean_distance(i, k);
@@ -970,7 +983,7 @@ impl<const N: usize> MagCalibrator<N> {
     /// directions are dropped.
     fn normalized_direction(direction: Option<Vector3<f32>>) -> Option<Vector3<f32>> {
         // TODO: used only once, should be inline
-        // TODO: should use builtin "normalise" function
+        // TODO: use nalgebra's fallible normalization instead of computing and applying the norm manually
         direction.and_then(|direction| {
             let norm = direction.norm();
             if norm.is_finite()
@@ -1020,6 +1033,7 @@ impl<const N: usize> MagCalibrator<N> {
             {
                 *map_slot = retained as u32;
                 if retained != index {
+                    // TODO: copy matrix rows with nalgebra row views instead of looping over elements
                     for column in 0..3 {
                         self.matrix[(retained, column)] = self.matrix[(index, column)];
                     }
@@ -1142,6 +1156,7 @@ impl<const N: usize> MagCalibrator<N> {
         timestamp_us: u64,
     ) {
         if index < N {
+            // TODO: write the matrix row through a nalgebra row view instead of assigning individual elements
             self.matrix[(index, 0)] = sample[0];
             self.matrix[(index, 1)] = sample[1];
             self.matrix[(index, 2)] = sample[2];
@@ -1158,6 +1173,7 @@ impl<const N: usize> MagCalibrator<N> {
     /// spherical distribution `E[phi phi^T]` has eigenvalues `{1/3 x4, 2/15
     /// x5}`.
     fn direction_feature(d: Vector3<f32>) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
+        // TODO: use nalgebra outer-product and vector-view operations instead of elementwise feature construction
         SVector::<f32, CALIBRATION_PARAMETER_COUNT>::from_column_slice(&[
             d.x * d.x,
             d.y * d.y,
@@ -1198,6 +1214,7 @@ impl<const N: usize> MagCalibrator<N> {
         let mut design = DesignMatrix::zeros();
         for row in 0..self.matrix_filled {
             let centered = self.sample(row) - self.normalization_mean;
+            // TODO: use nalgebra's fallible normalization instead of computing and applying the norm manually
             let norm = centered.norm();
             if norm.is_finite() && norm > f32::EPSILON {
                 let phi = Self::direction_feature(centered / norm);
@@ -1238,6 +1255,7 @@ impl<const N: usize> MagCalibrator<N> {
         }
         let mag = self.soft_iron_correction * (raw_mag - self.hard_iron_offset);
 
+        // TODO: use nalgebra's in-place fallible normalization instead of computing the norm twice
         let mag_norm = mag.norm();
         if !mag_norm.is_finite() || mag_norm < MIN_MAG_NORM {
             Err(BadMagCause::BadReading(BadReading::WeakCalibratedReading {
@@ -1454,7 +1472,7 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     fn sample(&self, row: usize) -> Vector3<f32> {
-        // TODO: should be a linear algebra operation, avoid elementwise operations
+        // TODO: read the matrix row through a nalgebra row view instead of individual elements
         Vector3::new(
             self.matrix[(row, 0)],
             self.matrix[(row, 1)],
@@ -1463,6 +1481,7 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     fn condition_number(eigenvalues: &Vector3<f32>) -> f32 {
+        // TODO: use nalgebra's vector min/max reductions instead of manual folds
         let min = eigenvalues.iter().copied().fold(f32::INFINITY, f32::min);
         let max = eigenvalues
             .iter()
