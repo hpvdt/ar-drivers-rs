@@ -34,6 +34,7 @@
 //! All of them are enabled by default, which may bring in some unwanted dependencies if you
 //! only want to support a specific type.
 
+use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use nalgebra::{Isometry3, Matrix3, UnitQuaternion, Vector2, Vector3};
@@ -235,6 +236,18 @@ pub trait ARGlasses: Send {
     fn serial(&mut self) -> Result<String>;
     /// Get a single sensor event. Blocks.
     fn read_event(&mut self) -> Result<GlassesEvent>;
+    /// Start writing implementation-defined raw input packets to `path`.
+    ///
+    /// Drivers without packet-logging support treat this as a no-op.
+    fn start_packet_logging(&mut self, _path: &Path) -> Result<()> {
+        Ok(())
+    }
+    /// Stop packet logging and flush all buffered data.
+    ///
+    /// Drivers without packet-logging support treat this as a no-op.
+    fn stop_packet_logging(&mut self) -> Result<()> {
+        Ok(())
+    }
     /// Get the display mode of the glasses. See [`DisplayMode`]
     fn get_display_mode(&mut self) -> Result<DisplayMode>;
     /// Set the display mode of the glasses. See [`DisplayMode`]
