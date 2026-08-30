@@ -543,28 +543,25 @@ impl ImuDevice {
             });
         }
 
-        // TODO: fix magnetometer decoding
-        //  the above decoding & parsing for magnetometer is very broken and diverge significantly from other libraries for NReal/XReal Air 1
-        //  (in particular, ar-glass-lib, Monado and XRLinuxDriver)
-        //  it should be discarded and rewritten from scratch, to give reliable reading in RUB body frame
-        //  to fix it, the following steps are recommended:
-        //  - proof-read this task and revise it to eliminate typo
-        //  - enhance `ARGlasses`, add 2 APIs to:
-        //    - start writing packets into a local log file (text-based, each row mapped from 1 packet)
-        //    - stop writing
-        //    they should have empty implementation by default, but can be overridden in implementation
-        //  - implement these functions in `NRealAir`, writing into a concrete log file
-        //  - add a new example based on `examples/read_sensors.rs`, when executed, it immediately start logging into the log file until termination.
-        //  - prompt me to connect to a real AR glasses & start magnetometer calibration dance, execute the above example to log real packets for 60 seconds
-        //  - introduce an alternative implementation of `NRealAir` named `NRealAir_replay`, instead of reading from HID, it replays the log file in a cycle
-        //  - shorten the code of `NRealAir` and `NRealAir_replay` by creating common abstraction layer `NRealAir_base`, which contains decoding & parsing of all sensors
-        //  - convert "read_sensors" into an integration test case: it can report and evaluate `CalibrationQuality` based on the output of `NRealAir_base`.
-        //  - rewrite the decoding & parsing algorithm in `NRealAir_base` until the calibration algorithm can eventually stay on high fitness scores in all spectrum.
-        //    - don't touch code for other sensors
-        //    - code and document in ar-glass-lib/Monado/XRLinuxDriver maybe useful, but they are not ground truth
-        //    - pay attention to obviously malformed data stream, like normalisation failure or wrong Endian
-        //  - once the rewrite objective is achieved, tighten the test condition of the above integration test.
-        //  each of the above step should have it's own git commit.
+        // TODO: Replace the XREAL Air 1 magnetometer decoder with a hardware-backed implementation.
+        //
+        // Recovery workflow (one commit per numbered step):
+        // 1. Add object-safe `ARGlasses` methods that start and stop packet logging. Their default
+        //    implementations are no-ops.
+        // 2. Implement logging for `NrealAir`. The versioned text file starts with the model and the
+        //    sanitized `IMU.device_1` calibration object; every remaining line is one exact HID packet
+        //    encoded as lowercase hexadecimal.
+        // 3. Add a 60-second Air 1 logging example and capture a continuous three-axis calibration dance.
+        // 4. Add `NrealAirReplay`, which validates the log and replays its packets cyclically.
+        // 5. Move all sensor-report parsing and event queuing into a shared `NrealAirBase` used by the live
+        //    and replay transports.
+        // 6. Convert the `read_sensors` calibration experiment into a replay integration test that reports
+        //    every `CalibrationQuality` factor.
+        // 7. Rewrite only the version-2 magnetometer path. Treat ar-glass-lib, Monado, and XRLinuxDriver as
+        //    competing hypotheses rather than ground truth; reject stale, non-finite, zero-divisor, and
+        //    zero-norm magnetic observations without changing accelerometer or gyroscope output.
+        // 8. Require `fitness`, `radial_fitness`, and `gravity_fitness` to remain at least 0.8 for the final
+        //    five seconds of fresh observations after calibration becomes usable, then remove this TODO.
 
         // TODO: Check checksum
         ret.push(GlassesEvent::AccGyro {
