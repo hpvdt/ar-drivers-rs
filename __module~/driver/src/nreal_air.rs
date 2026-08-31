@@ -411,6 +411,11 @@ fn decode_xreal_magnetometer_report(report: &[u8]) -> Option<XrealMagnetometerRe
         };
     let offset = LittleEndian::read_u16(&report[offset_field..]) as f64;
     let denominator = LittleEndian::read_u32(&report[denominator_field..]) as f64;
+    // TODO: Reject a zero denominator here at the decode site. When it is zero,
+    // a numerator equal to `offset` divides to a finite 0.0, which slips through
+    // `is_valid_magnetic_observation` as a bogus all-zeros vector event; other
+    // numerators produce ±Inf/NaN and get rejected. Precondition the denominator
+    // here so the hole is closed consistently instead of piecemeal downstream.
     let mut scaled = [0.0f32; 3];
     for (index, value) in scaled.iter_mut().enumerate() {
         let raw = LittleEndian::read_u16(&report[values_field + index * 2..]) as f64;
