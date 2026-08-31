@@ -411,7 +411,7 @@ fn decode_xreal_magnetometer_report(report: &[u8]) -> Option<XrealMagnetometerRe
         };
     let offset = LittleEndian::read_u16(&report[offset_field..]) as f64;
     let denominator = LittleEndian::read_u32(&report[denominator_field..]) as f64;
-    // TODO: Reject a zero denominator here at the decode site. When it is zero,
+    // FIXME: Reject a zero denominator here at the decode site. When it is zero,
     // a numerator equal to `offset` divides to a finite 0.0, which slips through
     // `is_valid_magnetic_observation` as a bogus all-zeros vector event; other
     // numerators produce ±Inf/NaN and get rejected. Precondition the denominator
@@ -499,7 +499,7 @@ impl NrealAir {
                 cmd_id: 0x6c09,
                 data: _data,
             } => {
-                // TODO: optional logging in the crate
+                // DEFER: return an error instead of printing directly
                 // eprintln!("Got error: {}", String::from_utf8(_data).unwrap());
                 None
             }
@@ -762,11 +762,11 @@ impl NrealAirBase {
     }
 
     fn push_packet(&mut self, packet_data: &[u8]) -> Result<()> {
-        // TODO: Only version-2 reports ([1, 2]) are accepted here, so the v1
+        // FIXME: Only version-2 reports ([1, 2]) are accepted here, so the v1
         // magnetometer offsets in `decode_xreal_magnetometer_report` are
         // unreachable and v1 reports produce no events at all (not even
-        // AccGyro). Accept `[1, 1]` and give `decode_sensor_report` a
-        // version-aware path so v1 reports decode end-to-end.
+        // AccGyro). Since version-1 format has been abandoned in all XReal AR glasses,
+        // the fixed version should Accept `[1, 1]` throw an error.
         if packet_data.starts_with(&[1, 2]) {
             self.pending_events
                 .extend(self.decode_sensor_report(packet_data)?);
@@ -812,7 +812,7 @@ impl NrealAirBase {
             fresh: true,
         }) = decode_xreal_magnetometer_report(packet_data)
         {
-            // TODO: The per-sensor timestamp is read (v1@48 / v2@54, matching
+            // FIXME: The per-sensor timestamp is read (v1@48 / v2@54, matching
             // ar-glass-lib's `sensorTimestampNanos`) and then discarded here.
             // The event API has no transport-metadata channel, so for now the
             // event keeps the report's primary device timestamp. To fix this,
@@ -831,7 +831,8 @@ impl NrealAirBase {
             }
         }
 
-        // TODO: Replace the XREAL Air 1 magnetometer decoder with a hardware-backed implementation.
+        // FIXME: cleanup done task
+        // DONE: Replace the XREAL Air 1 magnetometer decoder with a hardware-backed implementation.
         //
         // Recovery workflow (one commit per numbered step):
         // 1. Add object-safe `ARGlasses` methods that start and stop packet logging. Their default
