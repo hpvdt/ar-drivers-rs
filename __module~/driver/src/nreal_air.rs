@@ -806,6 +806,8 @@ impl NrealAirBase {
             (acc_y * acc_mul / acc_div) * 9.81 + self.accelerometer_bias.z,
         );
 
+        // Source: library/src/main/cpp/ar_glass.cpp (decode_xreal_imu, lines 65–128);
+        //  library/src/main/java/com/taowen/arglass/driver/xreal/XrealImuReport.kt
         if let Some(XrealMagnetometerReport {
             magnetic_field,
             sensor_timestamp_nanos,
