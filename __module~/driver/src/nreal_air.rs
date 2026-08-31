@@ -757,6 +757,11 @@ impl NrealAirBase {
     }
 
     fn push_packet(&mut self, packet_data: &[u8]) -> Result<()> {
+        // TODO: Only version-2 reports ([1, 2]) are accepted here, so the v1
+        // magnetometer offsets in `decode_xreal_magnetometer_report` are
+        // unreachable and v1 reports produce no events at all (not even
+        // AccGyro). Accept `[1, 1]` and give `decode_sensor_report` a
+        // version-aware path so v1 reports decode end-to-end.
         if packet_data.starts_with(&[1, 2]) {
             self.pending_events
                 .extend(self.decode_sensor_report(packet_data)?);
@@ -802,8 +807,12 @@ impl NrealAirBase {
             fresh: true,
         }) = decode_xreal_magnetometer_report(packet_data)
         {
-            // The event API has no transport-metadata channel. Keep using the
-            // report's primary device timestamp, as ar-glass-lib does.
+            // TODO: The per-sensor timestamp is read (v1@48 / v2@54, matching
+            // ar-glass-lib's `sensorTimestampNanos`) and then discarded here.
+            // The event API has no transport-metadata channel, so for now the
+            // event keeps the report's primary device timestamp. Surface this
+            // value (e.g. extend `GlassesEvent::Magnetometer` or add a
+            // metadata side-channel) instead of dropping it.
             let _sensor_timestamp_nanos = sensor_timestamp_nanos;
             if is_valid_magnetic_observation(&magnetic_field) {
                 // Send magnetometer event first so that clients can match the most
