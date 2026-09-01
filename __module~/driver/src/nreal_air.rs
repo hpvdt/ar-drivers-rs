@@ -747,9 +747,15 @@ impl NrealAirBase {
 
     fn push_packet(&mut self, packet_data: &[u8]) -> Result<()> {
         match packet_data.get(..2) {
-            Some([1, 2]) => self
-                .pending_events
-                .extend(self.decode_sensor_report(packet_data)?),
+            Some([1, 2]) => {
+                let (magnetometer, acc_gyro) = self.decode_sensor_report(packet_data)?;
+                // Queue the optional magnetometer event first so clients can
+                // associate it with the immediately following AccGyro event.
+                if let Some(magnetometer) = magnetometer {
+                    self.pending_events.push_back(magnetometer);
+                }
+                self.pending_events.push_back(acc_gyro);
+            }
             Some([1, 1]) => {
                 return Err(Error::Other("XREAL sensor report version 1 is unsupported"));
             }
@@ -758,8 +764,10 @@ impl NrealAirBase {
         Ok(())
     }
 
-    fn decode_sensor_report(&self, packet_data: &[u8]) -> Result<Vec<GlassesEvent>> {
-        let mut ret = Vec::with_capacity(2);
+    fn decode_sensor_report(
+        &self,
+        packet_data: &[u8],
+    ) -> Result<(Option<GlassesEvent>, GlassesEvent)> {
         // TODO: This skips over a 2 byte temperature field that may be useful.
         let mut reader = std::io::Cursor::new(&packet_data[4..]);
 
@@ -792,32 +800,32 @@ impl NrealAirBase {
 
         // Source: library/src/main/cpp/ar_glass.cpp (decode_xreal_imu, lines 65–128);
         //  library/src/main/java/com/taowen/arglass/driver/xreal/XrealImuReport.kt
-        if let Some(XrealMagnetometerReport {
+        let magnetometer = if let Some(XrealMagnetometerReport {
             magnetic_field,
             sensor_timestamp_nanos,
             fresh: true,
         }) = decode_xreal_magnetometer_report(packet_data)
         {
             if is_valid_magnetic_observation(&magnetic_field) {
-                // Send magnetometer event first so that clients can match the most
-                // recent magnetometer event to the most recent accgyro event and not get
-                // out of sync. This is necessary because the magnetometer event is
-                // optional.
-                ret.push(GlassesEvent::Magnetometer {
+                Some(GlassesEvent::Magnetometer {
                     magnetometer: magnetic_field,
                     timestamp,
                     timestamp_sensor: Some(sensor_timestamp_nanos),
-                });
+                })
+            } else {
+                None
             }
-        }
+        } else {
+            None
+        };
 
         // TODO: Check checksum
-        ret.push(GlassesEvent::AccGyro {
+        let acc_gyro = GlassesEvent::AccGyro {
             accelerometer,
             gyroscope,
             timestamp,
-        });
-        Ok(ret)
+        };
+        Ok((magnetometer, acc_gyro))
     }
 }
 
