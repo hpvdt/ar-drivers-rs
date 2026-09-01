@@ -819,27 +819,6 @@ impl NrealAirBase {
             }
         }
 
-        // FIXME: cleanup done task
-        // DONE: Replace the XREAL Air 1 magnetometer decoder with a hardware-backed implementation.
-        //
-        // Recovery workflow (one commit per numbered step):
-        // 1. Add object-safe `ARGlasses` methods that start and stop packet logging. Their default
-        //    implementations are no-ops.
-        // 2. Implement logging for `NrealAir`. The versioned text file starts with the model and the
-        //    sanitized `IMU.device_1` calibration object; every remaining line is one exact HID packet
-        //    encoded as lowercase hexadecimal.
-        // 3. Add a 60-second Air 1 logging example and capture a continuous three-axis calibration dance.
-        // 4. Add `NrealAirReplay`, which validates the log and replays its packets cyclically.
-        // 5. Move all sensor-report parsing and event queuing into a shared `NrealAirBase` used by the live
-        //    and replay transports.
-        // 6. Convert the `read_sensors` calibration experiment into a replay integration test that reports
-        //    every `CalibrationQuality` factor.
-        // 7. Rewrite only the version-2 magnetometer path. Treat ar-glass-lib, Monado, and XRLinuxDriver as
-        //    competing hypotheses rather than ground truth; reject stale, non-finite, zero-divisor, and
-        //    zero-norm magnetic observations without changing accelerometer or gyroscope output.
-        // 8. Require `fitness`, `radial_fitness`, and `gravity_fitness` to remain at least 0.8 for the final
-        //    five seconds of fresh observations after calibration becomes usable, then remove this TODO.
-
         // TODO: Check checksum
         ret.push(GlassesEvent::AccGyro {
             accelerometer,
