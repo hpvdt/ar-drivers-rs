@@ -400,29 +400,23 @@ struct XrealMagnetometerReport {
 // Ported from ar-glass-lib's decode_xreal_imu at
 // c172403f8df2108de5708c8663bb4c2359b0bf5b.
 fn decode_xreal_magnetometer_report(report: &[u8]) -> Option<XrealMagnetometerReport> {
-    if report.len() < 64 || report[0] != 1 {
+    if report.len() < 64 || !report.starts_with(&[1, 2]) {
         return None;
     }
-    let (offset_field, denominator_field, values_field, sensor_timestamp_field, freshness_field) =
-        match report[1] {
-            1 => (36, 38, 42, 48, 56),
-            2 => (42, 44, 48, 54, 62),
-            _ => return None,
-        };
-    let offset = LittleEndian::read_u16(&report[offset_field..]) as f64;
-    let denominator = LittleEndian::read_u32(&report[denominator_field..]) as f64;
+    let offset = LittleEndian::read_u16(&report[42..]) as f64;
+    let denominator = LittleEndian::read_u32(&report[44..]) as f64;
     if denominator == 0.0 {
         return None;
     }
     let mut scaled = [0.0f32; 3];
     for (index, value) in scaled.iter_mut().enumerate() {
-        let raw = LittleEndian::read_u16(&report[values_field + index * 2..]) as f64;
+        let raw = LittleEndian::read_u16(&report[48 + index * 2..]) as f64;
         *value = (100.0 * (raw - offset) / denominator) as f32;
     }
     Some(XrealMagnetometerReport {
         magnetic_field: Vector3::new(scaled[1], scaled[2], scaled[0]),
-        sensor_timestamp_nanos: LittleEndian::read_u64(&report[sensor_timestamp_field..]),
-        fresh: report[freshness_field] != 0,
+        sensor_timestamp_nanos: LittleEndian::read_u64(&report[54..]),
+        fresh: report[62] != 0,
     })
 }
 
@@ -760,14 +754,14 @@ impl NrealAirBase {
     }
 
     fn push_packet(&mut self, packet_data: &[u8]) -> Result<()> {
-        // FIXME: Only version-2 reports ([1, 2]) are accepted here, so the v1
-        // magnetometer offsets in `decode_xreal_magnetometer_report` are
-        // unreachable and v1 reports produce no events at all (not even
-        // AccGyro). Since version-1 format has been abandoned in all XReal AR glasses,
-        // the fixed version should Accept `[1, 1]` throw an error.
-        if packet_data.starts_with(&[1, 2]) {
-            self.pending_events
-                .extend(self.decode_sensor_report(packet_data)?);
+        match packet_data.get(..2) {
+            Some([1, 2]) => self
+                .pending_events
+                .extend(self.decode_sensor_report(packet_data)?),
+            Some([1, 1]) => {
+                return Err(Error::Other("XREAL sensor report version 1 is unsupported"));
+            }
+            _ => {}
         }
         Ok(())
     }
