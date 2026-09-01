@@ -240,11 +240,7 @@ fn invalid_magnetometer_does_not_drop_accgyro() {
     let mut zero_norm = sensor_packet(31);
     set_version2_magnetometer(&mut zero_norm, 100, 10, [100, 100, 100], 1);
 
-    let decoded = decode_xreal_magnetometer_report(&zero_divisor).unwrap();
-    assert!(decoded
-        .magnetic_field
-        .iter()
-        .any(|component| !component.is_finite()));
+    assert!(decode_xreal_magnetometer_report(&zero_divisor).is_none());
 
     base.push_packet(&zero_divisor).unwrap();
     assert!(matches!(
