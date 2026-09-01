@@ -152,11 +152,13 @@ fn version2_magnetometer_is_little_endian_and_mapped_directly_to_rub() {
     let GlassesEvent::Magnetometer {
         magnetometer,
         timestamp,
+        timestamp_sensor,
     } = base.pop_event().unwrap()
     else {
         panic!("magnetometer must precede accelerometer/gyroscope");
     };
     assert_eq!(timestamp, 19);
+    assert_eq!(timestamp_sensor, Some(TEST_SENSOR_TIMESTAMP_NANOS));
     assert_eq!(magnetometer, Vector3::new(200.0, 300.0, 100.0));
     assert!(matches!(
         base.pop_event(),

@@ -58,8 +58,10 @@ fn starts_with_magnetic_north_forward_frd() {
         GlassesEvent::Magnetometer {
             magnetometer,
             timestamp,
+            timestamp_sensor,
         } => {
             assert_eq!(timestamp, Config::default().event_period_us);
+            assert_eq!(timestamp_sensor, None);
             let mag_frd = rub_to_frd(&magnetometer);
             let expected = Vector3::new(50.0, 0.0, 0.0);
 

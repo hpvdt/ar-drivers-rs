@@ -806,13 +806,6 @@ impl NrealAirBase {
             fresh: true,
         }) = decode_xreal_magnetometer_report(packet_data)
         {
-            // FIXME: The per-sensor timestamp is read (v1@48 / v2@54, matching
-            // ar-glass-lib's `sensorTimestampNanos`) and then discarded here.
-            // The event API has no transport-metadata channel, so for now the
-            // event keeps the report's primary device timestamp. To fix this,
-            // a new field of `GlassesEvent::Magnetometer` named `timestamp_sensor` can be added
-            // as a metadata side-channel.
-            let _sensor_timestamp_nanos = sensor_timestamp_nanos;
             if is_valid_magnetic_observation(&magnetic_field) {
                 // Send magnetometer event first so that clients can match the most
                 // recent magnetometer event to the most recent accgyro event and not get
@@ -821,6 +814,7 @@ impl NrealAirBase {
                 ret.push(GlassesEvent::Magnetometer {
                     magnetometer: magnetic_field,
                     timestamp,
+                    timestamp_sensor: Some(sensor_timestamp_nanos),
                 });
             }
         }

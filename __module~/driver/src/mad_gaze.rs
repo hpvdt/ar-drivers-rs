@@ -218,6 +218,7 @@ impl MadGazeGlow {
                 -axis3 as f32 * AK09911_LSB_TO_UT,
             ),
             timestamp: self.timestamp,
+            timestamp_sensor: None,
         });
         Ok(())
     }

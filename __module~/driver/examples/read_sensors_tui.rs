@@ -146,6 +146,7 @@ fn format_event(
         GlassesEvent::Magnetometer {
             magnetometer,
             timestamp,
+            ..
         } => {
             let mag_frd = rub_to_frd(&magnetometer);
             let reading = format!(

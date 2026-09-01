@@ -78,6 +78,7 @@ impl ARGlasses for RokidAir {
                         3 => self.pending_events.push_back(GlassesEvent::Magnetometer {
                             magnetometer: sensor_data,
                             timestamp: packet.timestamp,
+                            timestamp_sensor: None,
                         }),
                         _ => (),
                     }
@@ -112,6 +113,7 @@ impl ARGlasses for RokidAir {
                             [packet.magnetometer; 1],
                         )),
                         timestamp,
+                        timestamp_sensor: None,
                     });
                     // NOTE: was always zero on my Max
                     self.handle_key_press(packet.keys_pressed);

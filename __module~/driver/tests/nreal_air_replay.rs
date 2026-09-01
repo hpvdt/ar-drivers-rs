@@ -82,6 +82,7 @@ fn air1_trace_reports_calibration_quality() {
             GlassesEvent::Magnetometer {
                 magnetometer,
                 timestamp,
+                ..
             } => {
                 magnetic_samples += 1;
                 match calibrator.evaluate_correct(rub_to_frd(&magnetometer), gravity, timestamp) {

@@ -295,6 +295,7 @@ impl SimMotion {
             GlassesEvent::Magnetometer {
                 magnetometer: self.magnetometer_reading(),
                 timestamp,
+                timestamp_sensor: None,
             }
         };
 

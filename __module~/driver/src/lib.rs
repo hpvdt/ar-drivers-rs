@@ -186,6 +186,8 @@ pub enum GlassesEvent {
         magnetometer: Vector3<f32>,
         /// Timestamp, in device time, in microseconds
         timestamp: u64,
+        /// Raw per-sensor transport timestamp in nanoseconds, when available.
+        timestamp_sensor: Option<u64>,
     },
     /// A key was pressed (sent once per press)
     /// The number is a key ID, starting from 0.

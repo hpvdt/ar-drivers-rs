@@ -112,6 +112,7 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
             GlassesEvent::Magnetometer {
                 magnetometer,
                 timestamp,
+                ..
             } => (magnetometer, timestamp),
             _ => continue,
         };
