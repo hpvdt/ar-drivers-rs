@@ -49,8 +49,14 @@ struct RunStats {
     validation_error_count: u64,
     validation_confidence_sum: f64,
     validation_confidence_count: u64,
+    validation_radial_sum: f64,
+    validation_gravity_sum: f64,
+    validation_coverage_sum: f64,
     min_validation_confidence: f32,
     max_validation_confidence: f32,
+    min_confidence_radial: f32,
+    min_confidence_gravity: f32,
+    min_confidence_coverage: f32,
     count_until_first_success: u64,
     warmup_count: u64,
     verified_count: u64,
@@ -135,9 +141,16 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
             .evaluate_correct(raw_frd, gravity_direction, timestamp);
         stats.eval_time += eval_start.elapsed();
         stats.eval_count += 1;
-        let confidence = result.as_ref().map_or_else(
-            |_| fusion.magCalibrator.get_confidence(),
-            |result| result.confidence,
+        let (confidence, radial_fitness, gravity_fitness, coverage) = result.as_ref().map_or_else(
+            |_| (fusion.magCalibrator.get_confidence(), 0.0, 0.0, 0.0),
+            |result| {
+                (
+                    result.confidence,
+                    result.radial_fitness,
+                    result.gravity_fitness,
+                    result.coverage,
+                )
+            },
         );
         stats.confidence_sum += f64::from(confidence);
         stats.confidence_count += 1;
@@ -188,7 +201,15 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         stats.validation_error_count += 1;
         stats.validation_confidence_sum += f64::from(confidence);
         stats.validation_confidence_count += 1;
-        stats.min_validation_confidence = stats.min_validation_confidence.min(confidence);
+        stats.validation_radial_sum += f64::from(radial_fitness);
+        stats.validation_gravity_sum += f64::from(gravity_fitness);
+        stats.validation_coverage_sum += f64::from(coverage);
+        if confidence < stats.min_validation_confidence {
+            stats.min_validation_confidence = confidence;
+            stats.min_confidence_radial = radial_fitness;
+            stats.min_confidence_gravity = gravity_fitness;
+            stats.min_confidence_coverage = coverage;
+        }
         stats.max_validation_confidence = stats.max_validation_confidence.max(confidence);
         let start = *validation_start_count.get_or_insert(stats.eval_count);
         if angle_degrees > stats.worst_validation_error_after_warmup {
@@ -231,14 +252,14 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         stats.error_sum_degrees / stats.error_count as f64,
         stats.error_count,
     );
-    println!("  - worst error: {:.3} deg", stats.worst_error);
     println!(
-        "  - avg post-warmup error: {:.3} deg over {} calls",
+        "    - post-warmup: {:.3} deg over {} calls",
         stats.sum_validation_error_after_warmup / stats.validation_error_count.max(1) as f64,
         stats.validation_error_count,
     );
+    println!("  - worst error: {:.3} deg", stats.worst_error);
     println!(
-        "  - worst post-warmup error: {:.3} deg",
+        "    - post-warmup: {:.3} deg",
         stats.worst_validation_error_after_warmup
     );
     println!(
@@ -246,6 +267,26 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         stats.validation_confidence_sum / stats.validation_confidence_count.max(1) as f64,
         stats.validation_confidence_count,
     );
+    let component_count = stats.validation_confidence_count.max(1) as f64;
+    println!(
+        "    - radial: {:.6}",
+        stats.validation_radial_sum / component_count
+    );
+    println!(
+        "    - gravity: {:.6}",
+        stats.validation_gravity_sum / component_count
+    );
+    println!(
+        "    - coverage: {:.6}",
+        stats.validation_coverage_sum / component_count
+    );
+    println!(
+        "  - worst post-warmup confidence: {:.6}",
+        stats.min_validation_confidence
+    );
+    println!("    - radial: {:.6}", stats.min_confidence_radial);
+    println!("    - gravity: {:.6}", stats.min_confidence_gravity);
+    println!("    - coverage: {:.6}", stats.min_confidence_coverage);
     println!(
         "  - post-warmup confidence range: {:.6}..={:.6}",
         stats.min_validation_confidence, stats.max_validation_confidence,
@@ -304,6 +345,9 @@ fn print_avg_stats(runs: &[RunStats]) {
         runs.iter().map(|r| r.validation_confidence_sum).sum();
     let total_validation_confidence_count: u64 =
         runs.iter().map(|r| r.validation_confidence_count).sum();
+    let total_validation_radial_sum: f64 = runs.iter().map(|r| r.validation_radial_sum).sum();
+    let total_validation_gravity_sum: f64 = runs.iter().map(|r| r.validation_gravity_sum).sum();
+    let total_validation_coverage_sum: f64 = runs.iter().map(|r| r.validation_coverage_sum).sum();
     let worst_error_degrees: f32 = runs.iter().map(|r| r.worst_error).fold(0.0, f32::max);
     let worst_validation_error_degrees: f32 = runs
         .iter()
@@ -336,18 +380,45 @@ fn print_avg_stats(runs: &[RunStats]) {
         total_error_sum / total_error_count as f64,
         avg_count(|r| r.error_count),
     );
-    println!("  - worst error: {worst_error_degrees:.3} deg");
     println!(
-        "  - avg post-warmup error: {:.3} deg over {} calls",
+        "    - post-warmup: {:.3} deg over {} calls",
         total_validation_error_sum / total_validation_error_count as f64,
         avg_count(|r| r.validation_error_count),
     );
-    println!("  - worst post-warmup error: {worst_validation_error_degrees:.3} deg");
+    println!("  - worst error: {worst_error_degrees:.3} deg");
+    println!("    - post-warmup: {worst_validation_error_degrees:.3} deg");
     println!(
         "  - avg post-warmup confidence: {:.6} over {} calls",
         total_validation_confidence_sum / total_validation_confidence_count as f64,
         avg_count(|r| r.validation_confidence_count),
     );
+    let total_count = total_validation_confidence_count.max(1) as f64;
+    println!(
+        "    - radial: {:.6}",
+        total_validation_radial_sum / total_count
+    );
+    println!(
+        "    - gravity: {:.6}",
+        total_validation_gravity_sum / total_count
+    );
+    println!(
+        "    - coverage: {:.6}",
+        total_validation_coverage_sum / total_count
+    );
+    let worst_run = runs
+        .iter()
+        .min_by(|a, b| {
+            a.min_validation_confidence
+                .total_cmp(&b.min_validation_confidence)
+        })
+        .expect("no runs");
+    println!(
+        "  - worst post-warmup confidence: {:.6}",
+        worst_run.min_validation_confidence
+    );
+    println!("    - radial: {:.6}", worst_run.min_confidence_radial);
+    println!("    - gravity: {:.6}", worst_run.min_confidence_gravity);
+    println!("    - coverage: {:.6}", worst_run.min_confidence_coverage);
     println!(
         "  - post-warmup confidence range: {min_validation_confidence:.6}..={max_validation_confidence:.6}"
     );
