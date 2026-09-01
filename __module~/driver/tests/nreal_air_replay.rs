@@ -4,44 +4,20 @@
 
 use std::path::Path;
 
-use ar_drivers::fusion::{rub_to_frd, CalibrationQuality, MagCalibrationResult, MagCalibrator};
+use ar_drivers::fusion::{rub_to_frd, MagCalibrationResult, MagCalibrator};
 use ar_drivers::nreal_air::NrealAirReplay;
 use ar_drivers::{ARGlasses, GlassesEvent};
 use nalgebra::Vector3;
 
-fn format_quality(quality: CalibrationQuality) -> String {
-    format!(
-        "confidence={:.3}, coverage={:.3}, fitness={:.3}, radial_fitness={:.3}, gravity_fitness={:.3}",
-        quality.confidence,
-        quality.coverage,
-        quality.fitness,
-        quality.radial_fitness,
-        quality.gravity_fitness
-    )
-}
+const MAX_CALIBRATION_TIME_US: u64 = 60_000_000;
+const MIN_AVERAGE_FITNESS: f64 = 0.5;
 
-fn component_min(left: CalibrationQuality, right: CalibrationQuality) -> CalibrationQuality {
-    CalibrationQuality {
-        confidence: left.confidence.min(right.confidence),
-        coverage: left.coverage.min(right.coverage),
-        fitness: left.fitness.min(right.fitness),
-        radial_fitness: left.radial_fitness.min(right.radial_fitness),
-        gravity_fitness: left.gravity_fitness.min(right.gravity_fitness),
-    }
-}
-
-fn component_max(left: CalibrationQuality, right: CalibrationQuality) -> CalibrationQuality {
-    CalibrationQuality {
-        confidence: left.confidence.max(right.confidence),
-        coverage: left.coverage.max(right.coverage),
-        fitness: left.fitness.max(right.fitness),
-        radial_fitness: left.radial_fitness.max(right.radial_fitness),
-        gravity_fitness: left.gravity_fitness.max(right.gravity_fitness),
-    }
-}
-
-#[test]
-fn air1_trace_reports_calibration_quality() {
+fn assert_air1_trace_calibrates(use_gravity: bool) {
+    let mode = if use_gravity {
+        "with_gravity"
+    } else {
+        "without_gravity"
+    };
     let trace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
@@ -52,13 +28,13 @@ fn air1_trace_reports_calibration_quality() {
     let mut previous_timestamp = None;
     let mut first_timestamp = None;
     let mut last_timestamp = None;
+    let mut first_calibrated_timestamp = None;
     let mut accgyro_samples = 0usize;
     let mut magnetic_samples = 0usize;
-    let mut published_samples = 0usize;
-    let mut unavailable_samples = 0usize;
-    let mut final_quality = None;
-    let mut minimum_quality = None;
-    let mut maximum_quality = None;
+    let mut calibrated_samples = 0usize;
+    let mut quality_samples = 0usize;
+    let mut radial_fitness_sum = 0.0f64;
+    let mut gravity_fitness_sum = 0.0f64;
 
     loop {
         let event = replay.read_event().unwrap();
@@ -84,43 +60,82 @@ fn air1_trace_reports_calibration_quality() {
                 timestamp,
             } => {
                 magnetic_samples += 1;
-                match calibrator.evaluate_correct(rub_to_frd(&magnetometer), gravity, timestamp) {
-                    Ok(MagCalibrationResult { quality, direction }) => {
-                        published_samples += usize::from(direction.is_some());
-                        final_quality = Some(quality);
-                        minimum_quality = Some(
-                            minimum_quality
-                                .map_or(quality, |current| component_min(current, quality)),
-                        );
-                        maximum_quality = Some(
-                            maximum_quality
-                                .map_or(quality, |current| component_max(current, quality)),
-                        );
-                    }
-                    Err(_) => unavailable_samples += 1,
+                let gravity_hint = if use_gravity {
+                    let Some(gravity) = gravity else {
+                        continue;
+                    };
+                    Some(gravity)
+                } else {
+                    None
+                };
+                let MagCalibrationResult { quality, direction } = calibrator
+                    .evaluate_correct(rub_to_frd(&magnetometer), gravity_hint, timestamp)
+                    .unwrap_or_else(|error| {
+                        panic!("Air 1 replay {mode} calibration failed at {timestamp}: {error:?}")
+                    });
+
+                if direction.is_some() {
+                    calibrated_samples += 1;
+                    first_calibrated_timestamp.get_or_insert(timestamp);
+                }
+                if first_calibrated_timestamp.is_some() {
+                    quality_samples += 1;
+                    radial_fitness_sum += f64::from(quality.radial_fitness);
+                    gravity_fitness_sum += f64::from(quality.gravity_fitness);
                 }
             }
             _ => {}
         }
     }
 
-    let final_quality = final_quality.expect("trace produced no calibration quality result");
-    let minimum_quality = minimum_quality.unwrap();
-    let maximum_quality = maximum_quality.unwrap();
-    let duration_us = last_timestamp.unwrap() - first_timestamp.unwrap();
-    eprintln!(
-        "Air 1 replay: duration_us={duration_us}, accgyro_samples={accgyro_samples}, magnetic_samples={magnetic_samples}, published_samples={published_samples}, unavailable_samples={unavailable_samples}"
+    let first_timestamp = first_timestamp.expect("Air 1 trace contained no sensor timestamp");
+    let last_timestamp = last_timestamp.unwrap();
+    let duration_us = last_timestamp - first_timestamp;
+    let first_calibrated_timestamp = first_calibrated_timestamp
+        .unwrap_or_else(|| panic!("Air 1 replay {mode} produced no calibrated reading"));
+    let first_calibrated_after_us = first_calibrated_timestamp - first_timestamp;
+    assert!(
+        accgyro_samples > 0,
+        "Air 1 replay {mode} had no AccGyro samples"
     );
-    eprintln!("Air 1 final quality: {}", format_quality(final_quality));
-    eprintln!(
-        "Air 1 component minima: {}",
-        format_quality(minimum_quality)
+    assert!(
+        magnetic_samples > 0,
+        "Air 1 replay {mode} had no magnetic samples"
     );
-    eprintln!(
-        "Air 1 component maxima: {}",
-        format_quality(maximum_quality)
+    assert!(
+        calibrated_samples > 0,
+        "Air 1 replay {mode} had no calibrated samples"
+    );
+    assert!(
+        quality_samples > 0,
+        "Air 1 replay {mode} had no post-publication quality samples"
+    );
+    assert!(
+        first_calibrated_after_us <= MAX_CALIBRATION_TIME_US,
+        "Air 1 replay {mode} first calibrated after {first_calibrated_after_us} us"
     );
 
-    assert!(accgyro_samples > 0);
-    assert!(magnetic_samples > 0);
+    let radial_fitness_average = radial_fitness_sum / quality_samples as f64;
+    let gravity_fitness_average = gravity_fitness_sum / quality_samples as f64;
+    eprintln!(
+        "Air 1 replay {mode}: duration_us={duration_us}, accgyro_samples={accgyro_samples}, magnetic_samples={magnetic_samples}, calibrated_samples={calibrated_samples}, first_calibrated_after_us={first_calibrated_after_us}, quality_samples={quality_samples}, radial_fitness_average={radial_fitness_average:.3}, gravity_fitness_average={gravity_fitness_average:.3}"
+    );
+    assert!(
+        radial_fitness_average > MIN_AVERAGE_FITNESS,
+        "Air 1 replay {mode} average radial_fitness {radial_fitness_average:.6} must be greater than {MIN_AVERAGE_FITNESS}"
+    );
+    assert!(
+        gravity_fitness_average > MIN_AVERAGE_FITNESS,
+        "Air 1 replay {mode} average gravity_fitness {gravity_fitness_average:.6} must be greater than {MIN_AVERAGE_FITNESS}"
+    );
+}
+
+#[test]
+fn air1_trace_calibrates_with_gravity() {
+    assert_air1_trace_calibrates(true);
+}
+
+#[test]
+fn air1_trace_calibrates_without_gravity() {
+    assert_air1_trace_calibrates(false);
 }
