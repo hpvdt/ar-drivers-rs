@@ -153,22 +153,14 @@ impl ARGlasses for NrealAir {
             ..Default::default()
         })?;
         match result.get(1) {
-            // Mirror 60Hz
-            Some(1) => Ok(DisplayMode::SameOnBoth),
+            // Mirror 60Hz or 72Hz
+            Some(1 | 5) => Ok(DisplayMode::SameOnBoth),
             // SBS 60Hz
             Some(3) => Ok(DisplayMode::Stereo),
-            // SBS 72Hz
-            Some(4) => Ok(DisplayMode::HighRefreshRate),
-            // Mirror 72Hz
-            Some(5) => Ok(DisplayMode::SameOnBoth),
+            // SBS 72Hz/90Hz or mirror 90Hz/120Hz
+            Some(4 | 9 | 10 | 11) => Ok(DisplayMode::HighRefreshRate),
             // Horizontally stretched SBS, 60Hz
             Some(8) => Ok(DisplayMode::HalfSBS),
-            // SBS 90Hz
-            Some(9) => Ok(DisplayMode::HighRefreshRate),
-            // Mirror 90Hz
-            Some(10) => Ok(DisplayMode::HighRefreshRate),
-            // Mirror 120Hz
-            Some(11) => Ok(DisplayMode::HighRefreshRate),
             _ => Err(Error::Other("Unknown display mode")),
         }
     }
