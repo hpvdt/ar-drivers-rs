@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use ar_drivers::fusion::{rub_to_frd, MagCalibrationResult, MagCalibrator};
-use ar_drivers::nreal_air::NrealAirReplay;
+use ar_drivers::xreal_air::XrealAirReplay;
 use ar_drivers::{ARGlasses, GlassesEvent};
 use nalgebra::Vector3;
 
@@ -25,8 +25,8 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
     let trace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
-        .join("nreal_air_air1_60s.log");
-    let mut replay = NrealAirReplay::open(&trace).unwrap();
+        .join("xreal_air_air1_60s.log");
+    let mut replay = XrealAirReplay::open(&trace).unwrap();
     let mut calibrator = MagCalibrator::<1023>::new();
     let mut gravity: Option<Vector3<f32>> = None;
     let mut previous_timestamp = None;

@@ -28,7 +28,7 @@
 //! Support for individual AR glasses types ca be enabled with the following features:
 //!
 //! * `mad_gaze`: Mad Gaze Glow
-//! * `nreal`: Nreal Light
+//! * `xreal`: XREAL Light
 //! * `rokid`: Rokid Air
 //!
 //! All of them are enabled by default, which may bring in some unwanted dependencies if you
@@ -46,12 +46,12 @@ pub mod fusion;
 pub mod grawoow;
 #[cfg(feature = "mad_gaze")]
 pub mod mad_gaze;
-#[cfg(feature = "nreal")]
-pub mod nreal_air;
-#[cfg(feature = "nreal")]
-pub mod nreal_light;
 #[cfg(feature = "rokid")]
 pub mod rokid;
+#[cfg(feature = "xreal")]
+pub mod xreal_air;
+#[cfg(feature = "xreal")]
+pub mod xreal_light;
 
 /// Singleton connection that runs sensor fusion in a background thread.
 pub mod connection;
@@ -325,10 +325,10 @@ pub fn any_glasses() -> Result<Box<dyn ARGlasses>> {
     let glasses_factories: Vec<(&str, fn() -> Result<Box<dyn ARGlasses>>)> = vec![
         #[cfg(feature = "rokid")]
         ("RokidAir", || upcast(rokid::RokidAir::new())),
-        #[cfg(feature = "nreal")]
-        ("NrealAir", || upcast(nreal_air::NrealAir::new())),
-        #[cfg(feature = "nreal")]
-        ("NrealLight", || upcast(nreal_light::NrealLight::new())),
+        #[cfg(feature = "xreal")]
+        ("XrealAir", || upcast(xreal_air::XrealAir::new())),
+        #[cfg(feature = "xreal")]
+        ("XrealLight", || upcast(xreal_light::XrealLight::new())),
         #[cfg(feature = "grawoow")]
         ("GrawoowG530", || upcast(grawoow::GrawoowG530::new())),
         #[cfg(feature = "mad_gaze")]

@@ -5,7 +5,7 @@
 // Based on code by thejackimonster
 // See https://gitlab.com/TheJackiMonster/nrealAirLinuxDriver
 
-//! Nreal Air AR glasses support. See [`NrealAir`]
+//! XREAL Air AR glasses support. See [`XrealAir`]
 //! It only uses [`hidapi`] for communication.
 
 use std::collections::{HashMap, VecDeque};
@@ -22,8 +22,8 @@ use crate::{
     util::crc32_adler, ARGlasses, DisplayMatrices, DisplayMode, Error, GlassesEvent, Result, Side,
 };
 
-/// The main structure representing a connected Nreal Air glasses
-pub struct NrealAir {
+/// The main structure representing a connected XREAL Air glasses
+pub struct XrealAir {
     model: AirModel,
     device: HidDevice,
     pending_packets: VecDeque<McuPacket>,
@@ -32,9 +32,9 @@ pub struct NrealAir {
 
 const COMMAND_TIMEOUT: i32 = 1000;
 const IMU_TIMEOUT: i32 = 250;
-const PACKET_LOG_MAGIC: &str = "ar-drivers-nreal-air-packets-v1";
+const PACKET_LOG_MAGIC: &str = "ar-drivers-xreal-air-packets-v1";
 
-const NREAL_VID: u16 = 0x3318;
+const XREAL_VID: u16 = 0x3318;
 const AIR_PID: u16 = 0x0424;
 const AIR_2_PID: u16 = 0x0428;
 const AIR_2_PRO_PID: u16 = 0x0432;
@@ -121,7 +121,7 @@ impl AirModel {
     }
 }
 
-impl ARGlasses for NrealAir {
+impl ARGlasses for XrealAir {
     fn serial(&mut self) -> Result<String> {
         let mut result = self.run_command(McuPacket {
             cmd_id: 0x15,
@@ -228,14 +228,14 @@ impl ARGlasses for NrealAir {
 }
 
 /// A deterministic replay of raw packets captured from XREAL Air glasses.
-pub struct NrealAirReplay {
+pub struct XrealAirReplay {
     model: AirModel,
     packets: Vec<Vec<u8>>,
     next_packet: usize,
-    base: NrealAirBase,
+    base: XrealAirBase,
 }
 
-impl NrealAirReplay {
+impl XrealAirReplay {
     /// Open and validate a versioned XREAL Air packet log.
     pub fn open(path: &Path) -> Result<Self> {
         Self::from_packet_log(&fs::read_to_string(path)?)
@@ -264,7 +264,7 @@ impl NrealAirReplay {
             return Err(Error::Other("Packet log header has extra fields"));
         }
 
-        let base = NrealAirBase::from_calibration(&calibration)?;
+        let base = XrealAirBase::from_calibration(&calibration)?;
         let expected_packet_size = model.imu_packet_size();
         let packets = lines
             .map(|line| decode_packet_log_line(line, expected_packet_size))
@@ -282,7 +282,7 @@ impl NrealAirReplay {
     }
 }
 
-impl ARGlasses for NrealAirReplay {
+impl ARGlasses for XrealAirReplay {
     fn serial(&mut self) -> Result<String> {
         Err(Error::NotImplemented)
     }
@@ -324,7 +324,7 @@ impl ARGlasses for NrealAirReplay {
         Translation3::new(ipd as f64 * side_multiplier, 0.0, 0.0)
             * UnitQuaternion::from_euler_angles(
                 0.0,
-                NrealAir::DISPLAY_DIVERGENCE * side_multiplier,
+                XrealAir::DISPLAY_DIVERGENCE * side_multiplier,
                 0.0,
             )
     }
@@ -423,10 +423,10 @@ fn decode_xreal_magnetometer_report(report: &[u8]) -> Option<XrealMagnetometerRe
     })
 }
 
-impl NrealAir {
-    /// Vendor ID of the NReal Air's components
-    pub const VID: u16 = NREAL_VID;
-    /// Product ID of the NReal Air 1's components
+impl XrealAir {
+    /// Vendor ID of the XREAL Air's components
+    pub const VID: u16 = XREAL_VID;
+    /// Product ID of the XREAL Air 1's components
     #[deprecated]
     pub const PID: u16 = AIR_PID;
 
@@ -450,11 +450,11 @@ impl NrealAir {
         Self::new_common(model, device, ImuDevice::new(fd, model)?)
     }
 
-    /// Find a connected Nreal Air device and connect to it. (And claim the USB interface)
+    /// Find a connected XREAL Air device and connect to it. (And claim the USB interface)
     /// Only one instance can be alive at a time
     #[cfg(not(target_os = "android"))]
     pub fn new() -> Result<Self> {
-        let (model, mcu_device, imu_device) = open_nreal_air()?;
+        let (model, mcu_device, imu_device) = open_xreal_air()?;
         Self::new_common(model, mcu_device, ImuDevice::new_device(imu_device, model)?)
     }
     fn new_common(model: AirModel, device: HidDevice, imu_device: ImuDevice) -> Result<Self> {
@@ -539,7 +539,7 @@ struct ImuDevice {
     model: AirModel,
     config_json: JsonValue,
     displays: Option<(DisplayMatrices, DisplayMatrices)>,
-    base: NrealAirBase,
+    base: XrealAirBase,
     packet_log: Option<BufWriter<File>>,
 }
 
@@ -559,7 +559,7 @@ impl ImuDevice {
             model,
             config_json: JsonValue::Null,
             displays: None,
-            base: NrealAirBase::default(),
+            base: XrealAirBase::default(),
             packet_log: None,
         };
         // Turn off IMU stream while reading config
@@ -592,7 +592,7 @@ impl ImuDevice {
         //      should probably return Err() instead.
         self.displays = Self::parse_display_descriptors(&self.config_json["display"]);
         let cfg = &self.config_json["IMU"]["device_1"];
-        self.base = NrealAirBase::from_calibration(cfg)?;
+        self.base = XrealAirBase::from_calibration(cfg)?;
         Ok(())
     }
 
@@ -737,13 +737,13 @@ impl ImuDevice {
 }
 
 #[derive(Default)]
-struct NrealAirBase {
+struct XrealAirBase {
     pending_events: VecDeque<GlassesEvent>,
     gyro_bias: Vector3<f32>,
     accelerometer_bias: Vector3<f32>,
 }
 
-impl NrealAirBase {
+impl XrealAirBase {
     fn from_calibration(calibration: &JsonValue) -> Result<Self> {
         Ok(Self {
             pending_events: VecDeque::new(),
@@ -822,12 +822,12 @@ impl NrealAirBase {
         // Recovery workflow (one commit per numbered step):
         // 1. Add object-safe `ARGlasses` methods that start and stop packet logging. Their default
         //    implementations are no-ops.
-        // 2. Implement logging for `NrealAir`. The versioned text file starts with the model and the
+        // 2. Implement logging for `XrealAir`. The versioned text file starts with the model and the
         //    sanitized `IMU.device_1` calibration object; every remaining line is one exact HID packet
         //    encoded as lowercase hexadecimal.
         // 3. Add a 60-second Air 1 logging example and capture a continuous three-axis calibration dance.
-        // 4. Add `NrealAirReplay`, which validates the log and replays its packets cyclically.
-        // 5. Move all sensor-report parsing and event queuing into a shared `NrealAirBase` used by the live
+        // 4. Add `XrealAirReplay`, which validates the log and replays its packets cyclically.
+        // 5. Move all sensor-report parsing and event queuing into a shared `XrealAirBase` used by the live
         //    and replay transports.
         // 6. Convert the `read_sensors` calibration experiment into a replay integration test that reports
         //    every `CalibrationQuality` factor.
@@ -964,7 +964,7 @@ impl ImuPacket {
 }
 
 #[cfg(not(target_os = "android"))]
-fn open_nreal_air() -> Result<(AirModel, HidDevice, HidDevice)> {
+fn open_xreal_air() -> Result<(AirModel, HidDevice, HidDevice)> {
     let hidapi = HidApi::new()?;
 
     // First find the model by checking MCU interfaces
@@ -972,7 +972,7 @@ fn open_nreal_air() -> Result<(AirModel, HidDevice, HidDevice)> {
     let mut mcu_device: Option<HidDevice> = None;
 
     for device in hidapi.device_list() {
-        if device.vendor_id() != NREAL_VID {
+        if device.vendor_id() != XREAL_VID {
             continue;
         }
         let pid = device.product_id();
@@ -995,7 +995,7 @@ fn open_nreal_air() -> Result<(AirModel, HidDevice, HidDevice)> {
     let mut imu_device: Option<HidDevice> = None;
 
     for device in hidapi.device_list() {
-        if device.vendor_id() != NREAL_VID {
+        if device.vendor_id() != XREAL_VID {
             continue;
         }
         let pid = device.product_id();
@@ -1030,5 +1030,5 @@ fn write_hid_packet(device: &HidDevice, payload: &[u8; 0x40]) -> Result<()> {
 }
 
 #[cfg(test)]
-#[path = "nreal_air_tests.rs"]
-mod nreal_air_tests;
+#[path = "xreal_air_tests.rs"]
+mod xreal_air_tests;

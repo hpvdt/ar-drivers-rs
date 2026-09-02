@@ -27,7 +27,7 @@ every mode.
 
 The library uses Cargo feature flags for conditional compilation:
 
-- `nreal`: Enables XREAL device support (requires: hidapi, tinyjson, bytemuck)
+- `xreal`: Enables XREAL device support (requires: hidapi, tinyjson, bytemuck)
 - `rokid`: Enables Rokid device support (requires: rusb)
 - `grawoow`: Enables Grawoow device support (requires: rusb, tinyjson, bytemuck)
 - `mad_gaze`: Enables Mad Gaze device support (requires: serialport)

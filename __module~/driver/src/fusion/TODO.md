@@ -4,7 +4,7 @@
 
     - **Summary:** The committed Air 1 packet trace produces calibrated readings, but the gravity-assisted replay
       regression exposes magnetometer data that is inconsistent with the accelerometer frame.
-    - **Affected modules:** `src/nreal_air.rs`, `tests/nreal_air_replay.rs`
+    - **Affected modules:** `src/xreal_air.rs`, `tests/xreal_air_replay.rs`
     - **Severity:** High
     - **Description:** Over the first 60-second trace cycle, calibration without gravity publishes after `4.658 s` and
       averages `0.625` radial fitness. Calibration with gravity publishes after `10.972 s` and averages `0.610` radial

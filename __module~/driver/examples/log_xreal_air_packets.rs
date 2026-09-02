@@ -7,14 +7,14 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use ar_drivers::{nreal_air::NrealAir, ARGlasses};
+use ar_drivers::{xreal_air::XrealAir, ARGlasses};
 use clap::Parser;
 
 #[derive(Parser)]
 #[command(about = "Capture a timed XREAL Air 1 raw IMU packet trace")]
 struct Args {
     /// Destination for the versioned packet log.
-    #[arg(long, default_value = "tests/fixtures/nreal_air_air1_60s.log")]
+    #[arg(long, default_value = "tests/fixtures/xreal_air_air1_60s.log")]
     output: PathBuf,
 
     /// Capture duration in seconds.
@@ -24,7 +24,7 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
-    let mut glasses = NrealAir::new()?;
+    let mut glasses = XrealAir::new()?;
 
     if glasses.name() != "XREAL Air" {
         return Err(format!(

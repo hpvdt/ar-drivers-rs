@@ -35,8 +35,8 @@ fn set_version2_magnetometer(
     packet[62] = freshness;
 }
 
-fn base() -> NrealAirBase {
-    NrealAirBase::from_calibration(&CALIBRATION.parse().unwrap()).unwrap()
+fn base() -> XrealAirBase {
+    XrealAirBase::from_calibration(&CALIBRATION.parse().unwrap()).unwrap()
 }
 
 fn encode_packet(packet: &[u8]) -> String {
@@ -73,7 +73,7 @@ fn accgyro_timestamp(event: GlassesEvent) -> u64 {
 #[test]
 fn replay_cycles_through_packets() {
     let mut replay =
-        NrealAirReplay::from_packet_log(&packet_log(&[sensor_packet(11), sensor_packet(22)]))
+        XrealAirReplay::from_packet_log(&packet_log(&[sensor_packet(11), sensor_packet(22)]))
             .unwrap();
 
     assert_eq!(accgyro_timestamp(replay.read_event().unwrap()), 11);
@@ -90,7 +90,7 @@ fn base_preserves_accelerometer_and_gyroscope_decoding() {
     )
     .parse()
     .unwrap();
-    let mut base = NrealAirBase::from_calibration(&calibration).unwrap();
+    let mut base = XrealAirBase::from_calibration(&calibration).unwrap();
     let mut packet = sensor_packet(7);
     packet[12..14].copy_from_slice(&2u16.to_le_bytes());
     packet[14..18].copy_from_slice(&4u32.to_le_bytes());
@@ -201,7 +201,7 @@ fn captured_packet_matches_upstream_deserialization() {
     let trace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
-        .join("nreal_air_air1_60s.log");
+        .join("xreal_air_air1_60s.log");
     let packet_log = std::fs::read_to_string(trace).unwrap();
     let packet = decode_packet_log_line(packet_log.lines().nth(6).unwrap(), 0x40).unwrap();
 
@@ -291,7 +291,7 @@ fn replay_rejects_malformed_logs() {
     ];
 
     for packet_log in malformed {
-        assert!(NrealAirReplay::from_packet_log(&packet_log).is_err());
+        assert!(XrealAirReplay::from_packet_log(&packet_log).is_err());
     }
 }
 
@@ -299,12 +299,12 @@ fn replay_rejects_malformed_logs() {
 fn replay_rejects_packet_length_for_model() {
     let packet = encode_packet(&sensor_packet(1));
     let packet_log = format!("# {PACKET_LOG_MAGIC}\tair2-ultra\t{CALIBRATION}\n{packet}\n");
-    assert!(NrealAirReplay::from_packet_log(&packet_log).is_err());
+    assert!(XrealAirReplay::from_packet_log(&packet_log).is_err());
 }
 
 #[test]
 fn replay_hardware_operations_are_unsupported() {
-    let mut replay = NrealAirReplay::from_packet_log(&packet_log(&[sensor_packet(1)])).unwrap();
+    let mut replay = XrealAirReplay::from_packet_log(&packet_log(&[sensor_packet(1)])).unwrap();
 
     assert!(matches!(replay.serial(), Err(Error::NotImplemented)));
     assert!(matches!(
