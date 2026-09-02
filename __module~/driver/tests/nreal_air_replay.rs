@@ -18,6 +18,7 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
     } else {
         "without_gravity"
     };
+    eprintln!("# Starting replay - Air 1 trace, {mode}");
     let trace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
@@ -117,8 +118,16 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
 
     let radial_fitness_average = radial_fitness_sum / quality_samples as f64;
     let gravity_fitness_average = gravity_fitness_sum / quality_samples as f64;
+    eprintln!("- trace");
+    eprintln!("  - duration: {duration_us} us");
+    eprintln!("  - accgyro samples: {accgyro_samples}");
+    eprintln!("  - magnetic samples: {magnetic_samples}");
+    eprintln!("- evaluate_correct");
+    eprintln!("  - calibrated: {calibrated_samples} over {magnetic_samples} calls");
+    eprintln!("  - until first successful correction: {first_calibrated_after_us} us");
+    eprintln!("  - avg radial fitness: {radial_fitness_average:.6} over {quality_samples} samples");
     eprintln!(
-        "Air 1 replay {mode}: duration_us={duration_us}, accgyro_samples={accgyro_samples}, magnetic_samples={magnetic_samples}, calibrated_samples={calibrated_samples}, first_calibrated_after_us={first_calibrated_after_us}, quality_samples={quality_samples}, radial_fitness_average={radial_fitness_average:.3}, gravity_fitness_average={gravity_fitness_average:.3}"
+        "  - avg gravity fitness: {gravity_fitness_average:.6} over {quality_samples} samples"
     );
     assert!(
         radial_fitness_average > MIN_AVERAGE_FITNESS,

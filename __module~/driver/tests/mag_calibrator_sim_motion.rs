@@ -291,10 +291,6 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         "  - post-warmup confidence range: {:.6}..={:.6}",
         stats.min_validation_confidence, stats.max_validation_confidence,
     );
-    println!(
-        "  - worst post-warmup sample: timestamp={timestamp_at_worst_validation_error}, \
-         confidence={confidence_at_worst_validation_error:.6}"
-    );
     println!("- total: {} evaluations", stats.eval_count);
     println!(
         "  - until first successful correction: {} evaluations / confidence={:.6}",
