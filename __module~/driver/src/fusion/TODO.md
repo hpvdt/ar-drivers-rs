@@ -54,6 +54,26 @@
       forgetting schedule whose horizon is no longer than the configured lifespan. Add an adaptive hard-iron drift
       integration case before claiming equivalent expiry semantics.
 
+- [ ] Remove continuous cache normalization so fitness statistics stop resetting
+
+    - **Summary:** Cached samples are continuously renormalized to the drifting cache mean and radius; unusable
+      rebases wipe the working optimizer state and the running RMS fitness statistics, producing block-long dips to
+      zero.
+    - **Affected module:** `src/fusion/mag_calibration.rs`
+    - **Severity:** High
+    - **Description:** Every append, replacement, and expiry shifts `mu` and `r`, so each retained row is renormalized
+      as `u = (x - mu) / r` and the persistent coefficients are analytically rebased. When a radius or the rebase
+      scalar `h = 1 - t^T Q t - q^T t` is unusable, unpublished working state resets to `Q = 2 I`, which also resets
+      the radial and gravity RMS statistics. The Air 1 replay then reports fitness ramping from zero back up over a
+      block of evaluations several times per cycle even though the decoded data is stable. These dips are a
+      normalization-lifecycle artifact, not a data or convergence problem, and they force downstream verification to
+      tolerate long streaks of near-zero post-warm-up fitness.
+    - **Recommended fix:** Store magnetometer readings directly and fit the ellipsoid in raw sample coordinates.
+      Update cached mean, radius, and scale on append, replacement, and expiry by recomputing them from the stored
+      raw rows instead of rebasing persistent coefficients; keep the radial and gravity running statistics keyed to a
+      stable normalization rather than the drifting one. Verify the replay report no longer shows block-long
+      post-warm-up dips to zero before retiring the streak-tolerance in `tests/xreal_air_replay.rs`.
+
 ## Medium severity
 
 - [ ] Score replacement candidates in their post-replacement buffer
