@@ -12,6 +12,14 @@ use nalgebra::Vector3;
 
 const MAX_CALIBRATION_TIME_US: u64 = 60_000_000;
 const MIN_AVERAGE_FITNESS: f64 = 0.5;
+/// Stability is judged over the whole post-warmup phase. The calibrator's
+/// running RMS statistics reset occasionally on rebase, which produces
+/// block-long dips to zero, so a constant bound would fail the calibrator
+/// rather than the decoder. Stability therefore means a consecutive streak
+/// of post-warmup evaluations above `FITNESS_FLOOR` of at least
+/// `MIN_STABLE_STREAK` for both fitness components at once.
+const FITNESS_FLOOR: f32 = 0.5;
+const MIN_STABLE_STREAK: usize = 60;
 /// Magnetometer evaluations to wait after the first successful correction.
 const WARMUP_EVAL_COUNT: u64 = 125;
 
@@ -48,6 +56,7 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
     let mut validation_coverage_sum = 0.0f64;
     let mut min_validation_confidence = f32::INFINITY;
     let mut max_validation_confidence = 0.0f32;
+    let mut tail_samples: Vec<(u64, f32, f32)> = Vec::new();
     let mut min_confidence_radial = 0.0f32;
     let mut min_confidence_gravity = 0.0f32;
     let mut min_confidence_coverage = 0.0f32;
@@ -129,6 +138,7 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
                     min_confidence_coverage = quality.coverage;
                 }
                 max_validation_confidence = max_validation_confidence.max(quality.confidence);
+                tail_samples.push((timestamp, quality.radial_fitness, quality.gravity_fitness));
             }
             _ => {}
         }
@@ -215,6 +225,18 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
         "  - post-warmup confidence range: {:.6}..={:.6}",
         min_validation_confidence, max_validation_confidence,
     );
+
+    let mut longest_streak = 0usize;
+    let mut current_streak = 0usize;
+    for (_, radial, gravity) in &tail_samples {
+        if *radial >= FITNESS_FLOOR && *gravity >= FITNESS_FLOOR {
+            current_streak += 1;
+            longest_streak = longest_streak.max(current_streak);
+        } else {
+            current_streak = 0;
+        }
+    }
+    eprintln!("- post-warmup stability: longest above-floor streak: {longest_streak} evaluations");
     eprintln!("- total: {} evaluations", eval_count);
     eprintln!(
         "  - until first successful correction: {} evaluations / confidence={:.6}",
@@ -230,6 +252,14 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
     assert!(
         gravity_fitness_average > MIN_AVERAGE_FITNESS,
         "Air 1 replay {mode} average gravity_fitness {gravity_fitness_average:.6} must be greater than {MIN_AVERAGE_FITNESS}"
+    );
+    assert!(
+        !tail_samples.is_empty(),
+        "Air 1 replay {mode} had no post-warmup evaluations"
+    );
+    assert!(
+        longest_streak >= MIN_STABLE_STREAK,
+        "Air 1 replay {mode} held both fitness components above {FITNESS_FLOOR} for at most {longest_streak} consecutive post-warmup evaluations, below {MIN_STABLE_STREAK}"
     );
 }
 
