@@ -184,6 +184,23 @@ submitting a change.
   which can be longer.
 - Duplicated or contradicting information should be actively deleted (including information in code comment)
 
+### Acronyms
+
+Every acronym used in this directory's documentation (e.g. this guide, `TODO.md`) must
+appear in this list. Add a new acronym here in the same change that introduces it; otherwise spell the term out.
+
+- **AHRS:** Attitude and Heading Reference System.
+- **FRD:** Forward-Right-Down aerospace coordinate frame.
+- **RMS:** Root Mean Square.
+- **RUB:** Right-Up-Back Android sensor coordinate frame.
+- **SGD:** Stochastic Gradient Descent.
+- **SPD:** Symmetric Positive-Definite.
+
+### Symbols
+
+Every symbol used in this directory's documentation (e.g. this guide, `TODO.md`) and symbolic variable name must
+appear in this list. Add a new symbol here in the same change that introduces it; otherwise use the full name reference.
+
 ### TODO.md Format
 
 - Contain only a flat checklist of issues grouped by severity.
