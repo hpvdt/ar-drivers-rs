@@ -186,7 +186,7 @@ submitting a change.
 
 ### Acronyms
 
-Every acronym used in this directory's documentation (e.g. this guide, `TODO.md`) must
+Every acronym used in the documentation (e.g. this guide, `TODO.md`) must
 appear in this list. Add a new acronym here in the same change that introduces it; otherwise spell the term out.
 
 - **AHRS:** Attitude and Heading Reference System.
@@ -196,10 +196,18 @@ appear in this list. Add a new acronym here in the same change that introduces i
 - **SGD:** Stochastic Gradient Descent.
 - **SPD:** Symmetric Positive-Definite.
 
+### Formulas
+
+Every math formula (e.g. equation, pseudo-algorithm) in the documentation (e.g. this guide, `TODO.md`) should be
+in LaTeX math block (enclosed a pair of `$` or `$$`).
+
 ### Symbols
 
-Every symbol used in this directory's documentation (e.g. this guide, `TODO.md`) and symbolic variable name must
+Every symbol used in the documentation (e.g. this guide, `TODO.md`) and symbolic variable name in the code must
 appear in this list. Add a new symbol here in the same change that introduces it; otherwise use the full name reference.
+
+You should avoid abusing 1 symbol to refer to different concepts. This include symbols written in different alphabets
+(e.g. `\mu` in LaTex math and `mu` in code should always refer to the same concept)
 
 ### TODO.md Format
 
