@@ -182,28 +182,20 @@ submitting a change.
 - Indentation is 4 spaces, continuation indentation is 6 spaces
 - Hard wrap is 120 characters. The only exceptions are Table and markup sections
   which can be longer.
+- Duplicated or contradicting information should be actively deleted (including information in code comment)
 
 ### TODO.md Format
 
-Every `TODO.md` file must contain only a flat checklist of open issues grouped by severity.
+- Contain only a flat checklist of issues grouped by severity.
+- All issues are grouped by severity heading (e.g. `## High severity`).
 
-Required structure:
+#### Issue Format
 
-- Start directly with a severity heading (e.g. `## High severity`).
-- Each item is a `- [ ]` or `- [x]` checkbox followed by a short name, indented metadata (`Summary`,
-  `Affected module`, `Severity`, `Description`, `Recommended fix`), and a fenced code block when quoting source.
+- Each issue is a `- [ ]` or `- [x]` checkbox followed by a short name & indented fields:
+  - **Summary:** Short description.
+  - **Affected module:** e.g. `src/path/to/file.rs`
+  - **Severity:** e.g. High
+  - **Unit test:** Path of the failing unit test that reveals the issue.
+    - always commit new issue with one or more unit tests
+    - detailed explanation and proposed fix should be in code comment
 - Keep items that are checked (`[x]`) only when the fix has already been merged; remove them on cleanup passes.
-
-Example:
-
-```markdown
-## High severity
-
-- [ ] Short name of the issue
-
-    - **Summary:** One-sentence description.
-    - **Affected module:** `src/path/to/file.rs`
-    - **Severity:** High
-    - **Description:** Detailed explanation with a fenced code quote.
-    - **Recommended fix:** Proposed solution.
-```
