@@ -51,7 +51,7 @@
   - **Recommended fix:** Reset and replay a bounded number of minibatches after expiry, or introduce an explicit
     forgetting schedule whose horizon is no longer than the configured lifespan. Add an adaptive hard-iron drift
     integration case before claiming equivalent expiry semantics.
-- [ ]  Remove continuous cache normalization so fitness statistics stop resetting
+- [ ]  Remove continuous cache reset so fitness statistics stop resetting
 
   - **Summary:** Cached samples are continuously renormalized to the drifting cache mean and radius; unusable
     rebases wipe the working optimizer state and the running RMS fitness statistics, producing block-long dips to
@@ -66,19 +66,18 @@
     normalization-lifecycle artifact, not a data or converg'ence problem, and they force downstream verification to
     tolerate long streaks of near-zero post-warm-up fitness.
   - **Recommended fix:**
-    - Store magnetometer readings directly.
-    - fit the ellipsoid in raw sample coordinates.
-    - The online SGD must fit a linear function (with hard & soft bias) directly from the raw data, without compromising accuracy.
-    - The purpose of eviction policy is to keep cache size constant while maximizing coverage after correction, improve it if necessary.
-    - Verify the replay report no longer shows block-long
-      post-warm-up dips to zero before retiring the streak-tolerance in `tests/xreal_air_replay.rs`.
+    - Each raw magnetometer samples (floating point) in the cache is stored as once and for all.
+    - Delete reset/rebase related code, e.g. reset_row_cache and rebuild_row_cache.
+    - The continuous tracking of cache mean and radius should be kept, but won't trigger reset
+    - everything else (Online SGD, coverage maximizing, fitness/confidence estimation) should be preserved.
     - The improved version should not make the code any longer (excluding comments). With useless state removed
   - **Verification:**
     - run the regression benchmark before the change to record this host's baseline
-      (`cargo test --package ar-drivers --no-default-features --test mag_calibrator_sim_motion regression -- --nocapture`); move the unit-test fixtures from unit-sphere to microtesla scale. Acceptance: the Air 1 replay
-      report no longer shows block-long post-warm-up dips to zero, after which the streak tolerance
-      (`MIN_STABLE_STREAK` over `FITNESS_FLOOR`) in `tests/xreal_air_replay.rs` is retired in favor of a constant
-      post-warm-up fitness floor. Record a new chronological stage in `MAG_CALIBRATION_BENCHMARK.md` with before and
+      (`cargo test --package ar-drivers --no-default-features --test mag_calibrator_sim_motion regression -- --nocapture`);
+      move the unit-test fixtures from unit-sphere to microtesla scale.
+    - Acceptance: the Air 1 replay
+      report no longer shows block-long post-warm-up dips to zero.
+      Record a new chronological stage in `MAG_CALIBRATION_BENCHMARK.md` with before and
       after tables.
     - Scope: do not bundle the stale-optimizer-influence item; rebasing will no longer exist, so
       adjust that item's wording separately.
