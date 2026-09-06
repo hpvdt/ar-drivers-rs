@@ -489,16 +489,16 @@ impl<const N: usize> MagCalibrator<N> {
         (sample - self.normalization_mean) / self.normalization_radius
     }
 
-    fn next_random(state: &mut u64) -> u64 {
-        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut value = *state;
+    fn next_random(random_state: &mut u64) -> u64 {
+        *random_state = random_state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut value = *random_state;
         value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
         value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         value ^ (value >> 31)
     }
 
     fn random_cache_row(
-        state: &mut u64,
+        random_state: &mut u64,
         sample_count: usize,
         excluded_row: Option<usize>,
     ) -> Option<usize> {
@@ -506,7 +506,7 @@ impl<const N: usize> MagCalibrator<N> {
         if eligible_count == 0 {
             return None;
         }
-        let mut row = (Self::next_random(state) % eligible_count as u64) as usize;
+        let mut row = (Self::next_random(random_state) % eligible_count as u64) as usize;
         if excluded_row.is_some_and(|excluded| row >= excluded) {
             row += 1;
         }
@@ -750,24 +750,25 @@ impl<const N: usize> MagCalibrator<N> {
     /// infinity so selection never picks them.
     fn squared_distances_to(&self, mag_sample: Vector3<f32>, count: usize) -> [f32; N] {
         // TODO: use nalgebra row iteration and squared norms instead of rebuilding and dotting each row
-        let mut squared_dists = [f32::INFINITY; N];
-        for (j, dist) in squared_dists.iter_mut().enumerate().take(count) {
+        let mut squared_distances = [f32::INFINITY; N];
+        for (j, dist) in squared_distances.iter_mut().enumerate().take(count) {
             let diff = mag_sample - self.sample(j);
             *dist = diff.dot(&diff);
         }
-        squared_dists
+        squared_distances
     }
 
-    /// Mean distance over the `k` smallest entries of `squared`, selected in
-    /// O(n) with a partial sort; `squared` is reordered in the process. The
-    /// square root is deferred until after selection, so only the `k`
-    /// selected entries are sqrt'd. Returns infinity for `k == 0`.
-    fn mean_of_smallest(squared: &mut [f32], neighbor_count: usize) -> f32 {
+    /// Mean distance over the `k` smallest entries of `squared_distances`,
+    /// selected in O(n) with a partial sort; `squared_distances` is reordered
+    /// in the process. The square root is deferred until after selection, so
+    /// only the `k` selected entries are sqrt'd. Returns infinity for
+    /// `k == 0`.
+    fn mean_of_smallest(squared_distances: &mut [f32], neighbor_count: usize) -> f32 {
         if neighbor_count == 0 {
             return f32::INFINITY;
         }
-        squared.select_nth_unstable_by(neighbor_count - 1, |a, b| a.total_cmp(b));
-        let smallest = &mut squared[..neighbor_count];
+        squared_distances.select_nth_unstable_by(neighbor_count - 1, |a, b| a.total_cmp(b));
+        let smallest = &mut squared_distances[..neighbor_count];
         smallest.sort_unstable_by(|a, b| a.total_cmp(b));
         // TODO: use a built-in sum reduction instead of a manual fold
         smallest.iter().rev().fold(0., |acc, &d| acc + d.sqrt()) / neighbor_count as f32
@@ -812,10 +813,10 @@ impl<const N: usize> MagCalibrator<N> {
     /// Rebuilds a row's neighbor cache from scratch: the
     /// `NEIGHBOR_CACHE_CAPACITY` smallest squared distances among rows
     /// `0..count`, skipping the row's own entry by index. O(N).
-    fn reset_row_cache(&mut self, row: usize, squared_dists: &[f32; N], count: usize) {
+    fn reset_row_cache(&mut self, row: usize, squared_distances: &[f32; N], count: usize) {
         let mut entries = [NeighborEntry::EMPTY; N];
         let mut entry_count = 0;
-        for (j, &squared_distance) in squared_dists.iter().enumerate().take(count) {
+        for (j, &squared_distance) in squared_distances.iter().enumerate().take(count) {
             if j == row {
                 continue;
             }
@@ -840,8 +841,8 @@ impl<const N: usize> MagCalibrator<N> {
     /// Recomputes a row's neighbor cache when its trusted prefix has shrunk
     /// below `k`. Only called with a full buffer.
     fn rebuild_row_cache(&mut self, row: usize) {
-        let squared_dists = self.squared_distances_to(self.sample(row), N);
-        self.reset_row_cache(row, &squared_dists, N);
+        let squared_distances = self.squared_distances_to(self.sample(row), N);
+        self.reset_row_cache(row, &squared_distances, N);
     }
 
     /// Mean distance of a buffered row to its `k` nearest other rows, served
@@ -870,10 +871,10 @@ impl<const N: usize> MagCalibrator<N> {
     /// Direct O(N) computation of a row's mean distance to its `k` nearest
     /// other rows, used when `k` exceeds the neighbor cache capacity.
     fn mean_distance_uncached(&self, row: usize, neighbor_count: usize) -> f32 {
-        let mut squared_dists = self.squared_distances_to(self.sample(row), N);
+        let mut squared_distances = self.squared_distances_to(self.sample(row), N);
         // Skip the self-entry by index instead of dropping the smallest value.
-        squared_dists[row] = f32::INFINITY;
-        Self::mean_of_smallest(&mut squared_dists, neighbor_count)
+        squared_distances[row] = f32::INFINITY;
+        Self::mean_of_smallest(&mut squared_distances, neighbor_count)
     }
 
     /// Remaps cached neighbor row indices through `index_map` (`u32::MAX` =
@@ -888,20 +889,20 @@ impl<const N: usize> MagCalibrator<N> {
             }
             let mut cache = self.neighbor_cache[old_index];
             let count = self.neighbor_cache_len[old_index] as usize;
-            let mut retained = 0;
+            let mut retained_count = 0;
             for i in 0..count {
                 let entry = cache[i];
                 let mapped = index_map[entry.row as usize];
                 if mapped != u32::MAX {
-                    cache[retained] = NeighborEntry {
+                    cache[retained_count] = NeighborEntry {
                         squared_distance: entry.squared_distance,
                         row: mapped,
                     };
-                    retained += 1;
+                    retained_count += 1;
                 }
             }
             self.neighbor_cache[new_index as usize] = cache;
-            self.neighbor_cache_len[new_index as usize] = retained as u8;
+            self.neighbor_cache_len[new_index as usize] = retained_count as u8;
         }
     }
 
@@ -977,30 +978,30 @@ impl<const N: usize> MagCalibrator<N> {
     ) -> bool {
         let previous_sample_row_count = self.sample_row_count;
         let mut index_map = [u32::MAX; N];
-        let mut retained = 0;
+        let mut retained_count = 0;
         for (index, map_slot) in index_map.iter_mut().enumerate().take(self.sample_row_count) {
             let sample = self.sample(index);
             if timestamp_us.saturating_sub(self.sample_timestamps_us[index])
                 <= self.max_sample_lifespan_us
             {
-                *map_slot = retained as u32;
-                if retained != index {
+                *map_slot = retained_count as u32;
+                if retained_count != index {
                     // TODO: copy matrix rows with nalgebra row views instead of looping over elements
                     for column in 0..3 {
-                        self.sample_matrix[(retained, column)] =
+                        self.sample_matrix[(retained_count, column)] =
                             self.sample_matrix[(index, column)];
                     }
-                    self.gravity_directions[retained] = self.gravity_directions[index];
-                    self.sample_timestamps_us[retained] = self.sample_timestamps_us[index];
+                    self.gravity_directions[retained_count] = self.gravity_directions[index];
+                    self.sample_timestamps_us[retained_count] = self.sample_timestamps_us[index];
                 }
-                retained += 1;
+                retained_count += 1;
             } else {
                 self.remove_raw_moment(sample);
             }
         }
-        if retained != self.sample_row_count {
-            self.sample_row_count = retained;
-            if retained == 0 {
+        if retained_count != self.sample_row_count {
+            self.sample_row_count = retained_count;
+            if retained_count == 0 {
                 // Incremental subtraction can leave round-off residue after
                 // the last retained row expires. An empty cache has exact
                 // zero moments by definition.
@@ -1009,7 +1010,7 @@ impl<const N: usize> MagCalibrator<N> {
             self.mean_distance = 0.0;
             self.remap_neighbor_cache(&index_map);
         }
-        let expired = retained != previous_sample_row_count;
+        let expired = retained_count != previous_sample_row_count;
 
         if !mag_sample.iter().all(|e| e.is_finite()) || mag_sample.norm_squared() <= f32::EPSILON {
             if expired {
@@ -1024,12 +1025,12 @@ impl<const N: usize> MagCalibrator<N> {
         // Check if buffer is not yet "initialized" with real measurements
         if self.sample_row_count < N {
             let count = self.sample_row_count;
-            let squared_dists = self.squared_distances_to(mag_sample, count);
+            let squared_distances = self.squared_distances_to(mag_sample, count);
             for ((cache, len), &squared_distance) in self
                 .neighbor_cache
                 .iter_mut()
                 .zip(self.neighbor_cache_len.iter_mut())
-                .zip(squared_dists.iter())
+                .zip(squared_distances.iter())
                 .take(count)
             {
                 // The cache covers every other row only if it was built up
@@ -1047,31 +1048,32 @@ impl<const N: usize> MagCalibrator<N> {
             }
             self.add_raw_moment(mag_sample);
             self.add_sample_at(count, mag_sample, gravity_direction, timestamp_us);
-            self.reset_row_cache(count, &squared_dists, count);
+            self.reset_row_cache(count, &squared_distances, count);
             self.sample_row_count += 1;
             accepted_row = Some(count);
         }
         // Otherwise check which sample may be best to replace
         else {
             let neighbor_count = self.neighbor_count.min(N.saturating_sub(1));
-            let (low_index, low_mean_dist) = self.lowest_mean_distance_by_index();
-            let squared_dists = self.squared_distances_to(mag_sample, N);
+            let (replacement_row, replacement_mean_distance) = self.lowest_mean_distance_by_index();
+            let squared_distances = self.squared_distances_to(mag_sample, N);
             // The candidate has no self-entry in the buffer, so its mean
             // distance covers the true k nearest buffered rows.
-            let mut scratch = squared_dists;
-            let sample_mean_dist = Self::mean_of_smallest(&mut scratch, neighbor_count);
-            if low_mean_dist < sample_mean_dist {
+            let mut candidate_squared_distances = squared_distances;
+            let candidate_mean_distance =
+                Self::mean_of_smallest(&mut candidate_squared_distances, neighbor_count);
+            if replacement_mean_distance < candidate_mean_distance {
                 for (row, ((cache, len), &squared_distance)) in self
                     .neighbor_cache
                     .iter_mut()
                     .zip(self.neighbor_cache_len.iter_mut())
-                    .zip(squared_dists.iter())
+                    .zip(squared_distances.iter())
                     .enumerate()
                 {
-                    if row == low_index {
+                    if row == replacement_row {
                         continue;
                     }
-                    Self::cache_remove(cache, len, low_index as u32);
+                    Self::cache_remove(cache, len, replacement_row as u32);
                     // After removal the cache covers every row besides the
                     // row itself and the replaced one only if nothing was
                     // ever evicted from it.
@@ -1081,16 +1083,16 @@ impl<const N: usize> MagCalibrator<N> {
                         len,
                         NeighborEntry {
                             squared_distance,
-                            row: low_index as u32,
+                            row: replacement_row as u32,
                         },
                         complete,
                     );
                 }
-                self.remove_raw_moment(self.sample(low_index));
+                self.remove_raw_moment(self.sample(replacement_row));
                 self.add_raw_moment(mag_sample);
-                self.add_sample_at(low_index, mag_sample, gravity_direction, timestamp_us);
-                self.reset_row_cache(low_index, &squared_dists, N);
-                accepted_row = Some(low_index);
+                self.add_sample_at(replacement_row, mag_sample, gravity_direction, timestamp_us);
+                self.reset_row_cache(replacement_row, &squared_distances, N);
+                accepted_row = Some(replacement_row);
             }
         }
         if expired || accepted_row.is_some() {
