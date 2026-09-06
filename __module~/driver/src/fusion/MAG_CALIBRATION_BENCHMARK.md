@@ -257,11 +257,11 @@ assertion. Average post-warm-up accuracy is unchanged within noise. The `0.32` t
 the observed `0.29-0.33` gap between confined and broad motion regimes on this simulator; hardware validation should
 re-check that gap before relying on the same constant.
 
-## E-optimality design-matrix coverage
+## E-optimality Gram-matrix coverage
 
 The occupancy grid had two quadrature defects: `asin(z)` latitude bands give polar cells about five times less solid
 angle than equatorial ones, and the grid is anchored to the body frame, so the score depended on the device's
-incidental orientation. Coverage is now the smallest eigenvalue of the `9 x 9` design matrix
+incidental orientation. Coverage is now the smallest eigenvalue of the `9 x 9` Gram matrix
 of the retained mean-centered unit directions, normalized by `2/15`, its uniform-sphere reference. The feature vector
 carries the nine ellipsoid-fit features with `sqrt(2)` cross-term weights, which makes the induced rotation on feature
 space orthogonal and the score exactly rotation-invariant; the unweighted `2 dx dy` convention from the backlog entry
@@ -277,7 +277,7 @@ hard-iron offset instead of the cache mean - on the theory that offset-corrected
 seed `308857554940434960`: for near-planar support the offset's component along the thin axis is itself unconstrained,
 its confidence oscillated and never completed the publication streak within `120 s` (peak `0.27` at `93 s`), while the
 same offset-centering correctly held the two-circle phase of seed `17611800246992533302` below threshold until its
-third motion segment. The shipped design recomputes the mean-centered design sum from the current cache on every
+third motion segment. The shipped design recomputes the mean-centered Gram sum from the current cache on every
 quality update: no per-row direction storage, no incremental maintenance, no rebuild heuristic, and the cache mean
 stays a stable, always-well-defined center for thin supports.
 
@@ -292,7 +292,7 @@ motion segment at about `31 s`. The final `0.03`/`0.02` pair keeps every broad p
 (lowest post-warm-up minimum `0.042`) while the confined two-circle phase stays below `0.02` sustained.
 
 - **Implementation commit:** working tree superseding the occupancy-coverage stage
-- **Coverage:** smallest design-matrix eigenvalue relative to `2/15`, recomputed from the current cache per update
+- **Coverage:** smallest Gram-matrix eigenvalue relative to `2/15`, recomputed from the current cache per update
 - **Publication threshold:** `0.03` (was `0.32`); streak-reset floor `0.02` (was `0.24`); streak length `110` unchanged
 - **Date:** 2026-08-20
 - **Test result:** 2 passed, 0 failed (nine-seed suite, both gravity modes, on the shipped per-update recomputation)

@@ -31,7 +31,7 @@ convergence.
 
 The calibrator maintains the raw first moment and second outer-product moment when rows are appended, replaced, or
 expired; cache normalization is derived from these fixed-size statistics without a row scan. Directional coverage is
-recomputed from the current cache on each quality update: the smallest eigenvalue of the `9 x 9` design matrix of the
+recomputed from the current cache on each quality update: the smallest eigenvalue of the `9 x 9` Gram matrix of the
 mean-centered unit directions. Before nine retained samples, calibration is explicitly pending
 with confidence zero. After that model minimum, a finite SPD working candidate must raise live confidence to at least
 `0.0125` for 55 valid updates before it can publish from a partially filled cache. Confidence dips below `0.0125` pause
@@ -231,15 +231,15 @@ correction condition is at most `10`. Invalid candidates have quality zero; raw 
 corrected samples.
 
 Directional coverage is the E-optimality score of the retained mean-centered unit directions: the smallest
-eigenvalue of the mean design matrix `M = 1/n sum_i phi(d_i) phi(d_i)^T`, relative to its uniform-sphere reference
+eigenvalue of the mean Gram matrix `M = 1/n sum_i phi(d_i) phi(d_i)^T`, relative to its uniform-sphere reference
 `2/15` and clamped to `[0, 1]`. The feature vector `phi` holds the nine ellipsoid-fit features with `sqrt(2)`
 cross-term weights, which makes the induced rotation on feature space orthogonal, so the score is exactly
-rotation-invariant. The design sum is recomputed from the current cache on every quality update: directions stored at
+rotation-invariant. The Gram sum is recomputed from the current cache on every quality update: directions stored at
 insertion go stale as the centering mean drifts (the earliest rows of a still-forming cache keep chord-like directions,
-which collapses the smallest eigenvalue), and no incremental design state survives contact with that drift. The cache
+which collapses the smallest eigenvalue), and no incremental Gram state survives contact with that drift. The cache
 mean is the center, not the fitted hard-iron offset: the offset's component along the thinnest data direction is itself
 unconstrained for near-planar support, which destabilizes the score exactly where it must be decisive. Rank deficiency
-detects lower-dimensional support by construction: near-planar motion leaves the design matrix rank-deficient and
+detects lower-dimensional support by construction: near-planar motion leaves the Gram matrix rank-deficient and
 scores near zero, so a two-circle pancake cannot inflate coverage the way the corrected covariance `A C_raw A^T` did.
 Physical radial fitness uses the
 running mean square of `||A (x - b)|| - 1`, evaluated for each valid current sample after its online update with the
@@ -279,7 +279,7 @@ For minibatch size `B`:
 - cold-start replay adds `O(10 R B_r)` for `R` ramped replay updates of size `B_r`, only until first publication;
 - candidate conversion uses fixed `3 x 3` operations;
 - normalization and live-quality maintenance use fixed-size raw moments and are `O(1)` in `N`;
-- coverage is one `O(N)` design-matrix accumulation plus one `9 x 9` symmetric eigendecomposition per quality update;
+- coverage is one `O(N)` Gram-matrix accumulation plus one `9 x 9` symmetric eigendecomposition per quality update;
 - diversity maintenance is expected `O(N)` for a full cache;
 - persistent online-optimizer, moment, and quality state is `O(1)` in `N`.
 
