@@ -73,8 +73,7 @@
     - The improved version should not make the code any longer (excluding comments). With useless state removed
   - **Verification:**
     - run the regression benchmark before the change to record this host's baseline
-      (`cargo test --package ar-drivers --no-default-features --test mag_calibrator_sim_motion regression -- --nocapture`);
-      move the unit-test fixtures from unit-sphere to microtesla scale.
+      (`cargo test --package ar-drivers --no-default-features --test mag_calibrator_sim_motion regression -- --nocapture`).
     - Acceptance: the Air 1 replay
       report no longer shows block-long post-warm-up dips to zero.
       Record a new chronological stage in `MAG_CALIBRATION_BENCHMARK.md` with before and
