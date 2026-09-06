@@ -424,3 +424,43 @@ failed at `2001` evaluations with a median wall time of `15.88 s`. Three candida
 evaluations with a median wall time of `10.66 s`, a roughly `33%` reduction. Across the complete suite, every run
 finishes under the unchanged budget; the slowest retains `214` evaluations of headroom. Accuracy remains well inside
 the unchanged `25`-degree worst-case and `10`-degree average post-warm-up criteria.
+
+## Drift-tracking normalization without rebase or reset
+
+The ellipsoid working coefficients are no longer analytically rebased on every cache append, replacement, or expiry,
+and the `reset_working_state` path is removed: `refresh_normalization` only recomputes the cache mean and radius from
+the raw moments, and the online optimizer tracks the `O(1 / matrix_filled)` normalization drift through its ordinary
+gradient updates. The radial and gravity RMS statistics and the publication streak now persist across normalization
+changes instead of being wiped whenever a radius or the rebase scalar `h` was unusable. Every other behavior (online
+SGD, coverage-maximizing diversity, coverage/fitness/confidence estimation, publication hysteresis) is unchanged, and
+`src/fusion/mag_calibrator.rs` shrinks by about 47 lines.
+
+- **Implementation commit:** `07492de` (working tree superseding it)
+- **Date:** 2026-09-06
+- **Test result:** 2 passed, 0 failed (regression command)
+- **Complete benchmark duration:** 101.54 seconds (regression command; baseline on the same host took 98.68 seconds)
+- **Timing caveat:** the simulator is unpaced; computation times are debug-build wall-clock observations on this host
+
+### Eleven-seed averages
+
+| Metric | With gravity, before | With gravity, after | Without gravity, before | Without gravity, after |
+|---|---:|---:|---:|---:|
+| Average `evaluate_correct` time | 3.496 ms | 3.671 ms | 3.430 ms | 3.641 ms |
+| Average successful error | 3.206 deg | 3.189 deg | 3.335 deg | 3.259 deg |
+| Worst successful error | 14.511 deg | 16.367 deg | 17.325 deg | 17.311 deg |
+| Average post-warm-up error | 3.076 deg | 3.063 deg | 3.211 deg | 3.131 deg |
+| Worst post-warm-up error | 13.760 deg | 13.022 deg | 17.325 deg | 13.877 deg |
+| Samples until first success | 686 | 644 | 632 | 616 |
+| Average samples per run | 1311 | 1269 | 1257 | 1241 |
+
+Accuracy is essentially unchanged: average and worst post-warm-up error are within `0.08 degree` (mostly improved),
+and first publication moves earlier (`686` to `644` with gravity, `632` to `616` without) because the cold-start
+optimizer no longer restarts its learning-rate schedule on normalization changes. Per-call computation rises by about
+`0.2 ms`, consistent with removing the rebase fast path while keeping the same optimizer work. All runs remain within
+the unchanged `25`-degree worst-case and `10`-degree average post-warm-up criteria.
+
+Air 1 replay (both modes pass): the longest post-warm-up above-floor streak improved from `1218` to `1928`
+evaluations with gravity and from `3042` to `3061` without, and average post-warm-up confidence rose slightly
+(`0.242494` to `0.246369` with gravity, `0.328597` to `0.332276` without). The `0.000000` worst post-warm-up
+confidence reflects genuine working-candidate degradation that persists in both the baseline and the new code; see
+the `TODO` on `update_quality` in `src/fusion/mag_calibrator.rs`.

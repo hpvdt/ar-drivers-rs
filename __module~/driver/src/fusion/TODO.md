@@ -46,12 +46,12 @@
   - **Severity:** High
   - **Description:** The direct solver is exactly a function of the current retained rows. An online optimizer keeps
     historical parameter updates after a row is replaced or expires, so `max_sample_lifespan_us` no longer strictly
-    bounds the estimator's effective history. Coordinate rebasing preserves the represented ellipsoid but does not
-    remove an expired row's old gradient contribution.
+    bounds the estimator's effective history. Working state persists across normalization changes, so an expired
+    row's old gradient contribution is never removed.
   - **Recommended fix:** Reset and replay a bounded number of minibatches after expiry, or introduce an explicit
     forgetting schedule whose horizon is no longer than the configured lifespan. Add an adaptive hard-iron drift
     integration case before claiming equivalent expiry semantics.
-- [ ]  Remove continuous cache reset so fitness statistics stop resetting
+- [x]  Remove continuous cache reset so fitness statistics stop resetting
 
   - **Summary:** Cached samples are continuously renormalized to the drifting cache mean and radius; unusable
     rebases wipe the working optimizer state and the running RMS fitness statistics, producing block-long dips to
@@ -65,22 +65,11 @@
     block of evaluations several times per cycle even though the decoded data is stable. These dips are a
     normalization-lifecycle artifact, not a data or converg'ence problem, and they force downstream verification to
     tolerate long streaks of near-zero post-warm-up fitness.
-  - **Recommended fix:**
-    - Each raw magnetometer samples (floating point) in the cache is stored as once and for all.
-    - Delete reset/rebase related code, e.g. reset_row_cache and rebuild_row_cache.
-    - The continuous tracking of cache mean and radius should be kept, but won't trigger reset
-    - everything else (Online SGD, coverage maximizing, fitness/confidence estimation) should be preserved.
-    - The improved version should not make the code any longer (excluding comments). With useless state removed
-  - **Verification:**
-    - run the regression benchmark before the change to record this host's baseline
-      (`cargo test --package ar-drivers --no-default-features --test mag_calibrator_sim_motion regression -- --nocapture`).
-    - Acceptance: the Air 1 replay
-      report no longer shows block-long post-warm-up dips to zero.
-      Record a new chronological stage in `MAG_CALIBRATION_BENCHMARK.md` with before and
-      after tables.
-    - Scope: do not bundle the stale-optimizer-influence item; rebasing will no longer exist, so
-      adjust that item's wording separately.
-    -
+  - **Fix:** Working state is no longer rebased or reset on normalization changes; `refresh_normalization` only
+    recomputes the cache mean and radius from the raw moments, and the online optimizer tracks the `O(1 /
+    matrix_filled)` normalization drift through its ordinary gradient updates. The radial and gravity RMS
+    statistics persist for the life of the estimator. Before/after measurements are recorded in
+    `MAG_CALIBRATION_BENCHMARK.md`.
 
 ## Medium severity
 

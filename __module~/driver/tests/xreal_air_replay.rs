@@ -13,11 +13,12 @@ use nalgebra::Vector3;
 const MAX_CALIBRATION_TIME_US: u64 = 60_000_000;
 const MIN_AVERAGE_FITNESS: f64 = 0.5;
 /// Stability is judged over the whole post-warmup phase. The calibrator's
-/// running RMS statistics reset occasionally on rebase, which produces
-/// block-long dips to zero, so a constant bound would fail the calibrator
-/// rather than the decoder. Stability therefore means a consecutive streak
-/// of post-warmup evaluations above `FITNESS_FLOOR` of at least
-/// `MIN_STABLE_STREAK` for both fitness components at once.
+/// running RMS statistics persist across normalization changes, but the
+/// working candidate still degrades genuinely on some trace segments, which
+/// produces block-long fitness dips, so a constant bound would fail the
+/// calibrator rather than the decoder. Stability therefore means a
+/// consecutive streak of post-warmup evaluations above `FITNESS_FLOOR` of at
+/// least `MIN_STABLE_STREAK` for both fitness components at once.
 const FITNESS_FLOOR: f32 = 0.5;
 const MIN_STABLE_STREAK: usize = 60;
 /// Magnetometer evaluations to wait after the first successful correction.

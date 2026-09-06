@@ -204,29 +204,14 @@ intermediate indefinite states can stall descent at the SPD boundary even when t
 
 ### Changing normalization
 
-Append, replacement, and expiry change `mu` and `r`. Persistent coefficients are analytically rebased.
-
-For:
-
-```text
-u_old = t + s u_new,
-t = (mu_new - mu_old) / r_old,
-s = r_new / r_old,
-h = 1 - t^T Q_old t - q_old^T t,
-```
-
-the equivalent state is:
-
-```text
-Q_new = s^2 Q_old / h,
-q_new = s (q_old + 2 Q_old t) / h,
-kappa_new = s kappa_old / h.
-```
-
-The `kappa` transform follows because the normal for the same raw sample scales by `s / h`. If a radius or `h` is
-unusable, only unpublished working state resets to `Q = 2 I`, `q = 0`, clears `kappa`, and restarts the optimizer's
-learning-rate schedule. A single centered sample has zero radius, so the first informative gradient requires two
-distinct samples even though state exists immediately.
+Append, replacement, and expiry change `mu` and `r`. The working coefficients are not rebased into the new
+normalization and no working state is ever reset: the drift per cache mutation is `O(1 / matrix_filled)`, and the
+online optimizer already tracks a moving convex optimum as cache replacements improve coverage, so it absorbs the
+normalization drift through its ordinary gradient updates. A single centered sample has zero radius, so the first
+informative gradient requires two distinct samples even though state exists immediately. Earlier revisions rebased
+`(Q, q, kappa)` analytically on every normalization change and reset the working state when the rebase scalar
+`h = 1 - t^T Q t - q^T t` was unusable; that rebase/reset machinery and its `O(N)`-per-mutation cost were removed in
+favor of drift tracking.
 
 ### Candidate conversion and live quality
 
@@ -258,8 +243,8 @@ detects lower-dimensional support by construction: near-planar motion leaves the
 scores near zero, so a two-circle pancake cannot inflate coverage the way the corrected covariance `A C_raw A^T` did.
 Physical radial fitness uses the
 running mean square of `||A (x - b)|| - 1`, evaluated for each valid current sample after its online update with the
-same working candidate. Its update weight is `1 / min(sample_count, minibatch_size)`; the statistic resets whenever
-working optimizer state resets. Radial fitness is a linear ramp from `1` at radial RMS `0` to `0` at radial RMS `0.1`.
+same working candidate. Its update weight is `1 / min(sample_count, minibatch_size)`; the statistic persists for the
+life of the estimator. Radial fitness is a linear ramp from `1` at radial RMS `0` to `0` at radial RMS `0.1`.
 
 Gravity fitness applies the same running statistic and update weight to the optimizer's gravity-projection residual
 `psi(u, g)^T theta - kappa` of each valid current sample that carries a valid gravity direction, and ramps linearly
@@ -310,9 +295,9 @@ selection operates on squared values and takes square roots only for selected ne
 
 ### Known adaptation limitation
 
-Online parameters retain historical gradient influence after a row is replaced or expires. Coordinate rebasing changes
-units but does not remove that contribution. The backlog tracks explicit replay or forgetting work needed before sample
-lifespan can be interpreted as a strict optimizer-history bound.
+Online parameters retain historical gradient influence after a row is replaced or expires, and nothing removes that
+contribution. The backlog tracks explicit replay or forgetting work needed before sample lifespan can be interpreted
+as a strict optimizer-history bound.
 
 ### Calibration validation
 

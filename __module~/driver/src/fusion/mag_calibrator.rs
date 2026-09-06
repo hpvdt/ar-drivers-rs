@@ -239,7 +239,7 @@ pub struct MagCalibrator<const N: usize> {
 impl<const N: usize> Default for MagCalibrator<N> {
     fn default() -> Self {
         Self {
-            matrix: SMatrix::zeros(),
+            matrix: SMatrix::zeros(), // FIXME: avoid general names like "matrix"
             gravity_directions: std::array::from_fn(|_| None),
             sample_timestamps_us: [0; N],
             matrix_filled: Default::default(),
@@ -423,17 +423,6 @@ impl<const N: usize> MagCalibrator<N> {
                 .sum::<f32>()
     }
 
-    fn reset_working_state(&mut self) {
-        self.parameters = Self::parameter_prior();
-        self.gravity_projection = 0.0;
-        self.gravity_projection_initialized = false;
-        self.optimizer_steps = 0;
-        self.radial_residual_mean_square = None;
-        self.gravity_residual_mean_square = None;
-        self.quality = CalibrationQuality::ZERO;
-        self.publication_quality_streak = 0;
-    }
-
     fn add_raw_moment(&mut self, sample: Vector3<f32>) {
         let sample = sample.cast::<f64>();
         self.raw_sample_sum += sample;
@@ -470,66 +459,30 @@ impl<const N: usize> MagCalibrator<N> {
         }
     }
 
-    /// Recomputes the current cache normalization and analytically transforms
-    /// the working quadratic equation into it. A failed transform resets only
-    /// unpublished optimizer state.
+    /// Recomputes the current cache normalization from the raw moments
+    /// without touching the working state. Every append, replacement, and
+    /// expiry drifts the mean and radius; the working coefficients keep
+    /// their meaning in the new normalization directly, because the drift
+    /// per cache mutation is `O(1 / matrix_filled)` and the online optimizer
+    /// is already designed to track the moving convex optimum as cache
+    /// replacements improve coverage. Working state is therefore never
+    /// rebased or reset: only a zero-radius (empty or single-point) cache
+    /// marks the normalization uninitialized, which keeps the optimizer
+    /// idle until two distinct samples exist and reports quality zero
+    /// through the usual unusable-candidate path.
     fn refresh_normalization(&mut self) {
         let Some((sample_mean, covariance)) = self.raw_mean_and_covariance() else {
             self.normalization_mean = Vector3::zeros();
             self.normalization_radius = 0.0;
             self.normalization_initialized = false;
-            self.reset_working_state();
             return;
         };
-        let radius_squared = covariance.trace();
-        let radius = radius_squared.sqrt();
-        if !sample_mean.iter().all(|value| value.is_finite())
-            || !radius.is_finite()
-            || radius <= f32::EPSILON
-        {
-            self.normalization_mean = sample_mean;
-            self.normalization_radius = radius;
-            self.normalization_initialized = false;
-            self.reset_working_state();
-            return;
-        }
-
-        if self.normalization_initialized {
-            let (shape, linear) = Self::shape_and_linear(&self.parameters);
-            let shift = (sample_mean - self.normalization_mean) / self.normalization_radius;
-            let scale = radius / self.normalization_radius;
-            let equation_scale = 1.0 - shift.dot(&(shape * shift)) - linear.dot(&shift);
-            let rebased_shape = scale * scale / equation_scale * shape;
-            let rebased_linear = scale / equation_scale * (linear + 2.0 * shape * shift);
-            // TODO: use nalgebra views and constructors instead of elementwise parameter repacking
-            let mut rebased = self.parameters;
-            rebased[0] = rebased_shape[(0, 0)];
-            rebased[1] = rebased_shape[(1, 1)];
-            rebased[2] = rebased_shape[(2, 2)];
-            rebased[3] = rebased_shape[(0, 1)];
-            rebased[4] = rebased_shape[(0, 2)];
-            rebased[5] = rebased_shape[(1, 2)];
-            rebased[6] = rebased_linear.x;
-            rebased[7] = rebased_linear.y;
-            rebased[8] = rebased_linear.z;
-            let gravity_projection = scale / equation_scale * self.gravity_projection;
-            if equation_scale.is_finite()
-                && equation_scale > f32::EPSILON
-                && rebased.iter().all(|value| value.is_finite())
-                && (!self.gravity_projection_initialized || gravity_projection.is_finite())
-            {
-                self.parameters = rebased;
-                self.gravity_projection = gravity_projection;
-            } else {
-                self.reset_working_state();
-            }
-        } else {
-            self.reset_working_state();
-        }
-
+        let radius = covariance.trace().sqrt();
+        self.normalization_initialized = sample_mean.iter().all(|value| value.is_finite())
+            && radius.is_finite()
+            && radius > f32::EPSILON;
         self.normalization_mean = sample_mean;
         self.normalization_radius = radius;
-        self.normalization_initialized = true;
     }
 
     fn normalized_sample(&self, sample: Vector3<f32>) -> Vector3<f32> {
@@ -1413,6 +1366,14 @@ impl<const N: usize> MagCalibrator<N> {
     /// Updates the live radial and gravity statistics and quality for the
     /// current working candidate. All cache-dependent data comes from
     /// maintained moments.
+    ///
+    /// FIXME: the Air 1 replay shows block-long post-warm-up radial-fitness
+    /// dips to zero even though the running statistic persists (it is never
+    /// wiped) and grows smoothly through each dip. The dips are genuine
+    /// working-candidate degradation on certain trace segments, not a
+    /// normalization-lifecycle reset artifact, and persist unchanged across
+    /// the removal of the rebase/reset path. Investigate why the online
+    /// candidate degrades there instead of converging.
     fn update_quality(
         &mut self,
         current_sample: Option<Vector3<f32>>,

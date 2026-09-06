@@ -338,7 +338,9 @@ fn mag_calibrator_keeps_last_correction_after_rejected_refit() {
         expected,
         0.05,
     );
-    assert_eq!(calibrator.radial_residual_mean_square_for_test(), None);
+    // Working state is never rebased or reset, so the running radial
+    // statistic survives the expiry that empties the cache.
+    assert_ne!(calibrator.radial_residual_mean_square_for_test(), None);
 }
 
 #[test]
