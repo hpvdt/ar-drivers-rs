@@ -51,25 +51,6 @@
   - **Recommended fix:** Reset and replay a bounded number of minibatches after expiry, or introduce an explicit
     forgetting schedule whose horizon is no longer than the configured lifespan. Add an adaptive hard-iron drift
     integration case before claiming equivalent expiry semantics.
-- [x]  Remove continuous cache reset so fitness statistics stop resetting
-
-  - **Summary:** Cached samples are continuously renormalized to the drifting cache mean and radius; unusable
-    rebases wipe the working optimizer state and the running RMS fitness statistics, producing block-long dips to
-    zero.
-  - **Affected module:** `src/fusion/mag_calibrator.rs`
-  - **Severity:** High
-  - **Description:** Every append, replacement, and expiry shifts `mu` and `r`, so each retained row is renormalized
-    as `u = (x - mu) / r` and the persistent coefficients are analytically rebased. When a radius or the rebase
-    scalar `h = 1 - t^T Q t - q^T t` is unusable, unpublished working state resets to `Q = 2 I`, which also resets
-    the radial and gravity RMS statistics. The Air 1 replay then reports fitness ramping from zero back up over a
-    block of evaluations several times per cycle even though the decoded data is stable. These dips are a
-    normalization-lifecycle artifact, not a data or converg'ence problem, and they force downstream verification to
-    tolerate long streaks of near-zero post-warm-up fitness.
-  - **Fix:** Working state is no longer rebased or reset on normalization changes; `refresh_normalization` only
-    recomputes the cache mean and radius from the raw moments, and the online optimizer tracks the `O(1 /
-    matrix_filled)` normalization drift through its ordinary gradient updates. The radial and gravity RMS
-    statistics persist for the life of the estimator. Before/after measurements are recorded in
-    `MAG_CALIBRATION_BENCHMARK.md`.
 
 ## Medium severity
 
