@@ -214,7 +214,7 @@ pub struct MagCalibrator<const N: usize> {
     /// below `k`.
     neighbor_cache: [[NeighborEntry; NEIGHBOR_CACHE_CAPACITY]; N],
     neighbor_cache_len: [u8; N],
-    k: usize,
+    neighbor_count: usize,
     max_sample_lifespan_us: u64,
     gravity_weight: f32,
     parameters: SVector<f32, CALIBRATION_PARAMETER_COUNT>,
@@ -249,7 +249,7 @@ impl<const N: usize> Default for MagCalibrator<N> {
             mean_distance: Default::default(),
             neighbor_cache: [[NeighborEntry::EMPTY; NEIGHBOR_CACHE_CAPACITY]; N],
             neighbor_cache_len: [0; N],
-            k: 2, // Works well in testing
+            neighbor_count: 2, // Works well in testing
             max_sample_lifespan_us: 60 * 60 * 1_000_000,
             gravity_weight: DEFAULT_GRAVITY_WEIGHT,
             parameters: Self::parameter_prior(),
@@ -280,9 +280,9 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     /// Configure the number of `k` neighbors to calculate distance to.
-    pub fn num_neighbors(self, k: usize) -> Self {
+    pub fn num_neighbors(self, neighbor_count: usize) -> Self {
         Self {
-            k: k.clamp(1, N.saturating_sub(1).max(1)),
+            neighbor_count: neighbor_count.clamp(1, N.saturating_sub(1).max(1)),
             ..self
         }
     }
@@ -708,16 +708,16 @@ impl<const N: usize> MagCalibrator<N> {
             gradient_scale[index] += SHAPE_REGULARIZATION * weight;
         }
         gradient_scale.add_scalar_mut(ONLINE_SCALE_EPSILON);
-        let direction = gradient.component_div(&gradient_scale);
-        let gravity_direction = if gravity_count > 0 && self.gravity_weight > 0.0 {
+        let descent_direction = gradient.component_div(&gradient_scale);
+        let projection_step = if gravity_count > 0 && self.gravity_weight > 0.0 {
             gravity_projection_gradient / (self.gravity_weight + ONLINE_SCALE_EPSILON)
         } else {
             0.0
         };
         // TODO: use built-in norm operations instead of manually combining vector and scalar squared norms
-        let direction_norm =
-            (direction.norm_squared() + gravity_direction * gravity_direction).sqrt();
-        if !direction_norm.is_finite() || direction_norm <= f32::EPSILON {
+        let descent_norm =
+            (descent_direction.norm_squared() + projection_step * projection_step).sqrt();
+        if !descent_norm.is_finite() || descent_norm <= f32::EPSILON {
             return false;
         }
 
@@ -725,34 +725,34 @@ impl<const N: usize> MagCalibrator<N> {
         let learning_rate = (ONLINE_INITIAL_LEARNING_RATE
             / (1.0 + self.optimizer_steps as f32 / ONLINE_LEARNING_RATE_DECAY_STEPS))
             .max(ONLINE_MIN_LEARNING_RATE);
-        let mut step = learning_rate.min(ONLINE_MAX_STEP_NORM / direction_norm);
+        let mut step_size = learning_rate.min(ONLINE_MAX_STEP_NORM / descent_norm);
         for _ in 0..ONLINE_BACKTRACK_STEPS {
-            let candidate = parameters - step * direction;
-            let candidate_gravity_projection = gravity_projection - step * gravity_direction;
+            let trial_parameters = parameters - step_size * descent_direction;
+            let trial_gravity_projection = gravity_projection - step_size * projection_step;
             let objective =
-                self.minibatch_objective(&candidate, candidate_gravity_projection, minibatch);
-            if candidate.iter().all(|value| value.is_finite())
-                && candidate_gravity_projection.is_finite()
+                self.minibatch_objective(&trial_parameters, trial_gravity_projection, minibatch);
+            if trial_parameters.iter().all(|value| value.is_finite())
+                && trial_gravity_projection.is_finite()
                 && objective.is_finite()
                 && objective < old_objective
             {
-                self.parameters = candidate;
-                self.gravity_projection = candidate_gravity_projection;
+                self.parameters = trial_parameters;
+                self.gravity_projection = trial_gravity_projection;
                 return true;
             }
-            step *= 0.5;
+            step_size *= 0.5;
         }
         false
     }
 
-    /// Computes squared distances from `x` to the first `count` rows of the
-    /// sample buffer. Entries at and beyond `count` are set to infinity so
-    /// selection never picks them.
-    fn squared_distances_to(&self, x: Vector3<f32>, count: usize) -> [f32; N] {
+    /// Computes squared distances from `mag_sample` to the first `count`
+    /// rows of the sample buffer. Entries at and beyond `count` are set to
+    /// infinity so selection never picks them.
+    fn squared_distances_to(&self, mag_sample: Vector3<f32>, count: usize) -> [f32; N] {
         // TODO: use nalgebra row iteration and squared norms instead of rebuilding and dotting each row
         let mut squared_dists = [f32::INFINITY; N];
         for (j, dist) in squared_dists.iter_mut().enumerate().take(count) {
-            let diff = x - self.sample(j);
+            let diff = mag_sample - self.sample(j);
             *dist = diff.dot(&diff);
         }
         squared_dists
@@ -762,15 +762,15 @@ impl<const N: usize> MagCalibrator<N> {
     /// O(n) with a partial sort; `squared` is reordered in the process. The
     /// square root is deferred until after selection, so only the `k`
     /// selected entries are sqrt'd. Returns infinity for `k == 0`.
-    fn mean_of_smallest(squared: &mut [f32], k: usize) -> f32 {
-        if k == 0 {
+    fn mean_of_smallest(squared: &mut [f32], neighbor_count: usize) -> f32 {
+        if neighbor_count == 0 {
             return f32::INFINITY;
         }
-        squared.select_nth_unstable_by(k - 1, |a, b| a.total_cmp(b));
-        let smallest = &mut squared[..k];
+        squared.select_nth_unstable_by(neighbor_count - 1, |a, b| a.total_cmp(b));
+        let smallest = &mut squared[..neighbor_count];
         smallest.sort_unstable_by(|a, b| a.total_cmp(b));
         // TODO: use a built-in sum reduction instead of a manual fold
-        smallest.iter().rev().fold(0., |acc, &d| acc + d.sqrt()) / k as f32
+        smallest.iter().rev().fold(0., |acc, &d| acc + d.sqrt()) / neighbor_count as f32
     }
 
     /// Inserts `entry` into a row's neighbor cache, keeping it sorted and
@@ -849,31 +849,31 @@ impl<const N: usize> MagCalibrator<N> {
     /// is "similar" to its neighbors. Rows whose trusted prefix has shrunk
     /// below `k` are rescanned in O(N) first; configurations with `k` above
     /// the cache capacity always scan directly.
-    fn row_mean_distance(&mut self, row: usize, k: usize) -> f32 {
-        if k == 0 {
+    fn row_mean_distance(&mut self, row: usize, neighbor_count: usize) -> f32 {
+        if neighbor_count == 0 {
             return f32::INFINITY;
         }
-        if k > NEIGHBOR_CACHE_CAPACITY {
-            return self.mean_distance_uncached(row, k);
+        if neighbor_count > NEIGHBOR_CACHE_CAPACITY {
+            return self.mean_distance_uncached(row, neighbor_count);
         }
-        if (self.neighbor_cache_len[row] as usize) < k {
+        if (self.neighbor_cache_len[row] as usize) < neighbor_count {
             self.rebuild_row_cache(row);
         }
         let cache = &self.neighbor_cache[row];
         // TODO: use a built-in sum reduction instead of a manual fold
-        (0..k)
+        (0..neighbor_count)
             .rev()
             .fold(0., |acc, i| acc + cache[i].squared_distance.sqrt())
-            / k as f32
+            / neighbor_count as f32
     }
 
     /// Direct O(N) computation of a row's mean distance to its `k` nearest
     /// other rows, used when `k` exceeds the neighbor cache capacity.
-    fn mean_distance_uncached(&self, row: usize, k: usize) -> f32 {
+    fn mean_distance_uncached(&self, row: usize, neighbor_count: usize) -> f32 {
         let mut squared_dists = self.squared_distances_to(self.sample(row), N);
         // Skip the self-entry by index instead of dropping the smallest value.
         squared_dists[row] = f32::INFINITY;
-        Self::mean_of_smallest(&mut squared_dists, k)
+        Self::mean_of_smallest(&mut squared_dists, neighbor_count)
     }
 
     /// Remaps cached neighbor row indices through `index_map` (`u32::MAX` =
@@ -909,11 +909,11 @@ impl<const N: usize> MagCalibrator<N> {
     /// `k` nearest neighbors, derived from the incremental neighbor cache.
     /// Is used when replacing the least useful value in the array.
     fn lowest_mean_distance_by_index(&mut self) -> (usize, f32) {
-        let k = self.k.min(N.saturating_sub(1));
+        let neighbor_count = self.neighbor_count.min(N.saturating_sub(1));
         // TODO: use nalgebra vector construction, mean, and arg-min operations instead of manual array processing
         let mut mean_dist: [f32; N] = [0.; N];
         for (i, mean) in mean_dist.iter_mut().enumerate() {
-            *mean = self.row_mean_distance(i, k);
+            *mean = self.row_mean_distance(i, neighbor_count);
         }
 
         // Set mean distance now that we are at it
@@ -954,13 +954,16 @@ impl<const N: usize> MagCalibrator<N> {
     /// current observation.
     pub fn evaluate_sample_vec(
         &mut self,
-        x: Vector3<f32>,
+        mag_sample: Vector3<f32>,
         gravity_hint: Option<Vector3<f32>>,
         timestamp_us: u64,
     ) {
         let gravity_direction = Self::normalized_direction(gravity_hint);
-        let valid_current_sample = self.ingest_sample(x, gravity_direction, timestamp_us);
-        self.update_publication(valid_current_sample.then_some(x), gravity_direction);
+        let valid_current_sample = self.ingest_sample(mag_sample, gravity_direction, timestamp_us);
+        self.update_publication(
+            valid_current_sample.then_some(mag_sample),
+            gravity_direction,
+        );
     }
 
     /// Updates the cache and online optimizer, returning whether the current
@@ -968,7 +971,7 @@ impl<const N: usize> MagCalibrator<N> {
     /// must already be normalized (see `Self::normalized_direction`).
     fn ingest_sample(
         &mut self,
-        x: Vector3<f32>,
+        mag_sample: Vector3<f32>,
         gravity_direction: Option<Vector3<f32>>,
         timestamp_us: u64,
     ) -> bool {
@@ -1008,7 +1011,7 @@ impl<const N: usize> MagCalibrator<N> {
         }
         let expired = retained != previous_sample_row_count;
 
-        if !x.iter().all(|e| e.is_finite()) || x.norm_squared() <= f32::EPSILON {
+        if !mag_sample.iter().all(|e| e.is_finite()) || mag_sample.norm_squared() <= f32::EPSILON {
             if expired {
                 self.refresh_normalization();
             }
@@ -1021,7 +1024,7 @@ impl<const N: usize> MagCalibrator<N> {
         // Check if buffer is not yet "initialized" with real measurements
         if self.sample_row_count < N {
             let count = self.sample_row_count;
-            let squared_dists = self.squared_distances_to(x, count);
+            let squared_dists = self.squared_distances_to(mag_sample, count);
             for ((cache, len), &squared_distance) in self
                 .neighbor_cache
                 .iter_mut()
@@ -1042,21 +1045,21 @@ impl<const N: usize> MagCalibrator<N> {
                     complete,
                 );
             }
-            self.add_raw_moment(x);
-            self.add_sample_at(count, x, gravity_direction, timestamp_us);
+            self.add_raw_moment(mag_sample);
+            self.add_sample_at(count, mag_sample, gravity_direction, timestamp_us);
             self.reset_row_cache(count, &squared_dists, count);
             self.sample_row_count += 1;
             accepted_row = Some(count);
         }
         // Otherwise check which sample may be best to replace
         else {
-            let k = self.k.min(N.saturating_sub(1));
+            let neighbor_count = self.neighbor_count.min(N.saturating_sub(1));
             let (low_index, low_mean_dist) = self.lowest_mean_distance_by_index();
-            let squared_dists = self.squared_distances_to(x, N);
+            let squared_dists = self.squared_distances_to(mag_sample, N);
             // The candidate has no self-entry in the buffer, so its mean
             // distance covers the true k nearest buffered rows.
             let mut scratch = squared_dists;
-            let sample_mean_dist = Self::mean_of_smallest(&mut scratch, k);
+            let sample_mean_dist = Self::mean_of_smallest(&mut scratch, neighbor_count);
             if low_mean_dist < sample_mean_dist {
                 for (row, ((cache, len), &squared_distance)) in self
                     .neighbor_cache
@@ -1084,8 +1087,8 @@ impl<const N: usize> MagCalibrator<N> {
                     );
                 }
                 self.remove_raw_moment(self.sample(low_index));
-                self.add_raw_moment(x);
-                self.add_sample_at(low_index, x, gravity_direction, timestamp_us);
+                self.add_raw_moment(mag_sample);
+                self.add_sample_at(low_index, mag_sample, gravity_direction, timestamp_us);
                 self.reset_row_cache(low_index, &squared_dists, N);
                 accepted_row = Some(low_index);
             }
@@ -1093,7 +1096,7 @@ impl<const N: usize> MagCalibrator<N> {
         if expired || accepted_row.is_some() {
             self.refresh_normalization();
         }
-        self.update_online_optimizer(x, gravity_direction, accepted_row);
+        self.update_online_optimizer(mag_sample, gravity_direction, accepted_row);
         true
     }
 
@@ -1122,18 +1125,18 @@ impl<const N: usize> MagCalibrator<N> {
     /// eigenvalues are exactly rotation-invariant. Under the uniform
     /// spherical distribution `E[phi phi^T]` has eigenvalues `{1/3 x4, 2/15
     /// x5}`.
-    fn direction_feature(d: Vector3<f32>) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
+    fn direction_feature(direction: Vector3<f32>) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
         // TODO: use nalgebra outer-product and vector-view operations instead of elementwise feature construction
         SVector::<f32, CALIBRATION_PARAMETER_COUNT>::from_column_slice(&[
-            d.x * d.x,
-            d.y * d.y,
-            d.z * d.z,
-            std::f32::consts::SQRT_2 * d.x * d.y,
-            std::f32::consts::SQRT_2 * d.x * d.z,
-            std::f32::consts::SQRT_2 * d.y * d.z,
-            d.x,
-            d.y,
-            d.z,
+            direction.x * direction.x,
+            direction.y * direction.y,
+            direction.z * direction.z,
+            std::f32::consts::SQRT_2 * direction.x * direction.y,
+            std::f32::consts::SQRT_2 * direction.x * direction.z,
+            std::f32::consts::SQRT_2 * direction.y * direction.z,
+            direction.x,
+            direction.y,
+            direction.z,
         ])
     }
 
@@ -1167,8 +1170,8 @@ impl<const N: usize> MagCalibrator<N> {
             // TODO: use nalgebra's fallible normalization instead of computing and applying the norm manually
             let norm = centered.norm();
             if norm.is_finite() && norm > f32::EPSILON {
-                let phi = Self::direction_feature(centered / norm);
-                design += phi * phi.transpose();
+                let feature = Self::direction_feature(centered / norm);
+                design += feature * feature.transpose();
             }
         }
         Self::coverage_from_design(&design, self.sample_row_count)
@@ -1317,13 +1320,13 @@ impl<const N: usize> MagCalibrator<N> {
     fn update_running_mean_square(
         current: Option<f32>,
         residual_squared: f32,
-        alpha: f32,
+        update_weight: f32,
     ) -> Option<f32> {
         if !residual_squared.is_finite()
             || residual_squared < 0.0
-            || !alpha.is_finite()
-            || !(0.0..=1.0).contains(&alpha)
-            || alpha == 0.0
+            || !update_weight.is_finite()
+            || !(0.0..=1.0).contains(&update_weight)
+            || update_weight == 0.0
         {
             return None;
         }
@@ -1331,7 +1334,7 @@ impl<const N: usize> MagCalibrator<N> {
         if !current.is_finite() || current < 0.0 {
             return None;
         }
-        let updated = current + alpha * (residual_squared - current);
+        let updated = current + update_weight * (residual_squared - current);
         updated.is_finite().then_some(updated.max(0.0))
     }
 
@@ -1394,11 +1397,11 @@ impl<const N: usize> MagCalibrator<N> {
         if let Some(sample) = current_sample {
             let residual = (candidate.correction * (sample - candidate.offset)).norm() - 1.0;
             let residual_squared = residual * residual;
-            let alpha = 1.0 / self.sample_row_count.min(self.minibatch_size).max(1) as f32;
+            let update_weight = 1.0 / self.sample_row_count.min(self.minibatch_size).max(1) as f32;
             let Some(mean_square) = Self::update_running_mean_square(
                 self.radial_residual_mean_square,
                 residual_squared,
-                alpha,
+                update_weight,
             ) else {
                 self.radial_residual_mean_square = None;
                 self.quality = CalibrationQuality::ZERO;
@@ -1416,7 +1419,7 @@ impl<const N: usize> MagCalibrator<N> {
                 if let Some(mean_square) = Self::update_running_mean_square(
                     self.gravity_residual_mean_square,
                     residual * residual,
-                    alpha,
+                    update_weight,
                 ) {
                     self.gravity_residual_mean_square = Some(mean_square);
                 }

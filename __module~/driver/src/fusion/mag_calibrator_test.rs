@@ -35,8 +35,8 @@ impl<const N: usize> MagCalibrator<N> {
     fn design_matrix_for_test(directions: &[Vector3<f32>]) -> DesignMatrix {
         let mut design = DesignMatrix::zeros();
         for &direction in directions {
-            let phi = Self::direction_feature(direction);
-            design += phi * phi.transpose();
+            let feature = Self::direction_feature(direction);
+            design += feature * feature.transpose();
         }
         design
     }
@@ -52,9 +52,9 @@ impl<const N: usize> MagCalibrator<N> {
     fn running_mean_square_for_test(
         current: Option<f32>,
         residual_squared: f32,
-        alpha: f32,
+        update_weight: f32,
     ) -> Option<f32> {
-        Self::update_running_mean_square(current, residual_squared, alpha)
+        Self::update_running_mean_square(current, residual_squared, update_weight)
     }
 
     fn radial_residual_mean_square_for_test(&self) -> Option<f32> {
