@@ -177,6 +177,17 @@ combination together. Run narrower package, module, or test checks first for fas
 feedback, but complete the broad checks applicable to the repository before
 submitting a change.
 
+## Git (Version Control)
+
+- Commit message always have the following format:
+
+```
+[{{LLM MODEL}}] {{Task Info}} {{Optional Subtask Info}}
+```
+
+- If a task contains multiple subtasks. Each subtask should have it's own commit
+- If HEAD is DETACHED, create a temporary branch and commit into it
+
 ## Documentation/Markdown Files
 
 - Indentation is 4 spaces, continuation indentation is 6 spaces
@@ -221,6 +232,6 @@ You should avoid abusing 1 symbol to refer to different concepts. This include s
   - **Affected module:** e.g. `src/path/to/file.rs`
   - **Severity:** e.g. High
   - **Unit test:** Path of the failing unit test that reveals the issue.
-    - always commit new issue with one or more unit tests
+    - issue should always come with one or more unit tests
     - detailed explanation and proposed fix should be in code comment
 - Keep items that are checked (`[x]`) only when the fix has already been merged; remove them on cleanup passes.
