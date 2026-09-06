@@ -28,8 +28,8 @@ impl<const N: usize> MagCalibrator<N> {
         self.publication_quality_streak
     }
 
-    fn coverage_scores_for_test(design_matrix: &DesignMatrix, matrix_filled: usize) -> f32 {
-        Self::coverage_from_design(design_matrix, matrix_filled)
+    fn coverage_scores_for_test(design_matrix: &DesignMatrix, sample_row_count: usize) -> f32 {
+        Self::coverage_from_design(design_matrix, sample_row_count)
     }
 
     fn design_matrix_for_test(directions: &[Vector3<f32>]) -> DesignMatrix {
@@ -63,7 +63,7 @@ impl<const N: usize> MagCalibrator<N> {
 
     fn raw_moments_for_test(&self) -> (usize, Vector3<f64>, Matrix3<f64>) {
         (
-            self.matrix_filled,
+            self.sample_row_count,
             self.raw_sample_sum,
             self.raw_outer_product_sum,
         )
@@ -71,7 +71,7 @@ impl<const N: usize> MagCalibrator<N> {
 
     /// Verifies maintained raw moments against a direct current-cache sum.
     fn check_raw_moments(&self) -> Result<(), String> {
-        let (sum, outer_sum) = (0..self.matrix_filled).fold(
+        let (sum, outer_sum) = (0..self.sample_row_count).fold(
             (Vector3::<f64>::zeros(), Matrix3::<f64>::zeros()),
             |(sum, outer_sum), row| {
                 let sample = self.sample(row).cast::<f64>();
@@ -96,10 +96,10 @@ impl<const N: usize> MagCalibrator<N> {
     /// true distances to the row's other buffered rows. Read-only; used by
     /// tests to cross-check the incremental cache maintenance.
     fn check_neighbor_cache(&self) -> Result<(), String> {
-        for row in 0..self.matrix_filled {
+        for row in 0..self.sample_row_count {
             let len = self.neighbor_cache_len[row] as usize;
             let cache = &self.neighbor_cache[row][..len];
-            let mut true_dists: Vec<f32> = (0..self.matrix_filled)
+            let mut true_dists: Vec<f32> = (0..self.sample_row_count)
                 .filter(|&j| j != row)
                 .map(|j| {
                     let diff = self.sample(row) - self.sample(j);
@@ -108,7 +108,7 @@ impl<const N: usize> MagCalibrator<N> {
                 .collect();
             true_dists.sort_unstable_by(|a, b| a.total_cmp(b));
             for (i, entry) in cache.iter().enumerate() {
-                if entry.row as usize >= self.matrix_filled || entry.row as usize == row {
+                if entry.row as usize >= self.sample_row_count || entry.row as usize == row {
                     return Err(format!("row {row}: entry {i} references row {}", entry.row));
                 }
                 if i > 0 && cache[i - 1].squared_distance > entry.squared_distance {

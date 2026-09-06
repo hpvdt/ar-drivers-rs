@@ -168,7 +168,7 @@ While no calibration has been published yet, the sample-anchored update is follo
 additional updates (default 4) whose minibatches contain `replay_minibatch_size` observations (default 8) drawn
 uniformly with replacement from the retained rows only. The arriving sample is never a required replay member; once
 retained, it is an ordinary cache row that replay may draw like any other. The replay count ramps with the retained
-fraction, `replay_updates * matrix_filled / N`, because repeatedly fitting a small, low-coverage cache overfits it and
+fraction, `replay_updates * sample_row_count / N`, because repeatedly fitting a small, low-coverage cache overfits it and
 can strand the working shape outside the publishable region. Replay steps share the current learning rate but do not
 advance the step counter, so annealing stays tied to the rate of arriving data rather than to compute.
 `replay_updates(0)` disables replay.
@@ -205,7 +205,7 @@ intermediate indefinite states can stall descent at the SPD boundary even when t
 ### Changing normalization
 
 Append, replacement, and expiry change `mu` and `r`. The working coefficients are not rebased into the new
-normalization and no working state is ever reset: the drift per cache mutation is `O(1 / matrix_filled)`, and the
+normalization and no working state is ever reset: the drift per cache mutation is `O(1 / sample_row_count)`, and the
 online optimizer already tracks a moving convex optimum as cache replacements improve coverage, so it absorbs the
 normalization drift through its ordinary gradient updates. A single centered sample has zero radius, so the first
 informative gradient requires two distinct samples even though state exists immediately. Earlier revisions rebased

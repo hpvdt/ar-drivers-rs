@@ -108,7 +108,7 @@ the retained rows only; the replay count ramps with the retained fraction, and r
 rate without advancing its schedule.
 
 - **Implementation commit:** `b91cf30`
-- **Replay updates:** `4` (ramped by `matrix_filled / N`, unpublished phase only)
+- **Replay updates:** `4` (ramped by `sample_row_count / N`, unpublished phase only)
 - **Replay minibatch size:** `8`
 - **Date:** 2026-08-02
 - **Test result:** 2 passed, 0 failed
@@ -203,7 +203,7 @@ score is therefore self-referential and overconfident on partial coverage.
 
 Coverage now measures fit-independent evidence: each retained row carries a coarse `8 x 16` latitude/longitude grid
 slot of its mean-centered direction at insertion, maintained incrementally with per-bin occupancy counts on append,
-replacement, and expiry. Coverage is the occupied-bin fraction relative to `min(matrix_filled, 128)`, so a small but
+replacement, and expiry. Coverage is the occupied-bin fraction relative to `min(sample_row_count, 128)`, so a small but
 genuinely diverse cache can still score high. Publication confidence dropped from `0.40` to `0.32`: the confidence of
 a genuinely broad but never-complete motion regime plateaus around `0.33-0.36` (seed `4333660961526349397` never
 visits a third axis), while the confined early phase of the previously failing seed stays at or below `0.29`, and
@@ -219,7 +219,7 @@ restarts on every dip. Keeping `0.40` but adding hysteresis passed eight of nine
 to `0.32` with a `0.24` reset floor lets its streak accumulate across its frequent short dips.
 
 - **Implementation commit:** working tree superseding the five-seed annealing stage
-- **Coverage:** occupancy of the `8 x 16` direction grid, relative to `min(matrix_filled, 128)`
+- **Coverage:** occupancy of the `8 x 16` direction grid, relative to `min(sample_row_count, 128)`
 - **Publication threshold:** `0.32` (was `0.40`); streak-reset floor `0.24`; streak length `110` unchanged
 - **Date:** 2026-08-15
 - **Test result:** 2 passed, 0 failed (nine-seed suite, both gravity modes)
@@ -429,7 +429,7 @@ the unchanged `25`-degree worst-case and `10`-degree average post-warm-up criter
 
 The ellipsoid working coefficients are no longer analytically rebased on every cache append, replacement, or expiry,
 and the `reset_working_state` path is removed: `refresh_normalization` only recomputes the cache mean and radius from
-the raw moments, and the online optimizer tracks the `O(1 / matrix_filled)` normalization drift through its ordinary
+the raw moments, and the online optimizer tracks the `O(1 / sample_row_count)` normalization drift through its ordinary
 gradient updates. The radial and gravity RMS statistics and the publication streak now persist across normalization
 changes instead of being wiped whenever a radius or the rebase scalar `h` was unusable. Every other behavior (online
 SGD, coverage-maximizing diversity, coverage/fitness/confidence estimation, publication hysteresis) is unchanged, and

@@ -196,10 +196,10 @@ impl MagCalibrationResult {
 /// Online regularized ellipsoid fit for a hard-iron offset and full SPD
 /// soft-iron correction from a fixed, diverse sample buffer.
 pub struct MagCalibrator<const N: usize> {
-    matrix: SMatrix<f32, N, 3>,
+    sample_matrix: SMatrix<f32, N, 3>,
     gravity_directions: [Option<Vector3<f32>>; N],
     sample_timestamps_us: [u64; N],
-    matrix_filled: usize,
+    sample_row_count: usize,
     hard_iron_offset: Vector3<f32>,
     soft_iron_correction: Matrix3<f32>,
     calibration_initialized: bool,
@@ -239,10 +239,10 @@ pub struct MagCalibrator<const N: usize> {
 impl<const N: usize> Default for MagCalibrator<N> {
     fn default() -> Self {
         Self {
-            matrix: SMatrix::zeros(), // FIXME: avoid general names like "matrix"
+            sample_matrix: SMatrix::zeros(),
             gravity_directions: std::array::from_fn(|_| None),
             sample_timestamps_us: [0; N],
-            matrix_filled: Default::default(),
+            sample_row_count: Default::default(),
             hard_iron_offset: Vector3::zeros(),
             soft_iron_correction: Matrix3::identity(),
             calibration_initialized: false,
@@ -441,10 +441,10 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     fn raw_mean_and_covariance(&self) -> Option<(Vector3<f32>, Matrix3<f32>)> {
-        if self.matrix_filled == 0 {
+        if self.sample_row_count == 0 {
             return None;
         }
-        let count = self.matrix_filled as f64;
+        let count = self.sample_row_count as f64;
         let mean = self.raw_sample_sum / count;
         let covariance = self.raw_outer_product_sum / count - mean * mean.transpose();
         let covariance = 0.5 * (covariance + covariance.transpose());
@@ -463,7 +463,7 @@ impl<const N: usize> MagCalibrator<N> {
     /// without touching the working state. Every append, replacement, and
     /// expiry drifts the mean and radius; the working coefficients keep
     /// their meaning in the new normalization directly, because the drift
-    /// per cache mutation is `O(1 / matrix_filled)` and the online optimizer
+    /// per cache mutation is `O(1 / sample_row_count)` and the online optimizer
     /// is already designed to track the moving convex optimum as cache
     /// replacements improve coverage. Working state is therefore never
     /// rebased or reset: only a zero-radius (empty or single-point) cache
@@ -524,7 +524,7 @@ impl<const N: usize> MagCalibrator<N> {
         let observation = current_gravity
             .map(|gravity| (current_sample, gravity))
             .or_else(|| {
-                (0..self.matrix_filled).find_map(|row| {
+                (0..self.sample_row_count).find_map(|row| {
                     self.gravity_directions[row].map(|gravity| (self.sample(row), gravity))
                 })
             });
@@ -569,7 +569,7 @@ impl<const N: usize> MagCalibrator<N> {
         for _ in 0..minibatch.random_draws {
             let Some(row) = Self::random_cache_row(
                 &mut random_state,
-                self.matrix_filled,
+                self.sample_row_count,
                 minibatch.accepted_row,
             ) else {
                 break;
@@ -600,7 +600,7 @@ impl<const N: usize> MagCalibrator<N> {
         }
         self.initialize_gravity_projection(current_sample, current_gravity);
 
-        let random_draws = if self.matrix_filled > usize::from(accepted_row.is_some()) {
+        let random_draws = if self.sample_row_count > usize::from(accepted_row.is_some()) {
             self.minibatch_size.saturating_sub(1)
         } else {
             0
@@ -624,10 +624,10 @@ impl<const N: usize> MagCalibrator<N> {
         // enough to converge against. Replay steps reuse the current
         // learning rate without advancing its schedule, so annealing stays
         // tied to the rate of arriving data rather than to compute.
-        if self.calibration_initialized || self.matrix_filled == 0 {
+        if self.calibration_initialized || self.sample_row_count == 0 {
             return;
         }
-        let replay_count = self.replay_updates.saturating_mul(self.matrix_filled) / N.max(1);
+        let replay_count = self.replay_updates.saturating_mul(self.sample_row_count) / N.max(1);
         for _ in 0..replay_count {
             self.apply_minibatch_update(MinibatchSpec {
                 current_sample: None,
@@ -679,7 +679,7 @@ impl<const N: usize> MagCalibrator<N> {
         for _ in 0..minibatch.random_draws {
             let Some(row) = Self::random_cache_row(
                 &mut next_random_state,
-                self.matrix_filled,
+                self.sample_row_count,
                 minibatch.accepted_row,
             ) else {
                 break;
@@ -972,10 +972,10 @@ impl<const N: usize> MagCalibrator<N> {
         gravity_direction: Option<Vector3<f32>>,
         timestamp_us: u64,
     ) -> bool {
-        let previous_matrix_filled = self.matrix_filled;
+        let previous_sample_row_count = self.sample_row_count;
         let mut index_map = [u32::MAX; N];
         let mut retained = 0;
-        for (index, map_slot) in index_map.iter_mut().enumerate().take(self.matrix_filled) {
+        for (index, map_slot) in index_map.iter_mut().enumerate().take(self.sample_row_count) {
             let sample = self.sample(index);
             if timestamp_us.saturating_sub(self.sample_timestamps_us[index])
                 <= self.max_sample_lifespan_us
@@ -984,7 +984,8 @@ impl<const N: usize> MagCalibrator<N> {
                 if retained != index {
                     // TODO: copy matrix rows with nalgebra row views instead of looping over elements
                     for column in 0..3 {
-                        self.matrix[(retained, column)] = self.matrix[(index, column)];
+                        self.sample_matrix[(retained, column)] =
+                            self.sample_matrix[(index, column)];
                     }
                     self.gravity_directions[retained] = self.gravity_directions[index];
                     self.sample_timestamps_us[retained] = self.sample_timestamps_us[index];
@@ -994,8 +995,8 @@ impl<const N: usize> MagCalibrator<N> {
                 self.remove_raw_moment(sample);
             }
         }
-        if retained != self.matrix_filled {
-            self.matrix_filled = retained;
+        if retained != self.sample_row_count {
+            self.sample_row_count = retained;
             if retained == 0 {
                 // Incremental subtraction can leave round-off residue after
                 // the last retained row expires. An empty cache has exact
@@ -1005,7 +1006,7 @@ impl<const N: usize> MagCalibrator<N> {
             self.mean_distance = 0.0;
             self.remap_neighbor_cache(&index_map);
         }
-        let expired = retained != previous_matrix_filled;
+        let expired = retained != previous_sample_row_count;
 
         if !x.iter().all(|e| e.is_finite()) || x.norm_squared() <= f32::EPSILON {
             if expired {
@@ -1018,8 +1019,8 @@ impl<const N: usize> MagCalibrator<N> {
         }
         let mut accepted_row = None;
         // Check if buffer is not yet "initialized" with real measurements
-        if self.matrix_filled < N {
-            let count = self.matrix_filled;
+        if self.sample_row_count < N {
+            let count = self.sample_row_count;
             let squared_dists = self.squared_distances_to(x, count);
             for ((cache, len), &squared_distance) in self
                 .neighbor_cache
@@ -1044,7 +1045,7 @@ impl<const N: usize> MagCalibrator<N> {
             self.add_raw_moment(x);
             self.add_sample_at(count, x, gravity_direction, timestamp_us);
             self.reset_row_cache(count, &squared_dists, count);
-            self.matrix_filled += 1;
+            self.sample_row_count += 1;
             accepted_row = Some(count);
         }
         // Otherwise check which sample may be best to replace
@@ -1096,7 +1097,7 @@ impl<const N: usize> MagCalibrator<N> {
         true
     }
 
-    /// Insert a sample vector into `index` row of buffer matrix.
+    /// Insert a sample vector into the `index` row of the sample matrix.
     fn add_sample_at(
         &mut self,
         index: usize,
@@ -1106,9 +1107,9 @@ impl<const N: usize> MagCalibrator<N> {
     ) {
         if index < N {
             // TODO: write the matrix row through a nalgebra row view instead of assigning individual elements
-            self.matrix[(index, 0)] = sample[0];
-            self.matrix[(index, 1)] = sample[1];
-            self.matrix[(index, 2)] = sample[2];
+            self.sample_matrix[(index, 0)] = sample[0];
+            self.sample_matrix[(index, 1)] = sample[1];
+            self.sample_matrix[(index, 2)] = sample[2];
             self.gravity_directions[index] = gravity_direction;
             self.sample_timestamps_us[index] = timestamp_us;
         }
@@ -1141,11 +1142,11 @@ impl<const N: usize> MagCalibrator<N> {
     /// reference. Rotation-invariant by construction, and a cache whose
     /// directions support fewer than nine independent features (for example
     /// near-planar motion) is rank-deficient and scores near zero.
-    fn coverage_from_design(design_matrix: &DesignMatrix, matrix_filled: usize) -> f32 {
-        if matrix_filled < CALIBRATION_PARAMETER_COUNT {
+    fn coverage_from_design(design_matrix: &DesignMatrix, sample_row_count: usize) -> f32 {
+        if sample_row_count < CALIBRATION_PARAMETER_COUNT {
             return 0.0;
         }
-        let mean_design = design_matrix / matrix_filled as f32;
+        let mean_design = design_matrix / sample_row_count as f32;
         let lambda_min = SymmetricEigen::new(mean_design).eigenvalues.min();
         (lambda_min / COVERAGE_LAMBDA_REF).clamp(0.0, 1.0)
     }
@@ -1161,7 +1162,7 @@ impl<const N: usize> MagCalibrator<N> {
     /// rank-deficient under any centering.
     fn mean_centered_coverage(&self) -> f32 {
         let mut design = DesignMatrix::zeros();
-        for row in 0..self.matrix_filled {
+        for row in 0..self.sample_row_count {
             let centered = self.sample(row) - self.normalization_mean;
             // TODO: use nalgebra's fallible normalization instead of computing and applying the norm manually
             let norm = centered.norm();
@@ -1170,10 +1171,10 @@ impl<const N: usize> MagCalibrator<N> {
                 design += phi * phi.transpose();
             }
         }
-        Self::coverage_from_design(&design, self.matrix_filled)
+        Self::coverage_from_design(&design, self.sample_row_count)
     }
 
-    /// Get mean distance value between samples in matrix buffer.
+    /// Get mean distance value between samples in the sample matrix.
     pub fn get_mean_distance(&self) -> f32 {
         self.mean_distance
     }
@@ -1379,7 +1380,7 @@ impl<const N: usize> MagCalibrator<N> {
         current_sample: Option<Vector3<f32>>,
         current_gravity: Option<Vector3<f32>>,
     ) -> Option<CalibrationCandidate> {
-        if self.matrix_filled < CALIBRATION_PARAMETER_COUNT {
+        if self.sample_row_count < CALIBRATION_PARAMETER_COUNT {
             self.quality = CalibrationQuality::ZERO;
             return None;
         }
@@ -1393,7 +1394,7 @@ impl<const N: usize> MagCalibrator<N> {
         if let Some(sample) = current_sample {
             let residual = (candidate.correction * (sample - candidate.offset)).norm() - 1.0;
             let residual_squared = residual * residual;
-            let alpha = 1.0 / self.matrix_filled.min(self.minibatch_size).max(1) as f32;
+            let alpha = 1.0 / self.sample_row_count.min(self.minibatch_size).max(1) as f32;
             let Some(mean_square) = Self::update_running_mean_square(
                 self.radial_residual_mean_square,
                 residual_squared,
@@ -1431,9 +1432,9 @@ impl<const N: usize> MagCalibrator<N> {
     fn sample(&self, row: usize) -> Vector3<f32> {
         // TODO: read the matrix row through a nalgebra row view instead of individual elements
         Vector3::new(
-            self.matrix[(row, 0)],
-            self.matrix[(row, 1)],
-            self.matrix[(row, 2)],
+            self.sample_matrix[(row, 0)],
+            self.sample_matrix[(row, 1)],
+            self.sample_matrix[(row, 2)],
         )
     }
 
