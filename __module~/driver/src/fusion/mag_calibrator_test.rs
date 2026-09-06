@@ -2,7 +2,7 @@ use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 
 use super::super::BadMagCause;
 use super::{
-    CalibrationQuality, DesignMatrix, MagCalibrationResult, MagCalibrator,
+    CalibrationQuality, CoverageGramMatrix, MagCalibrationResult, MagCalibrator,
     MIN_PUBLICATION_CONFIDENCE, MIN_PUBLICATION_STREAK,
 };
 
@@ -28,17 +28,17 @@ impl<const N: usize> MagCalibrator<N> {
         self.publication_quality_streak
     }
 
-    fn coverage_scores_for_test(design_matrix: &DesignMatrix, sample_row_count: usize) -> f32 {
-        Self::coverage_from_design(design_matrix, sample_row_count)
+    fn coverage_scores_for_test(gram_sum: &CoverageGramMatrix, sample_row_count: usize) -> f32 {
+        Self::coverage_from_gram(gram_sum, sample_row_count)
     }
 
-    fn design_matrix_for_test(directions: &[Vector3<f32>]) -> DesignMatrix {
-        let mut design = DesignMatrix::zeros();
+    fn coverage_gram_sum_for_test(directions: &[Vector3<f32>]) -> CoverageGramMatrix {
+        let mut gram_sum = CoverageGramMatrix::zeros();
         for &direction in directions {
             let feature = Self::direction_feature(direction);
-            design += feature * feature.transpose();
+            gram_sum += feature * feature.transpose();
         }
-        design
+        gram_sum
     }
 
     fn fitness_score_for_test(mean_square: Option<f32>) -> f32 {
@@ -697,7 +697,7 @@ fn design_coverage_is_rotation_invariant_and_detects_rank_deficiency() {
     // scores close to the uniform-sphere reference.
     let directions: Vec<Vector3<f32>> = (0..64).map(|i| sample_direction(i, 64)).collect();
     let coverage = MagCalibrator::<9>::coverage_scores_for_test(
-        &MagCalibrator::<9>::design_matrix_for_test(&directions),
+        &MagCalibrator::<9>::coverage_gram_sum_for_test(&directions),
         64,
     );
     // The spiral never visits the poles, so it scores well below the
@@ -711,7 +711,7 @@ fn design_coverage_is_rotation_invariant_and_detects_rank_deficiency() {
     let rotation = UnitQuaternion::from_euler_angles(0.4, -0.7, 1.1);
     let rotated: Vec<Vector3<f32>> = directions.iter().map(|&d| rotation * d).collect();
     let rotated_coverage = MagCalibrator::<9>::coverage_scores_for_test(
-        &MagCalibrator::<9>::design_matrix_for_test(&rotated),
+        &MagCalibrator::<9>::coverage_gram_sum_for_test(&rotated),
         64,
     );
     assert!(
@@ -728,7 +728,7 @@ fn design_coverage_is_rotation_invariant_and_detects_rank_deficiency() {
         })
         .collect();
     let planar_coverage = MagCalibrator::<9>::coverage_scores_for_test(
-        &MagCalibrator::<9>::design_matrix_for_test(&circle),
+        &MagCalibrator::<9>::coverage_gram_sum_for_test(&circle),
         64,
     );
     assert!(
@@ -739,7 +739,7 @@ fn design_coverage_is_rotation_invariant_and_detects_rank_deficiency() {
     // Fewer retained rows than the nine fit features score zero.
     assert_eq!(
         MagCalibrator::<9>::coverage_scores_for_test(
-            &MagCalibrator::<9>::design_matrix_for_test(&directions[..8]),
+            &MagCalibrator::<9>::coverage_gram_sum_for_test(&directions[..8]),
             8,
         ),
         0.0

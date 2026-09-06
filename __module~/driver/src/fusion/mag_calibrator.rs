@@ -3,8 +3,9 @@ use nalgebra::{Matrix3, SMatrix, SVector, SymmetricEigen, Vector3};
 use super::bad_mag_cause::{BadCalibration, BadMagCause, BadReading};
 
 const CALIBRATION_PARAMETER_COUNT: usize = 9;
-/// Design sum of the retained direction features backing the coverage score.
-pub(super) type DesignMatrix =
+/// Gram sum of the retained direction features, `sum_i phi(d_i) phi(d_i)^T`,
+/// backing the coverage score.
+pub(super) type CoverageGramMatrix =
     SMatrix<f32, CALIBRATION_PARAMETER_COUNT, CALIBRATION_PARAMETER_COUNT>;
 const SHAPE_REGULARIZATION: f32 = 1.0e-3;
 /// Scale of the regularization target shape, in units of the identity.
@@ -1123,7 +1124,7 @@ impl<const N: usize> MagCalibrator<N> {
     /// Quadratic feature vector of a unit direction: the nine ellipsoid-fit
     /// features with `sqrt(2)` cross-term weights. With this weighting the
     /// feature norm equals the rotation-invariant `tr(d d^T d d^T)`, so the
-    /// induced rotation on feature space is orthogonal and the design
+    /// induced rotation on feature space is orthogonal and the Gram
     /// eigenvalues are exactly rotation-invariant. Under the uniform
     /// spherical distribution `E[phi phi^T]` has eigenvalues `{1/3 x4, 2/15
     /// x5}`.
@@ -1143,40 +1144,40 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     /// E-optimality coverage of the retained directions: the smallest
-    /// eigenvalue of the mean design matrix relative to the uniform-sphere
+    /// eigenvalue of the mean Gram matrix relative to the uniform-sphere
     /// reference. Rotation-invariant by construction, and a cache whose
     /// directions support fewer than nine independent features (for example
     /// near-planar motion) is rank-deficient and scores near zero.
-    fn coverage_from_design(design_matrix: &DesignMatrix, sample_row_count: usize) -> f32 {
+    fn coverage_from_gram(gram_sum: &CoverageGramMatrix, sample_row_count: usize) -> f32 {
         if sample_row_count < CALIBRATION_PARAMETER_COUNT {
             return 0.0;
         }
-        let mean_design = design_matrix / sample_row_count as f32;
-        let lambda_min = SymmetricEigen::new(mean_design).eigenvalues.min();
+        let mean_gram = gram_sum / sample_row_count as f32;
+        let lambda_min = SymmetricEigen::new(mean_gram).eigenvalues.min();
         (lambda_min / COVERAGE_LAMBDA_REF).clamp(0.0, 1.0)
     }
 
     /// Coverage of the retained rows, mean-centered and recomputed from the
     /// current cache on each quality update. Recomputing keeps every
     /// direction centered on the current cache mean, so no insertion-time
-    /// snapshots, incremental design state, or drift-triggered rebuilds are
+    /// snapshots, incremental Gram state, or drift-triggered rebuilds are
     /// needed. The cache mean is used rather than the fitted hard-iron
     /// offset: the offset's component along the thinnest data direction is
     /// itself unconstrained for near-planar support, which destabilizes the
     /// score exactly where it must be decisive. A near-planar cache stays
     /// rank-deficient under any centering.
     fn mean_centered_coverage(&self) -> f32 {
-        let mut design = DesignMatrix::zeros();
+        let mut gram_sum = CoverageGramMatrix::zeros();
         for row in 0..self.sample_row_count {
             let centered = self.sample(row) - self.normalization_mean;
             // TODO: use nalgebra's fallible normalization instead of computing and applying the norm manually
             let norm = centered.norm();
             if norm.is_finite() && norm > f32::EPSILON {
                 let feature = Self::direction_feature(centered / norm);
-                design += feature * feature.transpose();
+                gram_sum += feature * feature.transpose();
             }
         }
-        Self::coverage_from_design(&design, self.sample_row_count)
+        Self::coverage_from_gram(&gram_sum, self.sample_row_count)
     }
 
     /// Get mean distance value between samples in the sample matrix.
