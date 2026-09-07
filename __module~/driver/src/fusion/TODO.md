@@ -1,22 +1,14 @@
 ## High severity
 
-- [ ]  Correct XREAL Air 1 magnetometer deserialization against replay calibration
+- [x]  Correct XREAL Air 1 magnetometer deserialization against replay calibration
 
-  - **Summary:** The committed Air 1 packet trace produces calibrated readings, but the gravity-assisted replay
-    regression exposes magnetometer data that is inconsistent with the accelerometer frame.
-  - **Affected modules:** `src/xreal_air.rs`, `tests/xreal_air_replay.rs`
+  - **Summary:** The magnetometer axis mapping in the version-2 report was corrected to
+    `(scaled[1], -scaled[2], -scaled[0])`, so both gravity and non-gravity replay modes now publish within the timeout
+    and average radial and gravity fitness strictly above `0.5`.
+  - **Affected module:** `src/xreal_air.rs`
   - **Severity:** High
-  - **Description:** Over the first 60-second trace cycle, calibration without gravity publishes after `4.658 s` and
-    averages `0.625` radial fitness. Calibration with gravity publishes after `10.972 s` and averages `0.610` radial
-    fitness but only `0.089` gravity fitness, failing the required strict `0.5` floor. Linear acceleration in the
-    capture is negligible compared with gravity, and the magnetometer and acceleration observations are separated
-    by only a few milliseconds, so neither effect explains the cross-sensor inconsistency. Magnetometer packet
-    deserialization or source-to-RUB frame reconstruction remains incorrect.
-  - **Recommended fix:** Re-derive the magnetometer byte offsets, field widths, signedness, endianness, scaling, and
-    source-axis mapping from the immutable packet fixture and independent implementations. Change only the raw
-    magnetometer decoder until both replay modes publish within 60 seconds and average radial and gravity fitness
-    strictly above `0.5`; do not weaken those thresholds or modify `MagCalibrator`, fusion, accelerometer, or
-    gyroscope behavior.
+  - **Unit test:** `tests/xreal_air_replay.rs` (`air1_trace_calibrates_with_gravity`,
+    `air1_trace_calibrates_without_gravity`)
 - [ ]  Validate the ellipsoid-normal gravity surrogate under anisotropic soft iron
 
   - **Summary:** The planned convex gravity residual is exact for the ellipsoid normal, but only approximates
