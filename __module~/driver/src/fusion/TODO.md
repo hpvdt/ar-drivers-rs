@@ -18,16 +18,12 @@
   - **Unit test:** `src/fusion/mag_calibrator_test.rs` (`mag_calibrator_gravity_surrogate_survives_strong_anisotropy`)
 - [ ]  Bound stale optimizer influence after sample expiry
 
-  - **Summary:** Persistent SGD parameters remember gradients from rows that no longer satisfy the cache lifespan.
+  - **Summary:** Online parameters retain historical gradient influence after a row is replaced or expires, and
+    nothing removes that contribution, so `max_sample_lifespan_us` no longer strictly bounds the estimator's
+    effective history.
   - **Affected module:** `src/fusion/mag_calibrator.rs`
   - **Severity:** High
-  - **Description:** The direct solver is exactly a function of the current retained rows. An online optimizer keeps
-    historical parameter updates after a row is replaced or expires, so `max_sample_lifespan_us` no longer strictly
-    bounds the estimator's effective history. Working state persists across normalization changes, so an expired
-    row's old gradient contribution is never removed.
-  - **Recommended fix:** Reset and replay a bounded number of minibatches after expiry, or introduce an explicit
-    forgetting schedule whose horizon is no longer than the configured lifespan. Add an adaptive hard-iron drift
-    integration case before claiming equivalent expiry semantics.
+  - **Unit test:** `src/fusion/mag_calibrator_test.rs` (`mag_calibrator_online_history_outlives_sample_lifespan`)
 
 ## Medium severity
 

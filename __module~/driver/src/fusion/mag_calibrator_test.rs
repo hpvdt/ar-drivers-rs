@@ -344,6 +344,44 @@ fn mag_calibrator_keeps_last_correction_after_rejected_refit() {
 }
 
 #[test]
+fn mag_calibrator_online_history_outlives_sample_lifespan() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+    let mut calibrator = seeded_calibrator::<63>(offset, distortion).max_sample_lifespan_us(0);
+    let expected = Vector3::x();
+    let raw = offset + distortion * expected;
+
+    // The radial fitness statistic is a persisted running mean of the online
+    // optimizer's fit over the training cache.
+    let trained_radial = calibrator.radial_residual_mean_square_for_test();
+    assert!(trained_radial.is_some());
+
+    // A zero lifespan makes the next, larger-timestamp sample expire every
+    // retained row, emptying the cache. The last published correction stays in
+    // use even though live confidence collapses.
+    let result = calibrator.evaluate_correct(raw, None, 1).unwrap();
+    assert_eq!(result.confidence, 0.0);
+    assert_vec_close(
+        result
+            .direction
+            .expect("last published correction was discarded"),
+        expected,
+        0.05,
+    );
+
+    // Known adaptation limitation: expiry removes rows from the cache but not
+    // their historical online-SGD gradient contribution. The radial statistic
+    // is byte-for-byte unchanged even though every training row is gone,
+    // because nothing resets or forgets the online worker on expiry:
+    // `max_sample_lifespan_us` bounds cache membership, not the optimizer's
+    // effective history.
+    assert_eq!(
+        calibrator.radial_residual_mean_square_for_test(),
+        trained_radial
+    );
+}
+
+#[test]
 fn mag_calibrator_clamps_neighbor_count_through_public_result() {
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);

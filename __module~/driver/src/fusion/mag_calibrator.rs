@@ -302,6 +302,13 @@ impl<const N: usize> MagCalibrator<N> {
 
     /// Configure the maximum time a sample remains in the calibration buffer,
     /// in microseconds. The default is one hour.
+    ///
+    /// Known adaptation limitation (see `AGENTS.md`): expiring or replacing a
+    /// row removes it from the cache but not its historical online-SGD
+    /// gradient contribution, so this bounds cache membership rather than the
+    /// optimizer's effective history. The backlog is an explicit forgetting
+    /// schedule or bounded replay-after-expiry, plus an adaptive hard-iron
+    /// drift case.
     pub fn max_sample_lifespan_us(self, max_sample_lifespan_us: u64) -> Self {
         Self {
             max_sample_lifespan_us,
