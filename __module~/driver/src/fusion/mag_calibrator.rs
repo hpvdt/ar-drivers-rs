@@ -1079,6 +1079,22 @@ impl<const N: usize> MagCalibrator<N> {
             let squared_distances = self.squared_distances_to(mag_sample, N);
             // The candidate has no self-entry in the buffer, so its mean
             // distance covers the true k nearest buffered rows.
+            //
+            // Known asymmetry (see TODO.md "Score replacement candidates in
+            // their post-replacement buffer"): the victim's diversity score
+            // (`replacement_mean_distance`) is its mean distance to its `k`
+            // nearest OTHER rows, because `replacement_row` excludes itself,
+            // so its pool is `N - 1` rows. The candidate below is instead
+            // scored against all `N` old rows, including the victim row it
+            // would replace, so its pool is `N` rows. A candidate close to
+            // the victim can therefore be wrongly rejected because the
+            // soon-to-be-evicted row lowers its nearest-neighbor score.
+            //
+            // Proposed fix (not implemented here): set
+            // `candidate_squared_distances[replacement_row] = f32::INFINITY`
+            // before selecting the `k` nearest neighbors so both scores use
+            // the same `N - 1` retained rows, and update the incremental
+            // neighbor cache only after accepting the replacement.
             let mut candidate_squared_distances = squared_distances;
             let candidate_mean_distance =
                 Self::mean_of_smallest(&mut candidate_squared_distances, neighbor_count);

@@ -32,18 +32,4 @@
   - **Summary:** Candidate and victim diversity scores currently use different neighbor pools.
   - **Affected module:** `src/fusion/mag_calibrator.rs`
   - **Severity:** Medium
-  - **Description:** The victim's score excludes itself, while the candidate is scored against all `N` old rows,
-    including the row it would replace:
-
-    ```rust
-    let (low_index, low_mean_dist) = self.lowest_mean_distance_by_index();
-    let squared_dists = self.squared_distances_to(x, N);
-    let mut scratch = squared_dists;
-    let sample_mean_dist = Self::mean_of_smallest(&mut scratch, k);
-    ```
-    A candidate close to the selected victim can be rejected because that soon-to-be-evicted row contributes to its
-    nearest-neighbor score. This also changes which transient observations receive persistent cache representation,
-    although every valid current observation still receives one online gradient update.
-  - **Recommended fix:** After selecting the victim, exclude `low_index` from the candidate's distance scratch before
-    selecting its `k` nearest neighbors. Compare both scores against the same `N - 1` retained rows, then update the
-    incremental neighbor cache only after accepting the replacement.
+  - **Unit test:** `src/fusion/mag_calibrator_test.rs` (`mag_calibrator_candidate_score_includes_replaced_victim`)

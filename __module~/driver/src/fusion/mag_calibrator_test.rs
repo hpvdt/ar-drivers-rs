@@ -1115,6 +1115,49 @@ fn mag_calibrator_neighbor_cache_matches_naive_rescan() {
     }
 }
 
+#[test]
+#[ignore = "open issue: candidate diversity is scored against the victim row it would replace"]
+fn mag_calibrator_candidate_score_includes_replaced_victim() {
+    // Cluster of three near-duplicate rows around `victim` (distance 0.01),
+    // with nine well-separated rows far away. The victim is the unique row
+    // with the lowest k=2 mean nearest distance.
+    let mut calibrator = MagCalibrator::<12>::new().num_neighbors(2);
+    let victim = Vector3::new(5.0, 5.0, 5.0);
+    let cluster = [
+        victim,
+        Vector3::new(4.99, 5.0, 5.0),
+        Vector3::new(5.0, 4.99, 5.0),
+    ];
+    let mut points = cluster.to_vec();
+    for i in 0..9 {
+        points.push(Vector3::new(6.0 + 0.5 * i as f32, 5.0, 5.0));
+    }
+    for (timestamp_us, sample) in points.iter().copied().enumerate() {
+        calibrator.evaluate_sample_vec(sample, None, timestamp_us as u64);
+    }
+
+    // Identify the victim exactly as the replacement branch does, and build a
+    // candidate adjacent to it but far from its cluster companions and every
+    // other row. Excluding the victim, its k=2 nearest neighbors become the
+    // two cluster companions (~0.011 and ~0.01005), scoring above the
+    // victim's own ~0.01; including the victim (~0.001), its score drops to
+    // ~0.0055, below the victim's.
+    let (replacement_row, _) = calibrator.lowest_mean_distance_by_index();
+    assert_eq!(calibrator.sample(replacement_row), victim);
+    let candidate = Vector3::new(5.001, 5.0, 5.0);
+
+    calibrator.evaluate_sample_vec(candidate, None, 12);
+
+    // Correct post-replacement behavior: the victim is evicted and the
+    // candidate takes its row. This assertion fails while the candidate is
+    // still scored against the victim row it would replace.
+    assert_ne!(
+        calibrator.sample(replacement_row),
+        victim,
+        "candidate adjacent to the victim was wrongly rejected"
+    );
+}
+
 fn seeded_calibrator<const N: usize>(
     offset: Vector3<f32>,
     distortion: Matrix3<f32>,
