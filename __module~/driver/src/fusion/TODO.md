@@ -11,26 +11,11 @@
     `air1_trace_calibrates_without_gravity`)
 - [ ]  Validate the ellipsoid-normal gravity surrogate under anisotropic soft iron
 
-  - **Summary:** The planned convex gravity residual is exact for the ellipsoid normal, but only approximates
-    constant physical magnetic dip when the soft-iron correction is anisotropic.
+  - **Summary:** The convex gravity surrogate is exact for the ellipsoid normal, but only approximates constant
+    magnetic dip when the soft-iron correction is anisotropic, so a large gravity weight can bias the fit.
   - **Affected module:** `src/fusion/mag_calibrator.rs`
   - **Severity:** High
-  - **Description:** The online objective uses the linear normal projection
-    `g_i^T (Q u_i + q / 2)`. From the physical model,
-
-    ```text
-    Q (u_i - d) = gamma r A m_i,
-    ```
-
-    so the surrogate keeps `g_i^T A m_i` approximately constant rather than the physical dip `g_i^T m_i`.
-    These coincide for isotropic correction but can differ for the full rotated SPD distortion emitted by the
-    simulator. A gravity weight that is too large can therefore bias the shape toward isotropy even though the
-    combined optimization problem is convex and quadratic. The fixed-seed benchmark found this bias at weight `0.1`;
-    reducing the default to `0.01` recovered average post-warm-up accuracy to within `0.086 degree` of the direct
-    gravity baseline.
-  - **Recommended fix:** Extend validation beyond the current fixed simulator distortion with stronger anisotropy,
-    rotated eigenvectors, inconsistent acceleration, and multiple magnetic dip angles. Keep the low default weight or
-    disable the surrogate if those sweeps show a repeatable regression.
+  - **Unit test:** `src/fusion/mag_calibrator_test.rs` (`mag_calibrator_gravity_surrogate_survives_strong_anisotropy`)
 - [ ]  Bound stale optimizer influence after sample expiry
 
   - **Summary:** Persistent SGD parameters remember gradients from rows that no longer satisfy the cache lifespan.

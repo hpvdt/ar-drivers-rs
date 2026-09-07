@@ -48,6 +48,18 @@ pub(super) const MIN_PUBLICATION_STREAK: usize = 55;
 /// ellipsoid fit. A fully isotropic cache scores 1 against this reference.
 const COVERAGE_LAMBDA_REF: f32 = 2.0 / 15.0;
 const MIN_MAG_NORM: f32 = 0.4;
+/// Default weight of the ellipsoid-normal gravity surrogate. The surrogate
+/// pins `g_i^T A m_i` (with `A` the soft-iron correction) approximately
+/// constant instead of the exact magnetic dip `g_i^T m_i`; the two coincide
+/// only for isotropic soft iron, so strong anisotropic soft iron can bias the
+/// fit toward isotropy. The fixed-seed benchmark found that weight `0.1`
+/// regressed accuracy, while lowering the default to `0.01` recovered average
+/// post-warm-up accuracy to within `0.086 degree` of the direct gravity
+/// baseline. Validation must keep extending beyond the fixed simulator
+/// distortion (stronger anisotropy, rotated eigenvectors, inconsistent
+/// acceleration, multiple magnetic dip angles); lower or disable the surrogate
+/// through [`MagCalibrator::gravity_weight`] if such sweeps show a repeatable
+/// regression.
 const DEFAULT_GRAVITY_WEIGHT: f32 = 0.01;
 const DEFAULT_MINIBATCH_SIZE: usize = 32;
 /// Cache-only replay updates run per valid sample while the calibration is

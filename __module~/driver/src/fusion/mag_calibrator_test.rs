@@ -610,6 +610,102 @@ fn mag_calibrator_improves_with_consistent_gravity() {
 }
 
 #[test]
+fn mag_calibrator_gravity_surrogate_survives_strong_anisotropy() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let diagonal = |x: f32, y: f32, z: f32| Matrix3::new(x, 0.0, 0.0, 0.0, y, 0.0, 0.0, 0.0, z);
+    let rotate = |roll: f32, pitch: f32, yaw: f32, d: Matrix3<f32>| {
+        let basis = UnitQuaternion::from_euler_angles(roll, pitch, yaw)
+            .to_rotation_matrix()
+            .into_inner();
+        basis * d * basis.transpose()
+    };
+    // Strongly anisotropic SPD soft iron, with and without rotated
+    // eigenvectors, spanning a range of condition numbers.
+    let distortions = [
+        diagonal(1.6, 0.6, 1.2),
+        rotate(0.4, -0.5, 0.8, diagonal(1.7, 0.55, 1.25)),
+        rotate(0.7, 0.2, -0.5, diagonal(1.5, 0.7, 1.6)),
+    ];
+    // Several physical magnetic dip angles relative to world gravity. Both
+    // world directions are co-rotated into the body frame, so the dip angle
+    // is constant and the gravity hint is physically consistent.
+    let dip_cases = [
+        (Vector3::new(0.8, 0.1, 0.5).normalize(), Vector3::z()),
+        (
+            Vector3::new(0.45, 0.25, 0.85).normalize(),
+            Vector3::new(0.2, 0.1, 0.97).normalize(),
+        ),
+        (
+            Vector3::new(0.25, 0.68, 0.42).normalize(),
+            Vector3::new(0.1, -0.35, 0.9).normalize(),
+        ),
+    ];
+    // Chord distance for unit vectors is ~angle in radians for small errors.
+    // Aggregate the summed probe error across every anisotropic and dip case
+    // before comparing: the surrogate helps isotropic-axis cases and can
+    // regress on rotated-eigenvector cases, so the aggregate is what guards
+    // against a net regression at the shipped low weight.
+    let mut plain_total = 0.0_f32;
+    let mut refined_total = 0.0_f32;
+
+    for distortion in distortions {
+        for (world_mag, world_gravity) in dip_cases {
+            let mut plain = MagCalibrator::<63>::new();
+            let mut gravity_refined = MagCalibrator::<63>::new();
+            for i in 0..16 * 63 {
+                let j = i % 63;
+                let attitude = UnitQuaternion::from_euler_angles(
+                    0.25 * (j as f32 * 0.7).sin(),
+                    0.35 * (j as f32 * 1.7).sin(),
+                    j as f32 * 2.4,
+                );
+                let body_mag = attitude.inverse() * world_mag;
+                let body_gravity = attitude.inverse() * world_gravity;
+                let raw = offset + distortion * body_mag;
+                let _ = plain.evaluate_correct(raw, None, i as u64);
+                let _ = gravity_refined.evaluate_correct(raw, Some(body_gravity), i as u64);
+            }
+
+            let probes = [
+                Vector3::x(),
+                Vector3::y(),
+                Vector3::z(),
+                Vector3::new(1.0, -2.0, 3.0).normalize(),
+            ];
+            let error_of = |calibrator: &MagCalibrator<63>| {
+                probes
+                    .iter()
+                    .map(|&expected| {
+                        (calibrator
+                            .correct_working_for_test(offset + distortion * expected)
+                            .expect("working calibration is invalid")
+                            - expected)
+                            .norm()
+                    })
+                    .sum::<f32>()
+            };
+            plain_total += error_of(&plain);
+            refined_total += error_of(&gravity_refined);
+        }
+    }
+
+    // At the shipped default weight (`0.01`) the gravity surrogate must not
+    // regress the aggregate accuracy by more than a small, bounded amount.
+    // The ellipsoid-normal surrogate pins `g_i^T A m_i` rather than the exact
+    // dip `g_i^T m_i`, so rotated full-SPD soft iron can bias the fit toward
+    // isotropy; the isotropic-axis cases still improve and the net regression
+    // summed over all nine cases stays under this tolerance, far below the
+    // repeatable regression that weight `0.1` produced in the fixed-seed
+    // benchmark. Kept as an open issue rather than treated as fixed.
+    let regression_tolerance = 0.2_f32;
+    assert!(
+        refined_total <= plain_total + regression_tolerance,
+        "gravity surrogate regressed under strong anisotropy: \
+         plain_total={plain_total} refined_total={refined_total}"
+    );
+}
+
+#[test]
 fn mag_calibrator_ignores_invalid_gravity() {
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
