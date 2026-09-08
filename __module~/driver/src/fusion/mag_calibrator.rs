@@ -434,13 +434,8 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     fn regularization_loss(parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>) -> f32 {
-        // TODO: use the shape matrix's built-in squared norm instead of an elementwise weighted sum
-        let prior = Self::parameter_prior();
-        let weights = [1.0, 1.0, 1.0, 2.0, 2.0, 2.0];
-        0.5 * SHAPE_REGULARIZATION
-            * (0..6)
-                .map(|index| weights[index] * (parameters[index] - prior[index]).powi(2))
-                .sum::<f32>()
+        let (shape, _) = Self::shape_and_linear(parameters);
+        0.5 * SHAPE_REGULARIZATION * (shape - Matrix3::identity() * SHAPE_PRIOR_SCALE).norm_squared()
     }
 
     fn add_raw_moment(&mut self, sample: Vector3<f32>) {
