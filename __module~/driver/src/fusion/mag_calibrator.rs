@@ -1471,12 +1471,7 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     fn sample(&self, row: usize) -> Vector3<f32> {
-        // TODO: read the matrix row through a nalgebra row view instead of individual elements
-        Vector3::new(
-            self.sample_matrix[(row, 0)],
-            self.sample_matrix[(row, 1)],
-            self.sample_matrix[(row, 2)],
-        )
+        self.sample_matrix.row(row).transpose().into_owned()
     }
 
     fn condition_number(eigenvalues: &Vector3<f32>) -> f32 {
