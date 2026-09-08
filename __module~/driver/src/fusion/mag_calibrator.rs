@@ -717,11 +717,11 @@ impl<const N: usize> MagCalibrator<N> {
         }
 
         let prior = Self::parameter_prior();
-        // TODO: use fixed vector views and component-wise operations instead of indexed scalar updates
-        for (index, weight) in [1.0, 1.0, 1.0, 2.0, 2.0, 2.0].into_iter().enumerate() {
-            gradient[index] += SHAPE_REGULARIZATION * weight * (parameters[index] - prior[index]);
-            gradient_scale[index] += SHAPE_REGULARIZATION * weight;
-        }
+        let regularization_weights = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::from_row_slice(&[
+            1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0,
+        ]);
+        gradient += SHAPE_REGULARIZATION * regularization_weights.component_mul(&(parameters - prior));
+        gradient_scale += SHAPE_REGULARIZATION * regularization_weights;
         gradient_scale.add_scalar_mut(ONLINE_SCALE_EPSILON);
         let descent_direction = gradient.component_div(&gradient_scale);
         let projection_step = if gravity_count > 0 && self.gravity_weight > 0.0 {
