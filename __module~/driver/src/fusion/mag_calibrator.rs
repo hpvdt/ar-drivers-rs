@@ -876,10 +876,10 @@ impl<const N: usize> MagCalibrator<N> {
             self.rebuild_row_cache(row);
         }
         let cache = &self.neighbor_cache[row];
-        // TODO: use a built-in sum reduction instead of a manual fold
-        (0..neighbor_count)
-            .rev()
-            .fold(0., |acc, i| acc + cache[i].squared_distance.sqrt())
+        cache[..neighbor_count]
+            .iter()
+            .map(|entry| entry.squared_distance.sqrt())
+            .sum::<f32>()
             / neighbor_count as f32
     }
 
