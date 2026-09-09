@@ -767,11 +767,9 @@ impl<const N: usize> MagCalibrator<N> {
     /// rows of the sample buffer. Entries at and beyond `count` are set to
     /// infinity so selection never picks them.
     fn squared_distances_to(&self, mag_sample: Vector3<f32>, count: usize) -> [f32; N] {
-        // TODO: use nalgebra row iteration and squared norms instead of rebuilding and dotting each row
         let mut squared_distances = [f32::INFINITY; N];
         for (j, dist) in squared_distances.iter_mut().enumerate().take(count) {
-            let diff = mag_sample - self.sample(j);
-            *dist = diff.dot(&diff);
+            *dist = (mag_sample - self.sample(j)).norm_squared();
         }
         squared_distances
     }
