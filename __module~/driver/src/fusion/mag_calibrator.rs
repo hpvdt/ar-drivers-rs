@@ -926,22 +926,10 @@ impl<const N: usize> MagCalibrator<N> {
     /// Is used when replacing the least useful value in the array.
     fn lowest_mean_distance_by_index(&mut self) -> (usize, f32) {
         let neighbor_count = self.neighbor_count.min(N.saturating_sub(1));
-        // TODO: use nalgebra vector construction, mean, and arg-min operations instead of manual array processing
-        let mut mean_dist: [f32; N] = [0.; N];
-        for (i, mean) in mean_dist.iter_mut().enumerate() {
-            *mean = self.row_mean_distance(i, neighbor_count);
-        }
-
-        // Set mean distance now that we are at it
-        self.mean_distance = mean_dist.iter().rfold(0., |a, &b| a + b) / N as f32;
-
-        // Obtain index for lowest mean distance
-        mean_dist
-            .iter()
-            .enumerate()
-            .min_by(|(_, a), (_, b)| a.total_cmp(b))
-            .map(|(index, value)| (index, *value))
-            .unwrap()
+        let mean_dist =
+            SVector::<f32, N>::from_fn(|index, _| self.row_mean_distance(index, neighbor_count));
+        self.mean_distance = mean_dist.mean();
+        mean_dist.argmin()
     }
 
     /// Normalizes an optional co-timestamped direction; non-finite and zero
