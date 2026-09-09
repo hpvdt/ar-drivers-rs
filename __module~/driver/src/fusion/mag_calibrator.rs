@@ -1208,20 +1208,16 @@ impl<const N: usize> MagCalibrator<N> {
         if !self.calibration_initialized {
             return Ok(MagCalibrationResult::from_quality(self.quality, None));
         }
-        let mag = self.soft_iron_correction * (raw_mag - self.hard_iron_offset);
+        let mut mag = self.soft_iron_correction * (raw_mag - self.hard_iron_offset);
 
-        // TODO: use nalgebra's in-place fallible normalization instead of computing the norm twice
-        let mag_norm = mag.norm();
+        let mag_norm = mag.normalize_mut();
         if !mag_norm.is_finite() || mag_norm < MIN_MAG_NORM {
             Err(BadMagCause::BadReading(BadReading::WeakCalibratedReading {
                 norm: mag_norm,
                 min_norm: MIN_MAG_NORM,
             }))
         } else {
-            Ok(MagCalibrationResult::from_quality(
-                self.quality,
-                Some(mag.normalize()),
-            ))
+            Ok(MagCalibrationResult::from_quality(self.quality, Some(mag)))
         }
     }
 
