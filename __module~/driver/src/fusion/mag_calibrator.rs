@@ -1451,12 +1451,8 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     fn condition_number(eigenvalues: &Vector3<f32>) -> f32 {
-        // TODO: use nalgebra's vector min/max reductions instead of manual folds
-        let min = eigenvalues.iter().copied().fold(f32::INFINITY, f32::min);
-        let max = eigenvalues
-            .iter()
-            .copied()
-            .fold(f32::NEG_INFINITY, f32::max);
+        let min = eigenvalues.min();
+        let max = eigenvalues.max();
         if !min.is_finite() || !max.is_finite() || min <= 0.0 {
             f32::INFINITY
         } else {
