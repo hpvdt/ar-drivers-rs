@@ -786,8 +786,7 @@ impl<const N: usize> MagCalibrator<N> {
         squared_distances.select_nth_unstable_by(neighbor_count - 1, |a, b| a.total_cmp(b));
         let smallest = &mut squared_distances[..neighbor_count];
         smallest.sort_unstable_by(|a, b| a.total_cmp(b));
-        // TODO: use a built-in sum reduction instead of a manual fold
-        smallest.iter().rev().fold(0., |acc, &d| acc + d.sqrt()) / neighbor_count as f32
+        smallest.iter().map(|&d| d.sqrt()).sum::<f32>() / neighbor_count as f32
     }
 
     /// Inserts `entry` into a row's neighbor cache, keeping it sorted and
