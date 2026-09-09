@@ -1171,10 +1171,8 @@ impl<const N: usize> MagCalibrator<N> {
         let mut gram_sum = CoverageGramMatrix::zeros();
         for row in 0..self.sample_row_count {
             let centered = self.sample(row) - self.normalization_mean;
-            // TODO: use nalgebra's fallible normalization instead of computing and applying the norm manually
-            let norm = centered.norm();
-            if norm.is_finite() && norm > f32::EPSILON {
-                let feature = Self::direction_feature(centered / norm);
+            if let Some(direction) = centered.try_normalize(f32::EPSILON) {
+                let feature = Self::direction_feature(direction);
                 gram_sum += feature * feature.transpose();
             }
         }
