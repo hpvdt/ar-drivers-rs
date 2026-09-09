@@ -1126,10 +1126,7 @@ impl<const N: usize> MagCalibrator<N> {
         timestamp_us: u64,
     ) {
         if index < N {
-            // TODO: write the matrix row through a nalgebra row view instead of assigning individual elements
-            self.sample_matrix[(index, 0)] = sample[0];
-            self.sample_matrix[(index, 1)] = sample[1];
-            self.sample_matrix[(index, 2)] = sample[2];
+            self.sample_matrix.set_row(index, &sample.transpose());
             self.gravity_directions[index] = gravity_direction;
             self.sample_timestamps_us[index] = timestamp_us;
         }
