@@ -435,7 +435,8 @@ impl<const N: usize> MagCalibrator<N> {
 
     fn regularization_loss(parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>) -> f32 {
         let (shape, _) = Self::shape_and_linear(parameters);
-        0.5 * SHAPE_REGULARIZATION * (shape - Matrix3::identity() * SHAPE_PRIOR_SCALE).norm_squared()
+        0.5 * SHAPE_REGULARIZATION
+            * (shape - Matrix3::identity() * SHAPE_PRIOR_SCALE).norm_squared()
     }
 
     fn add_raw_moment(&mut self, sample: Vector3<f32>) {
@@ -717,10 +718,12 @@ impl<const N: usize> MagCalibrator<N> {
         }
 
         let prior = Self::parameter_prior();
-        let regularization_weights = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::from_row_slice(&[
-            1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0,
-        ]);
-        gradient += SHAPE_REGULARIZATION * regularization_weights.component_mul(&(parameters - prior));
+        let regularization_weights =
+            SVector::<f32, CALIBRATION_PARAMETER_COUNT>::from_row_slice(&[
+                1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0,
+            ]);
+        gradient +=
+            SHAPE_REGULARIZATION * regularization_weights.component_mul(&(parameters - prior));
         gradient_scale += SHAPE_REGULARIZATION * regularization_weights;
         gradient_scale.add_scalar_mut(ONLINE_SCALE_EPSILON);
         let descent_direction = gradient.component_div(&gradient_scale);
@@ -932,24 +935,6 @@ impl<const N: usize> MagCalibrator<N> {
         mean_dist.argmin()
     }
 
-    /// Normalizes an optional co-timestamped direction; non-finite and zero
-    /// directions are dropped.
-    fn normalized_direction(direction: Option<Vector3<f32>>) -> Option<Vector3<f32>> {
-        // TODO: used only once, should be inline
-        // TODO: use nalgebra's fallible normalization instead of computing and applying the norm manually
-        direction.and_then(|direction| {
-            let norm = direction.norm();
-            if norm.is_finite()
-                && direction.iter().all(|value| value.is_finite())
-                && norm > f32::EPSILON
-            {
-                Some(direction / norm)
-            } else {
-                None
-            }
-        })
-    }
-
     /// Add a sample if it is deemed more useful than the least useful sample.
     ///
     /// `gravity_direction` is an optional co-timestamped body-frame FRD
@@ -962,7 +947,11 @@ impl<const N: usize> MagCalibrator<N> {
         gravity_hint: Option<Vector3<f32>>,
         timestamp_us: u64,
     ) {
-        let gravity_direction = Self::normalized_direction(gravity_hint);
+        let gravity_direction = gravity_hint.and_then(|direction| {
+            direction
+                .try_normalize(f32::EPSILON)
+                .filter(|direction| direction.iter().all(|value| value.is_finite()))
+        });
         let valid_current_sample = self.ingest_sample(mag_sample, gravity_direction, timestamp_us);
         self.update_publication(
             valid_current_sample.then_some(mag_sample),
@@ -972,7 +961,7 @@ impl<const N: usize> MagCalibrator<N> {
 
     /// Updates the cache and online optimizer, returning whether the current
     /// magnetometer observation was finite and nonzero. `gravity_direction`
-    /// must already be normalized (see `Self::normalized_direction`).
+    /// must already be normalized to a unit vector.
     fn ingest_sample(
         &mut self,
         mag_sample: Vector3<f32>,
@@ -989,7 +978,8 @@ impl<const N: usize> MagCalibrator<N> {
             {
                 *map_slot = retained_count as u32;
                 if retained_count != index {
-                    self.sample_matrix.set_row(retained_count, &sample.transpose());
+                    self.sample_matrix
+                        .set_row(retained_count, &sample.transpose());
                     self.gravity_directions[retained_count] = self.gravity_directions[index];
                     self.sample_timestamps_us[retained_count] = self.sample_timestamps_us[index];
                 }
