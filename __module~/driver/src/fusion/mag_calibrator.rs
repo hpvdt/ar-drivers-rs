@@ -989,11 +989,7 @@ impl<const N: usize> MagCalibrator<N> {
             {
                 *map_slot = retained_count as u32;
                 if retained_count != index {
-                    // TODO: copy matrix rows with nalgebra row views instead of looping over elements
-                    for column in 0..3 {
-                        self.sample_matrix[(retained_count, column)] =
-                            self.sample_matrix[(index, column)];
-                    }
+                    self.sample_matrix.set_row(retained_count, &sample.transpose());
                     self.gravity_directions[retained_count] = self.gravity_directions[index];
                     self.sample_timestamps_us[retained_count] = self.sample_timestamps_us[index];
                 }
