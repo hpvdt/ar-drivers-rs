@@ -545,12 +545,27 @@ impl<const N: usize> MagCalibrator<N> {
         }
     }
 
-    fn minibatch_objective(
+    /// Stacks feature rows into a batched `B x 9` matrix.
+    fn feature_matrix(rows: &[SVector<f32, CALIBRATION_PARAMETER_COUNT>]) -> DMatrix<f32> {
+        DMatrix::from_fn(rows.len(), CALIBRATION_PARAMETER_COUNT, |row, col| {
+            rows[row][col]
+        })
+    }
+
+    /// Reinterprets the nine-entry dynamic result of a batched feature-matrix
+    /// product as a fixed parameter vector.
+    fn parameter_vector(vector: DVector<f32>) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
+        SVector::from_column_slice(vector.as_slice())
+    }
+
+    /// Chains the anchoring observation with the randomly drawn cache rows of
+    /// one minibatch and returns their batched radial and gravity feature
+    /// matrices along with the advanced private draw state. Gravity rows cover
+    /// only the observations carrying a usable gravity direction.
+    fn minibatch_feature_matrices(
         &self,
-        parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>,
-        gravity_projection: f32,
         minibatch: MinibatchSpec,
-    ) -> f32 {
+    ) -> (DMatrix<f32>, DMatrix<f32>, u64) {
         let mut random_state = minibatch.random_state;
         let observations = minibatch
             .current_sample
@@ -573,20 +588,28 @@ impl<const N: usize> MagCalibrator<N> {
                 gravity_rows.push(Self::gravity_features(normalized, gravity));
             }
         }
-        let feature_matrix = |rows: &[SVector<f32, CALIBRATION_PARAMETER_COUNT>]| {
-            DMatrix::from_fn(rows.len(), CALIBRATION_PARAMETER_COUNT, |row, col| {
-                rows[row][col]
-            })
-        };
-        let residuals = feature_matrix(&radial_rows) * parameters
-            - DVector::from_element(radial_rows.len(), 1.0);
-        let mut objective = 0.5 * residuals.norm_squared() / radial_rows.len() as f32
+        (
+            Self::feature_matrix(&radial_rows),
+            Self::feature_matrix(&gravity_rows),
+            random_state,
+        )
+    }
+
+    fn minibatch_objective(
+        &self,
+        parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>,
+        gravity_projection: f32,
+        minibatch: MinibatchSpec,
+    ) -> f32 {
+        let (features, gravity_features, _) = self.minibatch_feature_matrices(minibatch);
+        let residuals = &features * parameters - DVector::from_element(features.nrows(), 1.0);
+        let mut objective = 0.5 * residuals.norm_squared() / features.nrows() as f32
             + Self::regularization_loss(parameters);
-        if !gravity_rows.is_empty() {
-            let residuals = feature_matrix(&gravity_rows) * parameters
-                - DVector::from_element(gravity_rows.len(), gravity_projection);
-            objective +=
-                0.5 * self.gravity_weight * residuals.norm_squared() / gravity_rows.len() as f32;
+        if gravity_features.nrows() > 0 {
+            let residuals = &gravity_features * parameters
+                - DVector::from_element(gravity_features.nrows(), gravity_projection);
+            objective += 0.5 * self.gravity_weight * residuals.norm_squared()
+                / gravity_features.nrows() as f32;
         }
         objective
     }
@@ -651,60 +674,32 @@ impl<const N: usize> MagCalibrator<N> {
     /// observation or no usable descent direction leaves the working state
     /// unchanged.
     fn apply_minibatch_update(&mut self, minibatch: MinibatchSpec) -> bool {
-        // TODO: use batched feature matrices and matrix products instead of accumulating vectors one at a time
-        let mut next_random_state = minibatch.random_state;
-        let mut gradient = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
-        let mut gradient_scale = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
-        let mut gravity_gradient = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
-        let mut gravity_scale = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
-        let mut gravity_projection_gradient = 0.0;
-        let mut observation_count = 0;
-        let mut gravity_count = 0;
-        let parameters = self.parameters;
-        let gravity_projection = self.gravity_projection;
-        let mut add_observation = |sample: Vector3<f32>, gravity: Option<Vector3<f32>>| {
-            let normalized = self.normalized_sample(sample);
-            let features = Self::features(normalized);
-            let residual = features.dot(&parameters) - 1.0;
-            gradient += residual * features;
-            gradient_scale += features.component_mul(&features);
-            observation_count += 1;
-            if let Some(gravity) = gravity.filter(|_| self.gravity_projection_initialized) {
-                let features = Self::gravity_features(normalized, gravity);
-                let residual = features.dot(&parameters) - gravity_projection;
-                gravity_gradient += residual * features;
-                gravity_scale += features.component_mul(&features);
-                gravity_projection_gradient -= residual;
-                gravity_count += 1;
-            }
-        };
-
-        if let Some(sample) = minibatch.current_sample {
-            add_observation(sample, minibatch.current_gravity);
-        }
-        for _ in 0..minibatch.random_draws {
-            let Some(row) = Self::random_cache_row(
-                &mut next_random_state,
-                self.sample_row_count,
-                minibatch.accepted_row,
-            ) else {
-                break;
-            };
-            add_observation(self.sample(row), self.gravity_directions[row]);
-        }
-        self.prng_state = next_random_state;
-        if observation_count == 0 {
+        let (features, gravity_features, random_state) = self.minibatch_feature_matrices(minibatch);
+        self.prng_state = random_state;
+        if features.nrows() == 0 {
             return false;
         }
 
-        gradient /= observation_count as f32;
-        gradient_scale /= observation_count as f32;
-        if gravity_count > 0 {
-            gradient += self.gravity_weight * gravity_gradient / gravity_count as f32;
-            gradient_scale += self.gravity_weight * gravity_scale / gravity_count as f32;
-            gravity_projection_gradient *= self.gravity_weight / gravity_count as f32;
-        } else {
-            gravity_projection_gradient = 0.0;
+        let parameters = self.parameters;
+        let gravity_projection = self.gravity_projection;
+        let residuals = &features * parameters - DVector::from_element(features.nrows(), 1.0);
+        let mut gradient =
+            Self::parameter_vector(features.tr_mul(&residuals)) / features.nrows() as f32;
+        let mut gradient_scale =
+            Self::parameter_vector(features.map(|value| value * value).row_sum_tr())
+                / features.nrows() as f32;
+        let mut gravity_projection_gradient = 0.0;
+        if gravity_features.nrows() > 0 {
+            let residuals = &gravity_features * parameters
+                - DVector::from_element(gravity_features.nrows(), gravity_projection);
+            gradient += self.gravity_weight
+                * Self::parameter_vector(gravity_features.tr_mul(&residuals))
+                / gravity_features.nrows() as f32;
+            gradient_scale += self.gravity_weight
+                * Self::parameter_vector(gravity_features.map(|value| value * value).row_sum_tr())
+                / gravity_features.nrows() as f32;
+            gravity_projection_gradient =
+                -residuals.sum() * (self.gravity_weight / gravity_features.nrows() as f32);
         }
 
         let prior = Self::parameter_prior();
@@ -717,7 +712,7 @@ impl<const N: usize> MagCalibrator<N> {
         gradient_scale += SHAPE_REGULARIZATION * regularization_weights;
         gradient_scale.add_scalar_mut(ONLINE_SCALE_EPSILON);
         let descent_direction = gradient.component_div(&gradient_scale);
-        let projection_step = if gravity_count > 0 && self.gravity_weight > 0.0 {
+        let projection_step = if gravity_features.nrows() > 0 && self.gravity_weight > 0.0 {
             gravity_projection_gradient / (self.gravity_weight + ONLINE_SCALE_EPSILON)
         } else {
             0.0
