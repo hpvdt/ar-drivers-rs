@@ -1,4 +1,4 @@
-use nalgebra::{Matrix3, SMatrix, SVector, SymmetricEigen, Vector3};
+use nalgebra::{DMatrix, DVector, Matrix3, SMatrix, SVector, SymmetricEigen, Vector3};
 
 use super::bad_mag_cause::{BadCalibration, BadMagCause, BadReading};
 
@@ -551,43 +551,42 @@ impl<const N: usize> MagCalibrator<N> {
         gravity_projection: f32,
         minibatch: MinibatchSpec,
     ) -> f32 {
-        // TODO: use batched feature matrices and residual norms instead of scalar accumulation
         let mut random_state = minibatch.random_state;
-        let mut radial_squared = 0.0;
-        let mut gravity_squared = 0.0;
-        let mut observation_count = 0;
-        let mut gravity_count = 0;
-        let mut add_observation = |sample: Vector3<f32>, gravity: Option<Vector3<f32>>| {
+        let observations = minibatch
+            .current_sample
+            .map(|sample| (sample, minibatch.current_gravity))
+            .into_iter()
+            .chain((0..minibatch.random_draws).map_while(|_| {
+                Self::random_cache_row(
+                    &mut random_state,
+                    self.sample_row_count,
+                    minibatch.accepted_row,
+                )
+                .map(|row| (self.sample(row), self.gravity_directions[row]))
+            }));
+        let mut radial_rows = Vec::with_capacity(minibatch.random_draws + 1);
+        let mut gravity_rows = Vec::with_capacity(minibatch.random_draws + 1);
+        for (sample, gravity) in observations {
             let normalized = self.normalized_sample(sample);
-            let residual = Self::features(normalized).dot(parameters) - 1.0;
-            radial_squared += residual * residual;
-            observation_count += 1;
+            radial_rows.push(Self::features(normalized));
             if let Some(gravity) = gravity.filter(|_| self.gravity_projection_initialized) {
-                let residual = Self::gravity_features(normalized, gravity).dot(parameters)
-                    - gravity_projection;
-                gravity_squared += residual * residual;
-                gravity_count += 1;
+                gravity_rows.push(Self::gravity_features(normalized, gravity));
             }
+        }
+        let feature_matrix = |rows: &[SVector<f32, CALIBRATION_PARAMETER_COUNT>]| {
+            DMatrix::from_fn(rows.len(), CALIBRATION_PARAMETER_COUNT, |row, col| {
+                rows[row][col]
+            })
         };
-
-        if let Some(sample) = minibatch.current_sample {
-            add_observation(sample, minibatch.current_gravity);
-        }
-        for _ in 0..minibatch.random_draws {
-            let Some(row) = Self::random_cache_row(
-                &mut random_state,
-                self.sample_row_count,
-                minibatch.accepted_row,
-            ) else {
-                break;
-            };
-            add_observation(self.sample(row), self.gravity_directions[row]);
-        }
-
-        let mut objective =
-            0.5 * radial_squared / observation_count as f32 + Self::regularization_loss(parameters);
-        if gravity_count > 0 {
-            objective += 0.5 * self.gravity_weight * gravity_squared / gravity_count as f32;
+        let residuals = feature_matrix(&radial_rows) * parameters
+            - DVector::from_element(radial_rows.len(), 1.0);
+        let mut objective = 0.5 * residuals.norm_squared() / radial_rows.len() as f32
+            + Self::regularization_loss(parameters);
+        if !gravity_rows.is_empty() {
+            let residuals = feature_matrix(&gravity_rows) * parameters
+                - DVector::from_element(gravity_rows.len(), gravity_projection);
+            objective +=
+                0.5 * self.gravity_weight * residuals.norm_squared() / gravity_rows.len() as f32;
         }
         objective
     }
