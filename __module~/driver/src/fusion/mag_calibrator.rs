@@ -380,21 +380,12 @@ impl<const N: usize> MagCalibrator<N> {
     fn shape_and_linear(
         parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>,
     ) -> (Matrix3<f32>, Vector3<f32>) {
-        // TODO: use nalgebra views and constructors instead of elementwise parameter unpacking
-        (
-            Matrix3::new(
-                parameters[0],
-                parameters[3],
-                parameters[4],
-                parameters[3],
-                parameters[1],
-                parameters[5],
-                parameters[4],
-                parameters[5],
-                parameters[2],
-            ),
-            Vector3::new(parameters[6], parameters[7], parameters[8]),
-        )
+        // Diagonal [Q00, Q11, Q22] followed by packed off-diagonal [Q01, Q02, Q12].
+        let shape = Matrix3::from_fn(|row, col| {
+            let index = if row == col { row } else { row + col + 2 };
+            parameters[index]
+        });
+        (shape, parameters.fixed_rows::<3>(6).into_owned())
     }
 
     fn features(sample: Vector3<f32>) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
